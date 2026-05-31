@@ -14,6 +14,7 @@ use App\Models\District;
 use App\Models\User;
 use App\Models\CashCollateralType;
 use App\Models\Receipt;
+use App\Services\LoanDeletionService;
 use App\Models\Filetype;
 use App\Services\LoanPenaltyService;
 use App\Exports\CustomerBulkUploadSampleExport;
@@ -731,11 +732,8 @@ class CustomerController extends Controller
                 return redirect()->route('customers.index')->with('error', 'Customer is a member of a group. Please remove them from the group first.');
             }
 
-            if ($customer->loans()->exists()) {
-                return redirect()->route('customers.index')->with('error', 'Cannot delete customer: Customer has existing loans.');
-            }
-
             DB::beginTransaction();
+            (new LoanDeletionService())->deleteAllForCustomer($customer->id);
             $this->deleteCustomerTransactionalData($customer->id);
             $customer->delete();
             DB::commit();
