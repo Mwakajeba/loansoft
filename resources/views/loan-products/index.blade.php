@@ -115,6 +115,14 @@ use Vinkla\Hashids\Facades\Hashids;
                                                     class="btn btn-sm btn-outline-info view-btn" title="View Details">
                                                     <i class="bx bx-show"></i> View
                                                 </a>
+                                                <button type="button"
+                                                    class="btn btn-sm btn-outline-secondary product-loans-btn"
+                                                    title="List All Loans"
+                                                    data-product-id="{{ Hashids::encode($product->id) }}"
+                                                    data-product-name="{{ $product->name }}"
+                                                    data-loans-url="{{ route('loan-products.loans.data', Hashids::encode($product->id)) }}">
+                                                    <i class="bx bx-list-ul"></i> Loans
+                                                </button>
                                                 @endcanany
 
                                                 @can('edit loan product')
@@ -169,6 +177,39 @@ use Vinkla\Hashids\Facades\Hashids;
             @method('DELETE')
         </form>
         @endforeach
+
+        <!-- Product loans modal -->
+        <div class="modal fade" id="productLoansModal" tabindex="-1" aria-labelledby="productLoansModalLabel" aria-hidden="true">
+            <div class="modal-dialog modal-xl modal-dialog-scrollable">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="productLoansModalLabel">Loans for Product</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="table-responsive">
+                            <table class="table table-bordered table-striped w-100" id="productLoansTable">
+                                <thead>
+                                    <tr>
+                                        <th>Loan No</th>
+                                        <th>Customer</th>
+                                        <th>Amount</th>
+                                        <th>Interest</th>
+                                        <th>Total</th>
+                                        <th>Period</th>
+                                        <th>Status</th>
+                                        <th>Branch</th>
+                                        <th>Date Applied</th>
+                                        <th class="text-center">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
 
     </div>
 </div>
@@ -231,6 +272,73 @@ use Vinkla\Hashids\Facades\Hashids;
                 var tooltipList = tooltipTriggerList.map(function(tooltipTriggerEl) {
                     return new bootstrap.Tooltip(tooltipTriggerEl);
                 });
+            }
+        });
+
+        let productLoansTable = null;
+
+        $('#loanProductsTable').on('click', '.product-loans-btn', function(e) {
+            e.preventDefault();
+            const productName = $(this).data('product-name');
+            const loansUrl = $(this).data('loans-url');
+
+            $('#productLoansModalLabel').text('Loans: ' + productName);
+
+            if (productLoansTable) {
+                productLoansTable.destroy();
+                productLoansTable = null;
+                $('#productLoansTable tbody').empty();
+            }
+
+            const modalEl = document.getElementById('productLoansModal');
+            const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+            modal.show();
+
+            productLoansTable = $('#productLoansTable').DataTable({
+                processing: true,
+                serverSide: true,
+                responsive: true,
+                deferRender: true,
+                ajax: {
+                    url: loansUrl,
+                    type: 'GET',
+                    error: function(xhr) {
+                        console.error('Failed to load product loans', xhr.responseJSON || xhr.responseText);
+                    }
+                },
+                columns: [
+                    { data: 'loan_no', name: 'loanNo', orderable: true, searchable: true },
+                    { data: 'customer_name', name: 'customer_name', orderable: true, searchable: true },
+                    { data: 'formatted_amount', name: 'amount', orderable: true, searchable: true },
+                    { data: 'interest_display', name: 'interest', orderable: true, searchable: true },
+                    { data: 'formatted_total', name: 'amount_total', orderable: true, searchable: true },
+                    { data: 'period', name: 'period', orderable: true, searchable: true },
+                    { data: 'status_badge', name: 'status', orderable: true, searchable: true },
+                    { data: 'branch_name', name: 'branch_name', orderable: true, searchable: true },
+                    { data: 'formatted_date', name: 'date_applied', orderable: true, searchable: true },
+                    { data: 'actions', name: 'actions', orderable: false, searchable: false, className: 'text-center' }
+                ],
+                order: [[8, 'desc']],
+                pageLength: 25,
+                lengthMenu: [[10, 25, 50, 100], [10, 25, 50, 100]],
+                language: {
+                    search: '',
+                    searchPlaceholder: 'Search loans...',
+                    processing: '<div class="d-flex justify-content-center"><div class="spinner-border spinner-border-sm" role="status"></div></div>',
+                    emptyTable: 'No loans found for this product.',
+                    zeroRecords: 'No matching loans found.'
+                },
+                columnDefs: [
+                    { targets: -1, orderable: false, searchable: false }
+                ]
+            });
+        });
+
+        $('#productLoansModal').on('hidden.bs.modal', function() {
+            if (productLoansTable) {
+                productLoansTable.destroy();
+                productLoansTable = null;
+                $('#productLoansTable tbody').empty();
             }
         });
 

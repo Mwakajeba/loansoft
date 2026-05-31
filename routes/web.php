@@ -932,6 +932,7 @@ Route::middleware(['auth'])->group(function () {
     Route::patch('loan-products/{encodedId}/toggle-status', [LoanProductController::class, 'toggleStatus'])->name('loan-products.toggle-status');
     Route::get('loan-products/{encodedId}/kyc-config', [LoanProductController::class, 'showKycConfig'])->name('loan-products.kyc-config');
     Route::put('loan-products/{encodedId}/kyc-config', [LoanProductController::class, 'updateKycConfig'])->name('loan-products.kyc-config.update');
+    Route::get('loan-products/{encodedId}/loans/data', [LoanProductController::class, 'getProductLoansData'])->name('loan-products.loans.data');
 });
 
 ////////////////////////////////////////////// END LOAN PRODUCT MANAGEMENT ///////////////////////////////////////////

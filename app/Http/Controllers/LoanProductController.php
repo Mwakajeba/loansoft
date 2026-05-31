@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Loan;
 use App\Models\LoanProduct;
 use App\Support\Loans\InterestAccrualMethod;
 use App\Models\ChartAccount;
@@ -14,6 +15,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
 use Vinkla\Hashids\Facades\Hashids;
+use Yajra\DataTables\Facades\DataTables;
 
 class LoanProductController extends Controller
 {
@@ -635,5 +637,117 @@ class LoanProductController extends Controller
             return redirect()->back()
                 ->with('error', 'Error updating KYC configuration: ' . $e->getMessage());
         }
+    }
+
+    /**
+     * Ajax endpoint: all loans for a loan product (DataTables).
+     */
+    public function getProductLoansData(Request $request, $encodedId)
+    {
+        if (!$request->ajax()) {
+            return response()->json(['error' => 'Invalid request'], 400);
+        }
+
+        $decoded = Hashids::decode($encodedId);
+        if (empty($decoded)) {
+            return response()->json(['error' => 'Loan product not found.'], 404);
+        }
+
+        $productId = (int) $decoded[0];
+        LoanProduct::findOrFail($productId);
+
+        $branchId = auth()->user()->branch_id;
+
+        $loans = Loan::with([
+            'customer:id,name,customerNo',
+            'branch:id,name',
+            'group:id,name',
+            'loanOfficer:id,name',
+        ])
+            ->where('product_id', $productId)
+            ->where('branch_id', $branchId)
+            ->select(
+                'loans.id',
+                'loans.customer_id',
+                'loans.product_id',
+                'loans.branch_id',
+                'loans.group_id',
+                'loans.loan_officer_id',
+                'loans.loanNo',
+                'loans.amount',
+                'loans.interest',
+                'loans.amount_total',
+                'loans.period',
+                'loans.status',
+                'loans.date_applied',
+                'loans.created_at'
+            );
+
+        return DataTables::eloquent($loans)
+            ->addColumn('customer_name', function ($loan) {
+                $customerName = optional($loan->customer)->name ?? 'N/A';
+                $customerNo = optional($loan->customer)->customerNo;
+                $subtitle = $customerNo ? '<small class="text-muted">' . e($customerNo) . '</small>' : '';
+
+                return '<div><strong>' . e($customerName) . '</strong>' . ($subtitle ? '<br>' . $subtitle : '') . '</div>';
+            })
+            ->addColumn('loan_no', fn ($loan) => e($loan->loanNo ?? ('#' . $loan->id)))
+            ->addColumn('formatted_amount', fn ($loan) => number_format($loan->amount, 2))
+            ->addColumn('formatted_total', fn ($loan) => number_format($loan->amount_total, 2))
+            ->addColumn('interest_display', fn ($loan) => round($loan->interest, 2) . '%')
+            ->addColumn('status_badge', fn ($loan) => $this->loanStatusBadge($loan->status))
+            ->addColumn('branch_name', fn ($loan) => e(optional($loan->branch)->name ?? 'N/A'))
+            ->addColumn('formatted_date', function ($loan) {
+                return $loan->date_applied
+                    ? \Carbon\Carbon::parse($loan->date_applied)->format('M d, Y')
+                    : 'N/A';
+            })
+            ->addColumn('actions', function ($loan) {
+                $encodedId = Hashids::encode($loan->id);
+                $actions = '';
+
+                if (auth()->user()->can('view loan details')) {
+                    $actions .= '<a href="' . route('loans.show', $encodedId) . '" class="btn btn-sm btn-outline-info" title="View Loan"><i class="bx bx-show"></i></a>';
+                }
+
+                return $actions ? '<div class="text-center">' . $actions . '</div>' : '<span class="text-muted">-</span>';
+            })
+            ->filterColumn('customer_name', function ($query, $keyword) {
+                $query->whereHas('customer', function ($q) use ($keyword) {
+                    $q->whereRaw('LOWER(name) LIKE LOWER(?)', ["%{$keyword}%"])
+                        ->orWhereRaw('LOWER(customerNo) LIKE LOWER(?)', ["%{$keyword}%"]);
+                });
+            })
+            ->filterColumn('loan_no', function ($query, $keyword) {
+                $query->whereRaw('LOWER(loanNo) LIKE LOWER(?)', ["%{$keyword}%"]);
+            })
+            ->filterColumn('branch_name', function ($query, $keyword) {
+                $query->whereHas('branch', function ($q) use ($keyword) {
+                    $q->whereRaw('LOWER(name) LIKE LOWER(?)', ["%{$keyword}%"]);
+                });
+            })
+            ->filterColumn('status_badge', function ($query, $keyword) {
+                $query->whereRaw('LOWER(status) LIKE LOWER(?)', ["%{$keyword}%"]);
+            })
+            ->rawColumns(['customer_name', 'status_badge', 'actions'])
+            ->make(true);
+    }
+
+    protected function loanStatusBadge(?string $status): string
+    {
+        $statusText = ucfirst($status ?? 'unknown');
+        $badgeClass = match ($status) {
+            'applied' => 'bg-warning',
+            'checked' => 'bg-info',
+            'approved' => 'bg-primary',
+            'authorized' => 'bg-success',
+            'active', 'completed' => 'bg-success',
+            'defaulted', 'rejected' => 'bg-danger',
+            'restructured' => 'bg-info',
+            'written_off' => 'bg-dark',
+            default => 'bg-secondary',
+        };
+
+        return '<span class="badge ' . $badgeClass . '">' . e($statusText) . '</span>';
     }
 }
