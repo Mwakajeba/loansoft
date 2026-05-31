@@ -666,6 +666,7 @@ class LoanProductController extends Controller
         ])
             ->where('product_id', $productId)
             ->where('branch_id', $branchId)
+            ->where('status', Loan::STATUS_ACTIVE)
             ->select(
                 'loans.id',
                 'loans.customer_id',

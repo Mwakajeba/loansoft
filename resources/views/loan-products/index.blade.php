@@ -117,7 +117,7 @@ use Vinkla\Hashids\Facades\Hashids;
                                                 </a>
                                                 <button type="button"
                                                     class="btn btn-sm btn-outline-secondary product-loans-btn"
-                                                    title="List All Loans"
+                                                    title="List Active Loans"
                                                     data-product-id="{{ Hashids::encode($product->id) }}"
                                                     data-product-name="{{ $product->name }}"
                                                     data-loans-url="{{ route('loan-products.loans.data', Hashids::encode($product->id)) }}">
@@ -282,7 +282,7 @@ use Vinkla\Hashids\Facades\Hashids;
             const productName = $(this).data('product-name');
             const loansUrl = $(this).data('loans-url');
 
-            $('#productLoansModalLabel').text('Loans: ' + productName);
+            $('#productLoansModalLabel').text('Active Loans: ' + productName);
 
             if (productLoansTable) {
                 productLoansTable.destroy();
@@ -325,8 +325,8 @@ use Vinkla\Hashids\Facades\Hashids;
                     search: '',
                     searchPlaceholder: 'Search loans...',
                     processing: '<div class="d-flex justify-content-center"><div class="spinner-border spinner-border-sm" role="status"></div></div>',
-                    emptyTable: 'No loans found for this product.',
-                    zeroRecords: 'No matching loans found.'
+                    emptyTable: 'No active loans found for this product.',
+                    zeroRecords: 'No matching active loans found.'
                 },
                 columnDefs: [
                     { targets: -1, orderable: false, searchable: false }
