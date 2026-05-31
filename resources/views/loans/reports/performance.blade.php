@@ -201,22 +201,22 @@
                 <h5 class="mb-0"><i class="bx bx-list-ul me-2"></i>Performance Summary</h5>
                 <div class="d-flex gap-2">
                     <form method="GET" action="{{ route('accounting.loans.reports.performance') }}" class="d-inline">
-                        <input type="hidden" name="from_date" value="{{ request('from_date') }}">
-                        <input type="hidden" name="to_date" value="{{ request('to_date') }}">
-                        <input type="hidden" name="branch_id" value="{{ request('branch_id') }}">
-                        <input type="hidden" name="group_id" value="{{ request('group_id') }}">
-                        <input type="hidden" name="loan_officer_id" value="{{ request('loan_officer_id') }}">
+                        <input type="hidden" name="from_date" value="{{ $fromDate }}">
+                        <input type="hidden" name="to_date" value="{{ $toDate }}">
+                        <input type="hidden" name="branch_id" value="{{ $branchId }}">
+                        <input type="hidden" name="group_id" value="{{ $groupId }}">
+                        <input type="hidden" name="loan_officer_id" value="{{ $loanOfficerId }}">
                         <input type="hidden" name="export_type" value="excel">
                         <button type="submit" class="btn btn-success btn-sm">
                             <i class="bx bx-download me-1"></i> Excel
                         </button>
                     </form>
                     <form method="GET" action="{{ route('accounting.loans.reports.performance') }}" class="d-inline">
-                        <input type="hidden" name="from_date" value="{{ request('from_date') }}">
-                        <input type="hidden" name="to_date" value="{{ request('to_date') }}">
-                        <input type="hidden" name="branch_id" value="{{ request('branch_id') }}">
-                        <input type="hidden" name="group_id" value="{{ request('group_id') }}">
-                        <input type="hidden" name="loan_officer_id" value="{{ request('loan_officer_id') }}">
+                        <input type="hidden" name="from_date" value="{{ $fromDate }}">
+                        <input type="hidden" name="to_date" value="{{ $toDate }}">
+                        <input type="hidden" name="branch_id" value="{{ $branchId }}">
+                        <input type="hidden" name="group_id" value="{{ $groupId }}">
+                        <input type="hidden" name="loan_officer_id" value="{{ $loanOfficerId }}">
                         <input type="hidden" name="export_type" value="pdf">
                         <button type="submit" class="btn btn-danger btn-sm">
                             <i class="bx bx-download me-1"></i> PDF

@@ -26,9 +26,19 @@ class LoanArrearsExport implements FromArray, WithHeadings, WithStyles, WithTitl
     public function array(): array
     {
         $exportData = [];
-        
+        $totals = [
+            'loan_fees' => 0.0,
+            'penalties' => 0.0,
+            'instalment_in_arrears' => 0.0,
+            'total_balance_in_arrears' => 0.0,
+        ];
+
         if (count($this->data['arrears_data']) > 0) {
             foreach ($this->data['arrears_data'] as $index => $row) {
+                foreach ($totals as $key => $value) {
+                    $totals[$key] += (float) ($row[$key] ?? 0);
+                }
+
                 $exportData[] = [
                     $index + 1,
                     $row['customer'],
@@ -40,21 +50,25 @@ class LoanArrearsExport implements FromArray, WithHeadings, WithStyles, WithTitl
                     $row['branch'],
                     $row['group'],
                     $row['loan_officer'],
-                    $row['arrears_amount'],
+                    $row['loan_fees'] ?? 0,
+                    $row['penalties'] ?? 0,
+                    $row['instalment_in_arrears'] ?? 0,
+                    $row['total_balance_in_arrears'] ?? 0,
                     $row['days_in_arrears'],
                     $row['first_overdue_date'],
-                    $row['overdue_schedules_count'],
+                    $row['no_of_instalments'] ?? 0,
                     $row['arrears_severity'],
                 ];
             }
-            
-            // Add summary row
-            $exportData[] = [];
+
             $exportData[] = [
-                '', '', '', '', '', '', '', '', '', 'TOTAL:',
-                array_sum(array_column($this->data['arrears_data'], 'arrears_amount')),
-                round(array_sum(array_column($this->data['arrears_data'], 'days_in_arrears')) / count($this->data['arrears_data'])),
-                '', count($this->data['arrears_data']) . ' Loans', ''
+                'TOTALS',
+                '', '', '', '', '', '', '', '', '',
+                $totals['loan_fees'],
+                $totals['penalties'],
+                $totals['instalment_in_arrears'],
+                $totals['total_balance_in_arrears'],
+                '', '', '', '',
             ];
         }
 
@@ -71,48 +85,20 @@ class LoanArrearsExport implements FromArray, WithHeadings, WithStyles, WithTitl
             ['Loan Officer: ' . $this->data['loan_officer_name']],
             [],
             [
-                '#',
-                'Customer',
-                'Customer No',
-                'Phone',
-                'Loan No',
-                'Loan Amount',
-                'Disbursed Date',
-                'Branch',
-                'Group',
-                'Loan Officer',
-                'Arrears Amount',
-                'Days in Arrears',
-                'First Overdue Date',
-                'Overdue Items',
-                'Severity'
-            ]
+                '#', 'Customer', 'Customer No', 'Phone', 'Loan No', 'Loan Amount', 'Disbursed Date',
+                'Branch', 'Group', 'Loan Officer', 'Loan Fees', 'Penalties', 'Instalment in Arrears',
+                'Total Balance in Arrears', 'Days in Arrears', 'First Overdue Date', 'No of Instalments', 'Severity',
+            ],
         ];
     }
 
     public function styles(Worksheet $sheet)
     {
         return [
-            // Title row
-            1 => [
-                'font' => ['bold' => true, 'size' => 16],
-                'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER],
-            ],
-            
-            // Info rows
-            2 => ['font' => ['bold' => true]],
-            3 => ['font' => ['bold' => true]],
-            4 => ['font' => ['bold' => true]],
-            5 => ['font' => ['bold' => true]],
-            
-            // Header row
+            1 => ['font' => ['bold' => true, 'size' => 16], 'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER]],
             7 => [
-                'font' => ['bold' => true],
-                'fill' => [
-                    'fillType' => Fill::FILL_SOLID,
-                    'startColor' => ['argb' => 'FF4472C4']
-                ],
-                'font' => ['color' => ['argb' => 'FFFFFFFF'], 'bold' => true],
+                'font' => ['bold' => true, 'color' => ['argb' => 'FFFFFFFF']],
+                'fill' => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['argb' => 'FF4472C4']],
                 'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER],
             ],
         ];
@@ -120,23 +106,7 @@ class LoanArrearsExport implements FromArray, WithHeadings, WithStyles, WithTitl
 
     public function columnWidths(): array
     {
-        return [
-            'A' => 5,   // #
-            'B' => 20,  // Customer
-            'C' => 12,  // Customer No
-            'D' => 15,  // Phone
-            'E' => 12,  // Loan No
-            'F' => 15,  // Loan Amount
-            'G' => 12,  // Disbursed Date
-            'H' => 15,  // Branch
-            'I' => 15,  // Group
-            'J' => 15,  // Loan Officer
-            'K' => 15,  // Arrears Amount
-            'L' => 12,  // Days in Arrears
-            'M' => 12,  // First Overdue Date
-            'N' => 10,  // Overdue Items
-            'O' => 10,  // Severity
-        ];
+        return ['A' => 5, 'B' => 22, 'K' => 12, 'L' => 12, 'M' => 16, 'N' => 18];
     }
 
     public function title(): string
@@ -147,39 +117,27 @@ class LoanArrearsExport implements FromArray, WithHeadings, WithStyles, WithTitl
     public function registerEvents(): array
     {
         return [
-            AfterSheet::class => function(AfterSheet $event) {
+            AfterSheet::class => function (AfterSheet $event) {
                 $sheet = $event->sheet->getDelegate();
-                
-                // Merge title cells
-                $sheet->mergeCells('A1:O1');
-                
-                // Add borders to data
+                $sheet->mergeCells('A1:R1');
                 $highestRow = $sheet->getHighestRow();
-                $highestColumn = $sheet->getHighestColumn();
-                
-                $sheet->getStyle('A7:' . $highestColumn . $highestRow)
-                    ->getBorders()
-                    ->getAllBorders()
-                    ->setBorderStyle(Border::BORDER_THIN);
-                
-                // Format currency columns
-                $sheet->getStyle('F8:F' . $highestRow)->getNumberFormat()->setFormatCode('#,##0.00');
-                $sheet->getStyle('K8:K' . $highestRow)->getNumberFormat()->setFormatCode('#,##0.00');
-                
-                // Center align specific columns
-                $sheet->getStyle('A8:A' . $highestRow)->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
-                $sheet->getStyle('C8:C' . $highestRow)->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
-                $sheet->getStyle('D8:D' . $highestRow)->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
-                $sheet->getStyle('E8:E' . $highestRow)->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
-                $sheet->getStyle('G8:G' . $highestRow)->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
-                $sheet->getStyle('L8:L' . $highestRow)->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
-                $sheet->getStyle('M8:M' . $highestRow)->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
-                $sheet->getStyle('N8:N' . $highestRow)->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
-                $sheet->getStyle('O8:O' . $highestRow)->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
-                
-                // Right align amount columns
-                $sheet->getStyle('F8:F' . $highestRow)->getAlignment()->setHorizontal(Alignment::HORIZONTAL_RIGHT);
-                $sheet->getStyle('K8:K' . $highestRow)->getAlignment()->setHorizontal(Alignment::HORIZONTAL_RIGHT);
+                $sheet->getStyle('A7:R' . $highestRow)->getBorders()->getAllBorders()->setBorderStyle(Border::BORDER_THIN);
+                if ($highestRow > 7) {
+                    $sheet->getStyle('A' . $highestRow . ':R' . $highestRow)->applyFromArray([
+                        'font' => ['bold' => true, 'color' => ['argb' => 'FFFFFFFF']],
+                        'fill' => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['argb' => 'FF343A40']],
+                    ]);
+                }
+                foreach (['K7', 'L7', 'M7', 'N7'] as $cell) {
+                    $sheet->getStyle($cell)->getFill()->setFillType(Fill::FILL_SOLID)
+                        ->getStartColor()->setARGB(match ($cell) {
+                            'K7' => 'FFFFA500',
+                            'L7' => 'FF8B4513',
+                            'M7' => 'FF808000',
+                            'N7' => 'FFFF0000',
+                            default => 'FF4472C4',
+                        });
+                }
             },
         ];
     }

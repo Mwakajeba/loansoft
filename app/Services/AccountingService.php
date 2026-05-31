@@ -38,6 +38,14 @@ class AccountingService
             return;
         }
 
+        if (GlTransaction::where('transaction_id', $accrual->id)
+            ->where('transaction_type', 'DailyInterestAccrual')
+            ->exists()) {
+            Log::info("Daily interest GL already posted for accrual #{$accrual->id}, skipping.");
+
+            return;
+        }
+
         $description = "Daily interest accrual for loan {$loan->loanNo} - {$date->toDateString()}";
         $reference = "DIA-{$accrual->id}-" . $date->format('Ymd');
 

@@ -12,6 +12,7 @@
             ]" />
 
         <h6 class="mb-0 text-uppercase">Loan Portfolio Tracking</h6>
+        <p class="text-muted small mb-0">Shows active/defaulted loans in the portfolio for the selected period (plus any loans disbursed within the dates). Balances use current figures when <strong>To Date</strong> is today or future. Loans with outstanding below {{ number_format(\App\Models\Loan::OUTSTANDING_CLOSURE_THRESHOLD, 0) }} are treated as completed.</p>
         <hr />
 
         <div class="card mb-4">

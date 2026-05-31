@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <title>Loan Aging Report</title>
     <style>
-        @page { size: A4 landscape; margin: 10mm; }
+        @page { size: A3 landscape; margin: 10mm; }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: Arial, sans-serif; font-size: 9px; color: #000; line-height: 1.3; }
         .header { text-align: center; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 2px solid #000; }
@@ -15,10 +15,10 @@
         .report-info { font-size: 9px; color: #000; margin: 2px 0; }
         table { width: 100%; border-collapse: collapse; margin-top: 8px; }
         th, td { border: 1px solid #000; padding: 3px 2px; text-align: left; font-size: 8px; color: #000; }
-        th { background-color: #000; color: #fff; font-weight: bold; text-align: center; }
+        thead th { background-color: #999; color: #fff; font-weight: bold; text-align: center; }
+        tfoot th, tfoot td { background-color: #999; color: #fff; font-weight: bold; text-align: center; }
         .text-right { text-align: right; }
         .text-center { text-align: center; }
-        .total-row { background-color: #f0f0f0; font-weight: bold; }
         .footer { margin-top: 15px; padding-top: 8px; border-top: 1px solid #000; text-align: center; font-size: 8px; color: #000; }
         .footer p { margin: 2px 0; }
         .digital-signature { margin-top: 5px; font-size: 7px; color: #000; font-style: italic; }
@@ -42,7 +42,6 @@
         }
     @endphp
 
-    <!-- Header -->
     <div class="header">
         @if($logoBase64)<img src="{{ $logoBase64 }}" alt="Logo" class="logo">@endif
         <div class="company-name">{{ $company->name ?? config('app.name', 'SmartFinance') }}</div>
@@ -59,83 +58,69 @@
         <div class="report-info"><strong>As of Date:</strong> {{ $asOfDate }} | <strong>Report Date:</strong> {{ \Carbon\Carbon::now()->format('d/m/Y H:i:s') }}</div>
     </div>
 
-    <!-- Data Table -->
     <table>
         <thead>
             <tr>
-                <th style="width: 3%;">S/N</th>
-                <th style="width: 10%;">Customer</th>
-                <th style="width: 6%;">Customer No</th>
-                <th style="width: 7%;">Phone</th>
-                <th style="width: 6%;">Loan No</th>
-                <th style="width: 8%;">Loan Amount</th>
-                <th style="width: 8%;">Outstanding</th>
-                <th style="width: 6%;">Disbursed</th>
-                <th style="width: 6%;">Expiry</th>
-                <th style="width: 7%;">Branch</th>
-                <th style="width: 7%;">Officer</th>
-                <th style="width: 5%;">Current</th>
-                <th style="width: 5%;">1-30</th>
-                <th style="width: 5%;">31-60</th>
-                <th style="width: 5%;">61-90</th>
-                <th style="width: 5%;">91+</th>
+                <th>#</th><th>Customer</th><th>Customer No</th><th>Phone</th><th>Loan No</th>
+                <th>Disbursed Date</th><th>Loan Amount</th><th>Gender</th><th>Age</th><th>Subsector</th>
+                <th>Outstanding principal</th><th>Days In Arrears</th>
+                <th>0-5 CURRENT (1%)</th><th>6-30 ESM (5%)</th><th>31-60 SUBSTD (25%)</th>
+                <th>61-90 DOUBTFUL (50%)</th><th>MORE 91 LOSS (100%)</th>
+                <th>PROVISION RATE %</th><th>PROVISION AMOUNT</th>
             </tr>
         </thead>
-        <tbody>
-            @php
-                $totalAmount = 0; $totalOutstanding = 0; $totalCurrent = 0;
-                $total1_30 = 0; $total31_60 = 0; $total61_90 = 0; $total91Plus = 0;
-                $count = 0;
-            @endphp
-            @forelse($agingData as $index => $row)
-                @php
-                    $count++;
-                    $totalAmount += $row['amount'] ?? 0;
-                    $totalOutstanding += $row['outstanding_balance'] ?? 0;
-                    $totalCurrent += $row['current'] ?? 0;
-                    $total1_30 += $row['bucket_1_30'] ?? 0;
-                    $total31_60 += $row['bucket_31_60'] ?? 0;
-                    $total61_90 += $row['bucket_61_90'] ?? 0;
-                    $total91Plus += $row['bucket_91_plus'] ?? 0;
-                @endphp
+        @if(isset($agingData) && count($agingData))
+            @php $count = 0; $totals = ['loan_amount'=>0,'outstanding_principal'=>0,'bucket_current'=>0,'bucket_esm'=>0,'bucket_substandard'=>0,'bucket_doubtful'=>0,'bucket_loss'=>0,'provision_amount'=>0]; @endphp
+            <tbody>
+                @foreach($agingData as $index => $row)
+                    @php
+                        $count++;
+                        foreach ($totals as $k => $v) { $totals[$k] += (float)($row[$k] ?? 0); }
+                    @endphp
+                    <tr>
+                        <td class="text-center">{{ $index + 1 }}</td>
+                        <td>{{ $row['customer'] }}</td>
+                        <td class="text-center">{{ $row['customer_no'] }}</td>
+                        <td class="text-center">{{ $row['phone'] }}</td>
+                        <td class="text-center">{{ $row['loan_no'] }}</td>
+                        <td class="text-center">{{ $row['disbursed_date'] }}</td>
+                        <td class="text-right">{{ number_format($row['loan_amount'], 2) }}</td>
+                        <td>{{ $row['gender'] ?? '' }}</td>
+                        <td>{{ $row['age_category'] ?? '' }}</td>
+                        <td>{{ $row['subsector'] ?? '' }}</td>
+                        <td class="text-right">{{ number_format($row['outstanding_principal'], 2) }}</td>
+                        <td class="text-center">{{ $row['days_in_arrears'] ?? 0 }}</td>
+                        <td class="text-right">{{ number_format($row['bucket_current'], 2) }}</td>
+                        <td class="text-right">{{ number_format($row['bucket_esm'], 2) }}</td>
+                        <td class="text-right">{{ number_format($row['bucket_substandard'], 2) }}</td>
+                        <td class="text-right">{{ number_format($row['bucket_doubtful'], 2) }}</td>
+                        <td class="text-right">{{ number_format($row['bucket_loss'], 2) }}</td>
+                        <td class="text-center">{{ $row['provision_rate'] ?? 0 }}%</td>
+                        <td class="text-right">{{ number_format($row['provision_amount'] ?? 0, 2) }}</td>
+                    </tr>
+                @endforeach
+            </tbody>
+            <tfoot>
                 <tr>
-                    <td class="text-center">{{ $index + 1 }}</td>
-                    <td>{{ $row['customer'] }}</td>
-                    <td class="text-center">{{ $row['customer_no'] }}</td>
-                    <td class="text-center">{{ $row['phone'] }}</td>
-                    <td class="text-center">{{ $row['loan_no'] }}</td>
-                    <td class="text-right">{{ number_format($row['amount'], 0) }}</td>
-                    <td class="text-right">{{ number_format($row['outstanding_balance'], 0) }}</td>
-                    <td class="text-center">{{ $row['disbursed_no'] }}</td>
-                    <td class="text-center">{{ $row['expiry'] }}</td>
-                    <td>{{ $row['branch'] }}</td>
-                    <td>{{ $row['loan_officer'] }}</td>
-                    <td class="text-right">{{ number_format($row['current'], 0) }}</td>
-                    <td class="text-right">{{ number_format($row['bucket_1_30'], 0) }}</td>
-                    <td class="text-right">{{ number_format($row['bucket_31_60'], 0) }}</td>
-                    <td class="text-right">{{ number_format($row['bucket_61_90'], 0) }}</td>
-                    <td class="text-right">{{ number_format($row['bucket_91_plus'], 0) }}</td>
+                    <th colspan="6" class="text-left">Total ({{ $count }} records)</th>
+                    <th class="text-right">{{ number_format($totals['loan_amount'], 2) }}</th>
+                    <th colspan="3"></th>
+                    <th class="text-right">{{ number_format($totals['outstanding_principal'], 2) }}</th>
+                    <th></th>
+                    <th class="text-right">{{ number_format($totals['bucket_current'], 2) }}</th>
+                    <th class="text-right">{{ number_format($totals['bucket_esm'], 2) }}</th>
+                    <th class="text-right">{{ number_format($totals['bucket_substandard'], 2) }}</th>
+                    <th class="text-right">{{ number_format($totals['bucket_doubtful'], 2) }}</th>
+                    <th class="text-right">{{ number_format($totals['bucket_loss'], 2) }}</th>
+                    <th></th>
+                    <th class="text-right">{{ number_format($totals['provision_amount'], 2) }}</th>
                 </tr>
-            @empty
-                <tr><td colspan="16" class="text-center">No records found</td></tr>
-            @endforelse
-            <!-- Total Row -->
-            <tr class="total-row">
-                <td class="text-center" colspan="2"><strong>TOTAL</strong></td>
-                <td colspan="3" class="text-right"><strong>{{ number_format($count) }} Records</strong></td>
-                <td class="text-right"><strong>{{ number_format($totalAmount, 0) }}</strong></td>
-                <td class="text-right"><strong>{{ number_format($totalOutstanding, 0) }}</strong></td>
-                <td colspan="4"></td>
-                <td class="text-right"><strong>{{ number_format($totalCurrent, 0) }}</strong></td>
-                <td class="text-right"><strong>{{ number_format($total1_30, 0) }}</strong></td>
-                <td class="text-right"><strong>{{ number_format($total31_60, 0) }}</strong></td>
-                <td class="text-right"><strong>{{ number_format($total61_90, 0) }}</strong></td>
-                <td class="text-right"><strong>{{ number_format($total91Plus, 0) }}</strong></td>
-            </tr>
-        </tbody>
+            </tfoot>
+        @else
+            <tbody><tr><td colspan="19" class="text-center">No records found</td></tr></tbody>
+        @endif
     </table>
 
-    <!-- Footer -->
     <div class="footer">
         <p><strong>&copy; {{ date('Y') }} {{ $company->name ?? config('app.name', 'SmartFinance') }}. All Rights Reserved.</strong></p>
         <p class="digital-signature">This is a digitally generated document from {{ $company->name ?? config('app.name', 'SmartFinance') }} System. No signature required.</p>

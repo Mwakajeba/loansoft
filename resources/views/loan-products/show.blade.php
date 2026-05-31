@@ -140,6 +140,14 @@
                                     <label class="form-label text-muted small">Interest Method</label>
                                     <p class="mb-0 fw-bold">{{ ucwords(str_replace('_', ' ', $loanProduct->interest_method)) }}</p>
                                 </div>
+                                <div class="col-sm-6 mb-3">
+                                    <label class="form-label text-muted small">Accrual Interest Calculation</label>
+                                    <p class="mb-0">
+                                        <span class="badge {{ $loanProduct->usesDailyInterestAccrual() ? 'bg-info' : 'bg-primary' }}">
+                                            {{ $loanProduct->accrualMethodLabel() }}
+                                        </span>
+                                    </p>
+                                </div>
                                 <div class="col-12 mb-3">
                                     <label class="form-label text-muted small">Created</label>
                                     <p class="mb-0 fw-bold">{{ $loanProduct->created_at->format('M d, Y H:i') }}</p>
@@ -276,9 +284,12 @@
                                         <label class="form-label text-muted small">Approval Hierarchy</label>
                                         <div class="mb-2">
                                             @php
-                                                $approvalRoles = explode(',', $loanProduct->approval_levels);
+                                                $approvalRoles = $loanProduct->approval_levels;
+                                                if (!is_array($approvalRoles)) {
+                                                    $approvalRoles = array_filter(array_map('trim', explode(',', (string) $approvalRoles)));
+                                                }
                                                 foreach ($approvalRoles as $index => $roleIdentifier) {
-                                                    $roleIdentifier = trim($roleIdentifier);
+                                                    $roleIdentifier = trim((string) $roleIdentifier);
                                                     if (is_numeric($roleIdentifier)) {
                                                         $role = \App\Models\Role::find($roleIdentifier);
                                                     } else {

@@ -37,6 +37,7 @@ class FeeController extends Controller
             'inactive' => $fees->where('status', 'inactive')->count(),
             'fixed' => $fees->where('fee_type', 'fixed')->count(),
             'percentage' => $fees->where('fee_type', 'percentage')->count(),
+            'custom' => $fees->where('fee_type', 'custom')->count(),
         ];
 
         return view('accounting.fees.index', compact('fees', 'stats'));
@@ -66,27 +67,22 @@ class FeeController extends Controller
         $validator = Validator::make($request->all(), [
             'name' => 'required|string|max:255',
             'chart_account_id' => 'required|exists:chart_accounts,id',
-            'fee_type' => 'required|in:fixed,percentage',
-            'amount' => 'required|numeric|min:0',
+            'fee_type' => 'required|in:fixed,percentage,range,custom',
+            'amount' => 'required_if:fee_type,fixed,percentage|nullable|numeric|min:0',
             'description' => 'nullable|string',
             'status' => 'required|in:active,inactive',
             'deduction_criteria' => 'required|in:do_not_include_in_loan_schedule,distribute_fee_evenly_to_all_repayments,charge_fee_on_release_date,charge_fee_on_first_repayment,charge_fee_on_last_repayment,charge_same_fee_to_all_repayments',
             'include_in_schedule' => 'nullable|boolean', // Add validation
             'company_id' => 'nullable|exists:companies,id',
             'branch_id' => 'nullable|exists:branches,id',
+            'ranges' => 'required_if:fee_type,range|array|min:1',
+            'ranges.*.from_amount' => 'required|numeric|min:0',
+            'ranges.*.to_amount' => 'required|numeric|min:0|gte:ranges.*.from_amount',
+            'ranges.*.amount' => 'required|numeric|min:0',
         ]);
 
         if ($validator->fails()) {
             return redirect()->back()->withErrors($validator)->withInput();
-        }
-
-        if ($request->has('include_in_schedule')) {
-            $existing = Fee::where('include_in_schedule', true)->first();
-            if ($existing) {
-                return redirect()->back()
-                    ->withErrors(['include_in_schedule' => 'Only one fee can be included in the schedule.'])
-                    ->withInput();
-            }
         }
 
         $user = auth()->user();
@@ -99,7 +95,7 @@ class FeeController extends Controller
                 'name' => $request->name,
                 'chart_account_id' => $request->chart_account_id,
                 'fee_type' => $request->fee_type,
-                'amount' => $request->fee_type === 'range' ? 0 : $request->amount,
+                'amount' => in_array($request->fee_type, ['range', 'custom'], true) ? 0 : $request->amount,
                 'description' => $request->description,
                 'status' => $request->status,
                 'deduction_criteria' => $request->deduction_criteria,
@@ -187,8 +183,8 @@ class FeeController extends Controller
         $validator = Validator::make($request->all(), [
             'name' => 'required|string|max:255',
             'chart_account_id' => 'required|exists:chart_accounts,id',
-            'fee_type' => 'required|in:fixed,percentage,range',
-            'amount' => 'required_if:fee_type,fixed,percentage|numeric|min:0',
+            'fee_type' => 'required|in:fixed,percentage,range,custom',
+            'amount' => 'required_if:fee_type,fixed,percentage|nullable|numeric|min:0',
             'description' => 'nullable|string',
             'status' => 'required|in:active,inactive',
             'deduction_criteria' => 'required|in:do_not_include_in_loan_schedule,distribute_fee_evenly_to_all_repayments,charge_fee_on_release_date,charge_fee_on_first_repayment,charge_fee_on_last_repayment,charge_same_fee_to_all_repayments',
@@ -206,17 +202,6 @@ class FeeController extends Controller
             return redirect()->back()->withErrors($validator)->withInput();
         }
 
-        if ($request->has('include_in_schedule')) {
-            $existing = Fee::where('include_in_schedule', true)
-                ->where('id', '!=', $fee->id)
-                ->first();
-            if ($existing) {
-                return redirect()->back()
-                    ->withErrors(['include_in_schedule' => 'Only one fee can be included in the schedule.'])
-                    ->withInput();
-            }
-        }
-
         $user = auth()->user();
         $companyId = $user->company_id ?? $request->company_id ?? Company::first()->id ?? 1;
         $branchId = $user->branch_id ?? $request->branch_id ?? Branch::first()->id ?? 1;
@@ -227,7 +212,7 @@ class FeeController extends Controller
                 'name' => $request->name,
                 'chart_account_id' => $request->chart_account_id,
                 'fee_type' => $request->fee_type,
-                'amount' => $request->fee_type === 'range' ? 0 : $request->amount,
+                'amount' => in_array($request->fee_type, ['range', 'custom'], true) ? 0 : $request->amount,
                 'description' => $request->description,
                 'status' => $request->status,
                 'deduction_criteria' => $request->deduction_criteria,

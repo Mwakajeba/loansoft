@@ -37,12 +37,15 @@ class Branch extends Model
     }
 
     /**
-     * Get the bank accounts accessible by this branch.
+     * Bank accounts available to this branch (all-branches flag or matching branch_id).
      */
     public function bankAccounts()
     {
-        return $this->belongsToMany(BankAccount::class, 'bank_branches', 'branch_id', 'bank_account_id')
-            ->withTimestamps();
+        return BankAccount::query()
+            ->where(function ($q) {
+                $q->where('is_all_branches', true)
+                    ->orWhere('branch_id', $this->id);
+            });
     }
 
     /**

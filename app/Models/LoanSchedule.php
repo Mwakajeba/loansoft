@@ -52,11 +52,45 @@ class LoanSchedule extends Model
     }
 
     /**
+     * Interest amount that counts toward total/remaining due: scheduled interest by default;
+     * accrued_interest when the loan product uses daily accrual (daily / daily_bases).
+     */
+    public function getBalanceInterestComponentAttribute(): float
+    {
+        $scheduled = (float) ($this->interest ?? 0);
+        $accrued = (float) ($this->accrued_interest ?? 0);
+
+        if ($this->relationLoaded('loan') && $this->loan) {
+            if ($this->loan->usesDailyInterestAccrual()) {
+                return $accrued;
+            }
+
+            return max($scheduled, $accrued);
+        }
+
+        // Fallback when loan relation not loaded: accrued seeded at disbursement for as-expected products
+        if ($accrued > 0 && abs($accrued - $scheduled) <= 0.02) {
+            return max($scheduled, $accrued);
+        }
+
+        if ($accrued > 0 && $scheduled <= 0) {
+            return $accrued;
+        }
+
+        return max($scheduled, $accrued);
+    }
+
+    /**
      * Get the remaining amount to be paid for this schedule
      */
     public function getRemainingAmountAttribute()
     {
-        $totalDue = $this->principal + $this->interest + $this->fee_amount + $this->penalty_amount;
+        if (in_array($this->status, ['paid', 'cancelled', 'restructured'], true)) {
+            return 0.0;
+        }
+
+        $totalDue = $this->principal + $this->balance_interest_component + $this->fee_amount + $this->penalty_amount;
+
         return max(0, $totalDue - $this->paid_amount);
     }
 
@@ -101,13 +135,13 @@ class LoanSchedule extends Model
     public function getRemainingSchedulesCountAttribute()
     {
         // Fetch sibling schedules for the same loan from this due date onwards
-        $siblingSchedules = self::with('repayments')
+        $siblingSchedules = self::with(['repayments', 'loan.product'])
             ->where('loan_id', $this->loan_id)
             ->whereDate('due_date', '>=', $this->due_date)
             ->get();
 
         return $siblingSchedules->filter(function ($schedule) {
-            return ($schedule->remaining_amount ?? 0) > 0;
+            return $schedule->remaining_amount > 0;
         })->count();
     }
 
@@ -116,7 +150,7 @@ class LoanSchedule extends Model
      */
     public function getRemainingSchedulesAmountAttribute()
     {
-        $siblingSchedules = self::with('repayments')
+        $siblingSchedules = self::with(['repayments', 'loan.product'])
             ->where('loan_id', $this->loan_id)
             ->whereDate('due_date', '>=', $this->due_date)
             ->get();
@@ -139,7 +173,7 @@ class LoanSchedule extends Model
      */
     public function getTotalDueAttribute()
     {
-        return $this->principal + $this->interest + $this->fee_amount + $this->penalty_amount;
+        return $this->principal + $this->balance_interest_component + $this->fee_amount + $this->penalty_amount;
     }
 
     /**
@@ -147,10 +181,16 @@ class LoanSchedule extends Model
      */
     public function getPaymentPercentageAttribute()
     {
-        if ($this->total_due <= 0) {
+        if (in_array($this->status, ['paid', 'cancelled', 'restructured'], true)) {
             return 100;
         }
-        return min(100, round(($this->paid_amount / $this->total_due) * 100, 2));
+
+        $totalDue = $this->principal + $this->balance_interest_component + $this->fee_amount + $this->penalty_amount;
+        if ($totalDue <= 0) {
+            return 100;
+        }
+
+        return min(100, round(($this->paid_amount / $totalDue) * 100, 2));
     }
 
     /**

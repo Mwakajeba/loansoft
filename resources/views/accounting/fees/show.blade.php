@@ -93,7 +93,12 @@
                                     </p>
                                 </div>
 
-                                @if($fee->fee_type !== 'range')
+                                @if($fee->fee_type === 'custom')
+                                    <div class="col-12 mb-3">
+                                        <label class="form-label fw-bold text-muted">Amount</label>
+                                        <p class="mb-0 text-muted">This fee has no preset amount. Staff enter the amount when creating a loan or application for a product that includes this fee.</p>
+                                    </div>
+                                @elseif($fee->fee_type !== 'range')
                                     <div class="col-12 mb-3">
                                         <label class="form-label fw-bold text-muted">Amount</label>
                                         <p class="mb-0 fw-bold text-primary h4">

@@ -8,12 +8,17 @@ use App\Models\Loan;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use App\Support\Upload\FileUploadLimits;
 use Vinkla\Hashids\Facades\Hashids;
 
 class LoanCollateralController extends Controller
 {
     public function store(Request $request)
     {
+        FileUploadLimits::prepareLongRunningUpload();
+        $maxKb = FileUploadLimits::maxKilobytes();
+        $maxMb = FileUploadLimits::maxMegabytesLabel();
+
         $request->validate([
             'loan_id' => 'required|exists:loans,id',
             'type' => 'required|string|max:255',
@@ -28,8 +33,11 @@ class LoanCollateralController extends Controller
             'notes' => 'nullable|string',
             'serial_number' => 'nullable|string|max:255',
             'registration_number' => 'nullable|string|max:255',
-            'images.*' => 'nullable|image|mimes:jpeg,png,jpg|max:2048',
-            'documents.*' => 'nullable|file|mimes:pdf,doc,docx,jpeg,png,jpg|max:5120',
+            'images.*' => 'nullable|image|mimes:jpeg,png,jpg|max:' . $maxKb,
+            'documents.*' => 'nullable|file|mimes:pdf,doc,docx,jpeg,png,jpg|max:' . $maxKb,
+        ], [
+            'images.*.max' => "Each image may be up to {$maxMb}MB.",
+            'documents.*.max' => "Each document may be up to {$maxMb}MB.",
         ]);
 
         try {
@@ -94,6 +102,10 @@ class LoanCollateralController extends Controller
 
     public function update(Request $request, LoanCollateral $collateral)
     {
+        FileUploadLimits::prepareLongRunningUpload();
+        $maxKb = FileUploadLimits::maxKilobytes();
+        $maxMb = FileUploadLimits::maxMegabytesLabel();
+
         $request->validate([
             'type' => 'required|string|max:255',
             'title' => 'required|string|max:255',
@@ -107,8 +119,11 @@ class LoanCollateralController extends Controller
             'notes' => 'nullable|string',
             'serial_number' => 'nullable|string|max:255',
             'registration_number' => 'nullable|string|max:255',
-            'new_images.*' => 'nullable|image|mimes:jpeg,png,jpg|max:2048',
-            'new_documents.*' => 'nullable|file|mimes:pdf,doc,docx,jpeg,png,jpg|max:5120',
+            'new_images.*' => 'nullable|image|mimes:jpeg,png,jpg|max:' . $maxKb,
+            'new_documents.*' => 'nullable|file|mimes:pdf,doc,docx,jpeg,png,jpg|max:' . $maxKb,
+        ], [
+            'new_images.*.max' => "Each image may be up to {$maxMb}MB.",
+            'new_documents.*.max' => "Each document may be up to {$maxMb}MB.",
         ]);
 
         try {

@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use App\Models\Penalty;
 use App\Models\ChartAccount;
+use App\Support\Accounting\PenaltyConfiguration;
 use Illuminate\Support\Facades\Validator;
 use Vinkla\Hashids\Facades\Hashids;
 
@@ -51,36 +52,17 @@ class PenaltyController extends Controller
 
     public function store(Request $request)
     {
-        $validator = Validator::make($request->all(), [
-            'name' => 'required|string|max:255',
-            'penalty_income_account_id' => 'required|exists:chart_accounts,id',
-            'penalty_receivables_account_id' => 'required|exists:chart_accounts,id',
-            'penalty_type' => 'required|in:fixed,percentage',
-            'charge_frequency' => 'required|in:daily,one_time',
-            'amount' => 'required|numeric|min:0',
-            'deduction_type' => 'required|in:over_due_principal_amount,over_due_interest_amount,over_due_principal_and_interest,total_principal_amount_released',
-            'description' => 'nullable|string',
-            'status' => 'required|in:active,inactive',
-        ]);
+        $validator = PenaltyConfiguration::validateRequest($request->all());
 
         if ($validator->fails()) {
             return redirect()->back()->withErrors($validator)->withInput();
         }
 
         $user = auth()->user();
+        $data = PenaltyConfiguration::normalizeAttributes($validator->validated());
 
         $penalty = Penalty::create([
-            'name' => $request->name,
-            'penalty_income_account_id' => $request->penalty_income_account_id,
-            'penalty_receivables_account_id' => $request->penalty_receivables_account_id,
-            'penalty_type' => $request->penalty_type,
-            'charge_frequency' => $request->charge_frequency,
-            'frequency_cycle' => $request->frequency_cycle,
-            'penalty_limit_days' => $request->penalty_limit_days,
-            'amount' => $request->amount,
-            'deduction_type' => $request->deduction_type,
-            'description' => $request->description,
-            'status' => $request->status,
+            ...$data,
             'branch_id' => $user->branch_id,
             'created_by' => $user->id,
             'updated_by' => $user->id,
@@ -139,38 +121,17 @@ class PenaltyController extends Controller
 
         $penalty = Penalty::findOrFail($decoded[0]);
 
-        $validator = Validator::make($request->all(), [
-            'name' => 'required|string|max:255',
-            'penalty_income_account_id' => 'required|exists:chart_accounts,id',
-            'penalty_receivables_account_id' => 'required|exists:chart_accounts,id',
-            'penalty_type' => 'required|in:fixed,percentage',
-            'charge_frequency' => 'required|in:daily,one_time',
-            'frequency_cycle' => 'required|in:daily,weekly,monthly,quarterly,yearly',
-            'penalty_limit_days' => 'nullable|integer|min:1',
-            'amount' => 'required|numeric|min:0',
-            'deduction_type' => 'required|in:over_due_principal_amount,over_due_interest_amount,over_due_principal_and_interest,total_principal_amount_released',
-            'description' => 'nullable|string',
-            'status' => 'required|in:active,inactive',
-        ]);
+        $validator = PenaltyConfiguration::validateRequest($request->all());
 
         if ($validator->fails()) {
             return redirect()->back()->withErrors($validator)->withInput();
         }
 
         $user = auth()->user();
+        $data = PenaltyConfiguration::normalizeAttributes($validator->validated());
 
         $penalty->update([
-            'name' => $request->name,
-            'penalty_income_account_id' => $request->penalty_income_account_id,
-            'penalty_receivables_account_id' => $request->penalty_receivables_account_id,
-            'penalty_type' => $request->penalty_type,
-            'charge_frequency' => $request->charge_frequency,
-            'frequency_cycle' => $request->frequency_cycle,
-            'penalty_limit_days' => $request->penalty_limit_days,
-            'amount' => $request->amount,
-            'deduction_type' => $request->deduction_type,
-            'description' => $request->description,
-            'status' => $request->status,
+            ...$data,
             'branch_id' => $user->branch_id,
             'updated_by' => $user->id,
         ]);

@@ -99,10 +99,12 @@
                     </div>
                     <div class="text-end">
                         @php
-                            $totalPaid = $loan->repayments?->sum(function ($r) {
-                                return ($r->principal + $r->interest);
-                            }) ?? 0;
-                            $progress = $loan->amount_total > 0 ? min(100, round(($totalPaid / $loan->amount_total) * 100)) : 0;
+                            $totalPaid = (float) $loan->getTotalPaidAmount();
+                            $totalOutstanding = (float) $loan->getTotalOutstandingAmount();
+                            $progressBase = $totalPaid + $totalOutstanding;
+                            $progress = $loan->status === \App\Models\Loan::STATUS_COMPLETE
+                                ? 100
+                                : ($progressBase > 0 ? min(100, round(($totalPaid / $progressBase) * 100)) : 0);
                             $progressBarClass = match (true) {
                                 $progress === 100 => 'bg-success',
                                 $progress >= 75 => 'bg-primary',
@@ -113,7 +115,7 @@
                         @endphp
                         <p class="mb-1 fw-bold text-dark">
                             {{ $progress }}% Complete
-                            @if($progress >= 100)
+                            @if($loan->status === \App\Models\Loan::STATUS_COMPLETE || $progress >= 100)
                                 <span class="badge bg-success ms-2">Fully Paid</span>
                             @elseif($progress == 0)
                                 <span class="badge bg-danger ms-2">No Repayments</span>
@@ -256,6 +258,11 @@
                     </a>
                 </li>
                 <li class="nav-item" role="presentation">
+                    <a class="nav-link d-flex align-items-center" data-bs-toggle="tab" href="#fees" role="tab">
+                        <i class="bx bx-wallet-alt me-2 font-18"></i>Fees
+                    </a>
+                </li>
+                <li class="nav-item" role="presentation">
                     <a class="nav-link d-flex align-items-center" data-bs-toggle="tab" href="#guarantors" role="tab">
                         <i class="bx bx-group me-2 font-18"></i>Guarantors
                     </a>
@@ -326,6 +333,14 @@
                                         <tr>
                                             <td class="fw-bold text-muted ps-4">Product</td>
                                             <td class="text-dark">{{ $loan->product->name }}</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="fw-bold text-muted ps-4">Interest Accrual</td>
+                                            <td class="text-dark">
+                                                <span class="badge {{ $loan->usesDailyInterestAccrual() ? 'bg-info' : 'bg-primary' }}">
+                                                    {{ $loan->product->accrualMethodLabel() }}
+                                                </span>
+                                            </td>
                                         </tr>
                                         <tr>
                                             <td class="fw-bold text-muted ps-4">Branch</td>
@@ -508,10 +523,12 @@
                                             <td class="fw-bold text-muted ps-4">Payment Progress</td>
                                             <td>
                                                 @php
-                                                    $totalPaid = $loan->repayments?->sum(function ($r) {
-                                                        return ($r->principal + $r->interest);
-                                                    }) ?? 0;
-                                                    $progress = $loan->amount_total > 0 ? min(100, round(($totalPaid / $loan->amount_total) * 100)) : 0;
+                                                    $totalPaid = (float) $loan->getTotalPaidAmount();
+                                                    $totalOutstanding = (float) $loan->getTotalOutstandingAmount();
+                                                    $progressBase = $totalPaid + $totalOutstanding;
+                                                    $progress = $loan->status === \App\Models\Loan::STATUS_COMPLETE
+                                                        ? 100
+                                                        : ($progressBase > 0 ? min(100, round(($totalPaid / $progressBase) * 100)) : 0);
                                                     $progressBarClass = match (true) {
                                                         $progress === 100 => 'bg-success',
                                                         $progress >= 75 => 'bg-primary',
@@ -527,7 +544,7 @@
                                                             aria-valuemin="0" aria-valuemax="100"></div>
                                                     </div>
                                                     <span class="fw-bold">{{ $progress }}%</span>
-                                                    @if($progress >= 100)
+                                                    @if($loan->status === \App\Models\Loan::STATUS_COMPLETE || $progress >= 100)
                                                         <span class="badge bg-success ms-2">Fully Paid</span>
                                                     @elseif($progress == 0)
                                                         <span class="badge bg-danger ms-2">No Repayments</span>
@@ -660,7 +677,10 @@
                     @if($loan->schedule->count())
                         <div class="card radius-10">
                             <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center flex-wrap gap-2">
-                                <h6 class="mb-0"><i class="bx bx-history me-2"></i>LOAN SCHEDULE LIST</h6>
+                                <h6 class="mb-0">
+                                    <i class="bx bx-history me-2"></i>LOAN SCHEDULE LIST
+                                    <span class="badge bg-light text-dark ms-2">{{ $loan->product->accrualMethodLabel() }}</span>
+                                </h6>
                                 <a href="{{ route('loans.schedule.pdf', $loan->encodedId) }}" target="_blank" class="btn btn-light btn-sm">
                                     <i class="bx bx-printer me-1"></i> Print Schedule (PDF)
                                 </a>
@@ -673,8 +693,8 @@
                                                 <th>#</th>
                                                 <th>Due Date</th>
                                                 <th>Principal</th>
-                                                <th>Interest</th>
-                                                <th>Accrued Interest</th>
+                                                <th>{{ $loan->usesDailyInterestAccrual() ? 'Scheduled Interest' : 'Interest' }}</th>
+                                                <th>{{ $loan->usesDailyInterestAccrual() ? 'Accrued (Due)' : 'Interest Due' }}</th>
                                                 <th>Penalty Amount</th>
                                                 <th>Fee Amount</th>
                                                 <th class="text-end pe-4">Total Due</th>
@@ -689,19 +709,18 @@
 
                                                 @php
                                                     $paidAmount = $item->paid_amount;
+                                                    $interestDue = $item->balance_interest_component;
                                                     $accruedInterest = $item->accrued_interest ?? 0;
-                                                    $totalDue = ($item->principal ?? 0)
-                                                        + $accruedInterest
-                                                        + ($item->fee_amount ?? 0)
-                                                        + ($item->penalty_amount ?? 0);
-                                                    $remainingAmount = max(0, $totalDue - $paidAmount);
-                                                    $isFullyPaid = $item->fullPrincipalPaid();
+                                                    $totalDue = $item->total_due;
+                                                    $remainingAmount = $item->remaining_amount;
+                                                    $loanSettled = $loan->status === \App\Models\Loan::STATUS_COMPLETE;
+                                                    $displayRemainingAmount = $loanSettled ? 0 : $remainingAmount;
+                                                    $isActuallyFullyPaid = $item->is_fully_paid;
+                                                    $isSettledOnly = $loanSettled && !$isActuallyFullyPaid;
+                                                    // Use full installment balance (principal+interest+fees+penalty), not principal-only
+                                                    $isFullyPaid = $isActuallyFullyPaid || $isSettledOnly;
                                                     $paymentPercentage = $item->payment_percentage;
-                                                    $completed = $loan->status === 'completed';
                                                     $penaltyPaid = $item->PenaltyPaid();
-                                                    // $penaltAmount = $item->penalty_amount;
-                                                    // dd($penaltyPaid, $penaltAmount);
-
                                                 @endphp
                                                 <tr
                                                     class="{{ $isFullyPaid ? 'table-success' : ($paidAmount > 0 ? 'table-warning' : '') }}">
@@ -710,18 +729,22 @@
                                                     </td>
                                                     <td>{{ number_format($item->principal, 2) }}</td>
                                                     <td>{{ number_format($item->interest, 2) }}</td>
-                                                    <td>{{ number_format($accruedInterest, 2) }}</td>
+                                                    <td class="{{ $loan->usesDailyInterestAccrual() ? 'fw-semibold' : '' }}">
+                                                        {{ number_format($loan->usesDailyInterestAccrual() ? $interestDue : $interestDue, 2) }}
+                                                    </td>
                                                     <td>{{ number_format($item->penalty_amount, 2) }}</td>
                                                     <td>{{ number_format($item->fee_amount, 2) }}</td>
                                                     <td class="text-end pe-4 fw-bold">{{ number_format($totalDue, 2) }}</td>
                                                     <td class="text-end pe-4 text-success">{{ number_format($paidAmount, 2) }}</td>
-                                                    <td class="text-end pe-4 text-danger">{{ number_format($remainingAmount, 2) }}
+                                                    <td class="text-end pe-4 text-danger">{{ number_format($displayRemainingAmount, 2) }}
                                                     </td>
                                                     <td class="text-center">
                                                         @if($item->status === 'restructured')
                                                             <span class="badge bg-info">Restructured</span>
-                                                        @elseif($isFullyPaid)
+                                                        @elseif($isActuallyFullyPaid)
                                                             <span class="badge bg-success">Paid</span>
+                                                        @elseif($isSettledOnly)
+                                                            <span class="badge bg-secondary">Settled</span>
                                                         @elseif($paidAmount > 0)
                                                             <span class="badge bg-warning text-dark">{{ $paymentPercentage }}%</span>
                                                         @else
@@ -733,17 +756,19 @@
                                                             <button type="button" class="btn btn-sm btn-secondary" disabled>
                                                                 <i class="bx bx-refresh me-1"></i>Restructured
                                                             </button>
-                                                        @elseif($isFullyPaid || $completed)
+                                                        @elseif($isFullyPaid)
                                                             <button type="button" class="btn btn-sm btn-success" disabled>
                                                                 <i class="bx bx-check-circle me-1"></i>Paid
                                                             </button>
                                                         @else
-                                                            <button type="button" class="btn btn-sm btn-primary"
-                                                                onclick="repayScheduleItem('{{ $item->id }}', '{{ number_format($remainingAmount, 2) }}', '{{ \Carbon\Carbon::parse($item->due_date)->format('M d, Y') }}', '{{ number_format($item->principal, 2) }}', '{{ number_format($accruedInterest, 2) }}', '{{ number_format($item->penalty_amount, 2) }}', '{{ number_format($item->fee_amount, 2) }}')">
-                                                                <i class="bx bx-credit-card me-1"></i>Repay
-                                                            </button>
+                                                            @can('process loan payments')
+                                                                <button type="button" class="btn btn-sm btn-primary"
+                                                                    onclick="repayScheduleItem('{{ $item->id }}', '{{ number_format($remainingAmount, 2) }}', '{{ \Carbon\Carbon::parse($item->due_date)->format('M d, Y') }}', '{{ number_format($item->principal, 2) }}', '{{ number_format($item->balance_interest_component, 2) }}', '{{ number_format($item->penalty_amount, 2) }}', '{{ number_format($item->fee_amount, 2) }}')">
+                                                                    <i class="bx bx-credit-card me-1"></i>Repay
+                                                                </button>
+                                                            @endcan
                                                         @endif
-                                                        @if($item->isPenaltyRemovalAllowed())
+                                                        @if(!$loanSettled && $item->isPenaltyRemovalAllowed())
                                                             <button type="button" class="btn btn-sm btn-warning ms-1"
                                                                 onclick="removePenalty('{{ $item->id }}', '{{ number_format($item->penalty_amount, 2) }}')">
                                                                 <i class="bx bx-x-circle me-1"></i>Remove Penalty
@@ -765,6 +790,134 @@
                     @endif
                 </div>
 
+
+                <div class="tab-pane fade" id="fees" role="tabpanel">
+                    <div class="row g-3 mb-3">
+                        <div class="col-md-4">
+                            <div class="card border-0 shadow-sm h-100">
+                                <div class="card-body">
+                                    <p class="text-muted mb-1">Configured Loan Fees</p>
+                                    <h5 class="mb-0 text-dark">TZS {{ number_format($totalConfiguredFees ?? 0, 2) }}</h5>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="card border-0 shadow-sm h-100">
+                                <div class="card-body">
+                                    <p class="text-muted mb-1">Total Fees Paid So Far</p>
+                                    <h5 class="mb-0 text-success">TZS {{ number_format($totalFeesPaid ?? 0, 2) }}</h5>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="card border-0 shadow-sm h-100">
+                                <div class="card-body">
+                                    <p class="text-muted mb-1">Remaining Fees</p>
+                                    <h5 class="mb-0 text-warning">TZS {{ number_format($remainingFees ?? 0, 2) }}</h5>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    @if(isset($loanFees) && $loanFees->count())
+                        <div class="card radius-10">
+                            <div class="card-header bg-primary text-white">
+                                <h6 class="mb-0"><i class="bx bx-list-ul me-2"></i>LOAN FEES BREAKDOWN</h6>
+                            </div>
+                            <div class="card-body">
+                                <div class="table-responsive">
+                                    <table class="table table-bordered table-striped mb-0">
+                                        <thead class="bg-light">
+                                            <tr>
+                                                <th>#</th>
+                                                <th>Fee Name</th>
+                                                <th>Fee Type</th>
+                                                <th>Deduction Criteria</th>
+                                                <th class="text-end">Configured Amount</th>
+                                                <th class="text-end">Calculated Amount</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            @foreach($loanFees as $index => $fee)
+                                                <tr>
+                                                    <td>{{ $index + 1 }}</td>
+                                                    <td>{{ $fee->name }}</td>
+                                                    <td>{{ ucfirst(str_replace('_', ' ', $fee->fee_type ?? 'N/A')) }}</td>
+                                                    <td>{{ ucfirst(str_replace('_', ' ', $fee->deduction_criteria ?? 'N/A')) }}</td>
+                                                    <td class="text-end">{{ number_format((float) ($fee->amount ?? 0), 2) }}</td>
+                                                    <td class="text-end">{{ number_format((float) ($fee->calculated_amount ?? 0), 2) }}
+                                                    </td>
+                                                </tr>
+                                            @endforeach
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    @else
+                        <div class="card card-body text-center p-5">
+                            <h4 class="text-muted">No fees configured for this loan product.</h4>
+                            <p class="text-secondary">Fees will appear here once configured on the linked loan product.</p>
+                        </div>
+                    @endif
+
+                    <div class="card radius-10 mt-3">
+                        <div class="card-header bg-success text-white">
+                            <h6 class="mb-0"><i class="bx bx-money me-2"></i>PAID FEES SO FAR</h6>
+                        </div>
+                        <div class="card-body">
+                            <div class="row g-3 mb-3">
+                                <div class="col-md-6">
+                                    <div class="border rounded p-3 h-100">
+                                        <small class="text-muted d-block">Paid via Repayments</small>
+                                        <span class="fw-bold text-dark">TZS {{ number_format($feesPaidFromRepayments ?? 0, 2) }}</span>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="border rounded p-3 h-100">
+                                        <small class="text-muted d-block">Paid via Receipts</small>
+                                        <span class="fw-bold text-dark">TZS {{ number_format($feesPaidFromReceipts ?? 0, 2) }}</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            @if(isset($feePaymentTransactions) && $feePaymentTransactions->count())
+                                <div class="table-responsive">
+                                    <table class="table table-bordered table-striped mb-0">
+                                        <thead class="bg-light">
+                                            <tr>
+                                                <th>#</th>
+                                                <th>Date</th>
+                                                <th>Source</th>
+                                                <th>Reference</th>
+                                                <th>Fee Type</th>
+                                                <th class="text-end">Amount Paid</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            @foreach($feePaymentTransactions as $index => $feePayment)
+                                                <tr>
+                                                    <td>{{ $index + 1 }}</td>
+                                                    <td>{{ \Carbon\Carbon::parse($feePayment->payment_date)->format('M d, Y') }}</td>
+                                                    <td>{{ $feePayment->source }}</td>
+                                                    <td>{{ $feePayment->reference }}</td>
+                                                    <td>{{ $feePayment->fee_name ?? 'Fee' }}</td>
+                                                    <td class="text-end fw-semibold text-success">
+                                                        {{ number_format((float) $feePayment->amount, 2) }}
+                                                    </td>
+                                                </tr>
+                                            @endforeach
+                                        </tbody>
+                                    </table>
+                                </div>
+                            @else
+                                <div class="alert alert-warning mb-0">
+                                    No fee payment has been recorded yet for this loan.
+                                </div>
+                            @endif
+                        </div>
+                    </div>
+                </div>
 
                 <div class="tab-pane fade" id="guarantors" role="tabpanel">
 
@@ -945,6 +1098,10 @@
                                             </div>
                                         </div>
 
+                                        <p class="text-muted small mb-2">
+                                            Maximum file size: {{ \App\Support\Upload\FileUploadLimits::maxMegabytesLabel() }}MB per file.
+                                            Large uploads may take a few minutes — please wait until finished.
+                                        </p>
                                         <div class="d-flex justify-content-between">
                                             <button type="button" class="btn btn-outline-secondary" id="addAnotherDocument">
                                                 <i class="bx bx-plus me-1"></i>Add Another
@@ -1416,18 +1573,93 @@
                     </div>
                     <div class="modal-body">
                         <input type="hidden" name="loan_id" value="{{ $loan->id }}">
-                        <div class="mb-3">
-                            <label for="guarantor_id" class="form-label">Select Guarantor</label>
-                            <select class="form-select" name="guarantor_id" id="guarantor_id" required>
-                                <option value="">-- Choose Guarantor --</option>
-                                @foreach($guarantorCustomers as $customer)
-                                    <option value="{{ $customer->id }}">{{ $customer->name }} - {{ $customer->phone1 }}</option>
+
+                        <ul class="nav nav-tabs mb-3" id="guarantorAddModeTabs" role="tablist">
+                            <li class="nav-item" role="presentation">
+                                <button class="nav-link active" id="existing-guarantor-tab" data-bs-toggle="tab"
+                                    data-bs-target="#existing-guarantor-pane" type="button" role="tab"
+                                    aria-controls="existing-guarantor-pane" aria-selected="true">
+                                    Select Existing
+                                </button>
+                            </li>
+                            <li class="nav-item" role="presentation">
+                                <button class="nav-link" id="direct-guarantor-tab" data-bs-toggle="tab"
+                                    data-bs-target="#direct-guarantor-pane" type="button" role="tab"
+                                    aria-controls="direct-guarantor-pane" aria-selected="false">
+                                    Add Direct Guarantor
+                                </button>
+                            </li>
+                        </ul>
+
+                        <div class="tab-content" id="guarantorAddModeContent">
+                            <div class="tab-pane fade show active" id="existing-guarantor-pane" role="tabpanel"
+                                aria-labelledby="existing-guarantor-tab">
+                                <div class="mb-3">
+                                    <label for="guarantor_id" class="form-label">Select Guarantor</label>
+                                    <select class="form-select" name="guarantor_id" id="guarantor_id">
+                                        <option value="">-- Choose Guarantor --</option>
+                                        @foreach($guarantorCustomers as $customer)
+                                            <option value="{{ $customer->id }}">{{ $customer->name }} - {{ $customer->phone1 }}
+                                            </option>
+                                        @endforeach
+                                    </select>
+                                    @if($guarantorCustomers->isEmpty())
+                                        <small class="text-muted d-block mt-1">No available guarantors in customer list. Use
+                                            "Add Direct Guarantor".</small>
+                                    @endif
+                                </div>
+                            </div>
+
+                            <div class="tab-pane fade" id="direct-guarantor-pane" role="tabpanel"
+                                aria-labelledby="direct-guarantor-tab">
+                                <div class="row g-3">
+                                    <div class="col-12">
+                                        <label for="direct_guarantor_name" class="form-label">Full Name</label>
+                                        <input type="text" class="form-control" name="direct_guarantor_name"
+                                            id="direct_guarantor_name" placeholder="Enter guarantor full name">
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label for="direct_guarantor_phone1" class="form-label">Phone</label>
+                                        <input type="text" class="form-control" name="direct_guarantor_phone1"
+                                            id="direct_guarantor_phone1" placeholder="e.g. 0712345678">
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label for="direct_guarantor_sex" class="form-label">Sex</label>
+                                        <select class="form-select" name="direct_guarantor_sex" id="direct_guarantor_sex">
+                                            <option value="">-- Select Sex --</option>
+                                            <option value="M">Male</option>
+                                            <option value="F">Female</option>
+                                        </select>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label for="direct_guarantor_region_id" class="form-label">Region</label>
+                                        <select class="form-select" name="direct_guarantor_region_id"
+                                            id="direct_guarantor_region_id">
+                                            <option value="">-- Select Region --</option>
+                                            @foreach($regions as $region)
+                                                <option value="{{ $region->id }}">{{ $region->name }}</option>
+                                            @endforeach
+                                        </select>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label for="direct_guarantor_district_id" class="form-label">District</label>
+                                        <select class="form-select" name="direct_guarantor_district_id"
+                                            id="direct_guarantor_district_id">
+                                            <option value="">-- Select District --</option>
+                                        </select>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="mb-0 mt-3">
+                            <label for="relation" class="form-label">Relation to Borrower</label>
+                            <select class="form-select" name="relation" id="relation" required>
+                                <option value="">-- Select Relation --</option>
+                                @foreach($relationOptions as $relationOption)
+                                    <option value="{{ $relationOption }}">{{ $relationOption }}</option>
                                 @endforeach
                             </select>
-                        </div>
-                        <div class="mb-3">
-                            <label for="relation" class="form-label">Relation to Borrower</label>
-                            <input type="text" class="form-control" name="relation" id="relation" required>
                         </div>
                     </div>
                     <div class="modal-footer">
@@ -1615,7 +1847,7 @@
                                 <label for="images" class="form-label">Images</label>
                                 <input type="file" class="form-control" name="images[]" id="images" multiple
                                     accept="image/*">
-                                <small class="text-muted">Select multiple images (JPEG, PNG). Max 2MB each.</small>
+                                <small class="text-muted">Select multiple images (JPEG, PNG). Max {{ \App\Support\Upload\FileUploadLimits::maxMegabytesLabel() }}MB each.</small>
                             </div>
                         </div>
                         <div class="col-md-6">
@@ -1623,7 +1855,7 @@
                                 <label for="documents" class="form-label">Documents</label>
                                 <input type="file" class="form-control" name="documents[]" id="documents" multiple
                                     accept=".pdf,.doc,.docx,.jpg,.png">
-                                <small class="text-muted">Select documents (PDF, DOC, DOCX, Images). Max 5MB each.</small>
+                                <small class="text-muted">Select documents (PDF, DOC, DOCX, Images). Max {{ \App\Support\Upload\FileUploadLimits::maxMegabytesLabel() }}MB each.</small>
                             </div>
                         </div>
                     </div>
@@ -1768,8 +2000,24 @@
                                 </option>
                             @endforeach
                         </select>
-                        <div class="form-text">This bank account will be used for the disbursement entry.</div>
+                        <div class="form-text">Used for GL entries (required for bank and DCB disbursement).</div>
                     </div>
+                    @if(filter_var(config('services.dcb.enabled'), FILTER_VALIDATE_BOOLEAN))
+                    <div class="mb-3" id="disburse_method_wrapper" style="display:none;">
+                        <label for="disbursement_method" class="form-label">Disbursement Method <span class="text-danger">*</span></label>
+                        <select class="form-select" name="disbursement_method" id="disbursement_method">
+                            <option value="bank">Bank (manual / GL only)</option>
+                            <option value="dcb">DCB Mobile Money (TIPS transfer)</option>
+                        </select>
+                    </div>
+                    <div id="disburse_dcb_wrapper" style="display:none;">
+                        <x-dcb-payment-fields
+                            prefix="dcb_disburse"
+                            :customer-phone="$loan->customer->phone1 ?? ''"
+                            :customer-name="$loan->customer->name ?? ''"
+                        />
+                    </div>
+                    @endif
                     <div class="mb-3">
                         <label for="comments" class="form-label">Comments (Optional)</label>
                         <textarea class="form-control" name="comments" id="comments" rows="3"></textarea>
@@ -1884,6 +2132,9 @@
                                     <option value="">-- Select Payment Source --</option>
                                     <option value="bank">Receive from Bank</option>
                                     <option value="cash_deposit">Receive from Cash Deposit</option>
+                                    @if(filter_var(config('services.dcb.enabled'), FILTER_VALIDATE_BOOLEAN))
+                                    <option value="dcb">DCB Mobile Money (collect from customer)</option>
+                                    @endif
                                 </select>
                             </div>
                         </div>
@@ -1925,6 +2176,14 @@
                                     Available Balance: <span id="selected_balance" class="text-success fw-bold"></span>
                                 </small>
                             </div>
+                        </div>
+
+                        <div class="col-md-12" id="repay_dcb_section" style="display: none;">
+                            <x-dcb-collect-fields
+                                prefix="dcb_repay"
+                                :customer-phone="$loan->customer->phone1 ?? ''"
+                            />
+                            <p class="small text-muted">Select settlement bank above for GL posting when payment is confirmed.</p>
                         </div>
                     </div>
                 </div>
@@ -2054,6 +2313,9 @@
                                     <option value="">-- Select Payment Source --</option>
                                     <option value="bank">Receive from Bank</option>
                                     <option value="cash_deposit">Receive from Cash Deposit</option>
+                                    @if(filter_var(config('services.dcb.enabled'), FILTER_VALIDATE_BOOLEAN))
+                                    <option value="dcb">DCB Mobile Money (collect from customer)</option>
+                                    @endif
                                 </select>
                             </div>
                         </div>
@@ -2096,6 +2358,13 @@
                                         class="text-success fw-bold"></span>
                                 </small>
                             </div>
+                        </div>
+
+                        <div class="col-md-12" id="settle_dcb_section" style="display: none;">
+                            <x-dcb-collect-fields
+                                prefix="dcb_settle"
+                                :customer-phone="$loan->customer->phone1 ?? ''"
+                            />
                         </div>
                     </div>
                 </div>
@@ -2325,6 +2594,43 @@
                 });
             });
 
+            function toggleGuarantorInputRequirements(activeMode) {
+                const isDirect = activeMode === 'direct';
+
+                $('#guarantor_id').prop('required', !isDirect);
+                $('#direct_guarantor_name, #direct_guarantor_phone1, #direct_guarantor_sex, #direct_guarantor_region_id, #direct_guarantor_district_id')
+                    .prop('required', isDirect);
+            }
+
+            const directGuarantorDistricts = @json($districts ?? []);
+
+            $('#direct_guarantor_region_id').on('change', function () {
+                const regionId = $(this).val();
+                const districtSelect = $('#direct_guarantor_district_id');
+
+                districtSelect.empty().append('<option value="">-- Select District --</option>');
+
+                directGuarantorDistricts
+                    .filter(district => String(district.region_id) === String(regionId))
+                    .forEach(district => {
+                        districtSelect.append(
+                            `<option value="${district.id}">${district.name}</option>`
+                        );
+                    });
+            });
+
+            $('button[data-bs-target="#existing-guarantor-pane"]').on('shown.bs.tab', function () {
+                toggleGuarantorInputRequirements('existing');
+            });
+
+            $('button[data-bs-target="#direct-guarantor-pane"]').on('shown.bs.tab', function () {
+                toggleGuarantorInputRequirements('direct');
+            });
+
+            $('#addGuarantorModal').on('show.bs.modal', function () {
+                toggleGuarantorInputRequirements('existing');
+            });
+
 
 
 
@@ -2529,6 +2835,8 @@
             $('#uploadDocumentForm').on('submit', function (e) {
                 e.preventDefault();
                 console.log('Upload form submitted');
+                const MAX_FILE_SIZE_BYTES = {{ \App\Support\Upload\FileUploadLimits::maxBytes() }};
+                const MAX_FILE_SIZE_MB = {{ \App\Support\Upload\FileUploadLimits::maxMegabytesLabel() }};
 
                 const form = $(this);
                 const submitBtn = form.find('button[type="submit"]');
@@ -2545,17 +2853,29 @@
                     }
                 });
 
+                let hasOversizedDocument = false;
                 $('.document-file').each(function () {
                     if (!$(this)[0].files.length) {
                         isValid = false;
                         $(this).addClass('is-invalid');
                     } else {
-                        $(this).removeClass('is-invalid');
+                        const file = $(this)[0].files[0];
+                        if (file && file.size > MAX_FILE_SIZE_BYTES) {
+                            isValid = false;
+                            hasOversizedDocument = true;
+                            $(this).addClass('is-invalid');
+                        } else {
+                            $(this).removeClass('is-invalid');
+                        }
                     }
                 });
 
                 if (!isValid) {
-                    showToast('Error!', 'Please fill in all required fields', 'error');
+                    if (hasOversizedDocument) {
+                        showToast('Error!', `The document is too large. Maximum file size is ${MAX_FILE_SIZE_MB}MB.`, 'error');
+                    } else {
+                        showToast('Error!', 'Please fill in all required fields', 'error');
+                    }
                     return;
                 }
 
@@ -2577,21 +2897,29 @@
                     data: formData,
                     processData: false,
                     contentType: false,
+                    timeout: 600000,
                     headers: {
                         'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content')
                     },
                     success: function (response) {
                         console.log('Upload success:', response);
+                        if (!response || response.success !== true) {
+                            const msg = (response && response.message) ? response.message : 'Failed to upload documents.';
+                            showToast('Error!', msg, 'error');
+                            return;
+                        }
                         $('#uploadDocumentModal').modal('hide');
-                        showToast('Success!', 'Documents uploaded successfully!', 'success');
+                        showToast('Success!', response.message || 'Documents uploaded successfully!', 'success');
                         setTimeout(() => {
                             location.reload();
                         }, 1500);
                     },
-                    error: function (xhr) {
+                    error: function (xhr, textStatus) {
                         console.error('Upload error:', xhr);
                         let errorMessage = 'Failed to upload documents.';
-                        if (xhr.responseJSON && xhr.responseJSON.message) {
+                        if (textStatus === 'timeout') {
+                            errorMessage = 'Upload timed out. Try a smaller file or check your connection, then try again.';
+                        } else if (xhr.responseJSON && xhr.responseJSON.message) {
                             errorMessage = xhr.responseJSON.message;
                         } else if (xhr.responseJSON && xhr.responseJSON.errors) {
                             const errors = Object.values(xhr.responseJSON.errors).flat();
@@ -2834,18 +3162,28 @@
                 if (selectedSource === 'bank') {
                     $('#bank_account_section').show();
                     $('#cash_deposit_section').hide();
+                    $('#repay_dcb_section').hide();
                     $('#bank_account_id').prop('required', true);
                     $('#cash_deposit_id').prop('required', false);
                     $('#deposit_balance_info').hide();
                 } else if (selectedSource === 'cash_deposit') {
                     $('#bank_account_section').hide();
                     $('#cash_deposit_section').show();
+                    $('#repay_dcb_section').hide();
                     $('#bank_account_id').prop('required', false);
                     $('#cash_deposit_id').prop('required', true);
                     $('#deposit_balance_info').show();
+                } else if (selectedSource === 'dcb') {
+                    $('#bank_account_section').show();
+                    $('#cash_deposit_section').hide();
+                    $('#repay_dcb_section').show();
+                    $('#bank_account_id').prop('required', true);
+                    $('#cash_deposit_id').prop('required', false);
+                    $('#deposit_balance_info').hide();
                 } else {
                     $('#bank_account_section').hide();
                     $('#cash_deposit_section').hide();
+                    $('#repay_dcb_section').hide();
                     $('#bank_account_id').prop('required', false);
                     $('#cash_deposit_id').prop('required', false);
                     $('#deposit_balance_info').hide();
@@ -3028,28 +3366,40 @@
             const form = document.getElementById('approvalForm');
             const dateWrapper = document.getElementById('disburse_date_wrapper');
             const dateField = document.getElementById('approval_disbursement_date');
+            const methodWrapper = document.getElementById('disburse_method_wrapper');
             const bankWrapper = document.getElementById('disburse_bank_wrapper');
+            const dcbWrapper = document.getElementById('disburse_dcb_wrapper');
             const bankSelect = document.getElementById('approval_bank_account_id');
+            const disbursementMethod = document.getElementById('disbursement_method');
             const commentsField = document.getElementById('comments');
 
             message.textContent = 'Are you sure you want to disburse this loan? This will mark the loan as disbursed and activate the repayment schedule.';
             form.action = `/loans/${loanId}/disburse`;
 
-            // Show date field
             if (dateWrapper) dateWrapper.style.display = '';
             if (dateField) {
                 dateField.setAttribute('required', 'required');
-                // Set default to today if not already set
                 if (!dateField.value) {
                     dateField.value = new Date().toISOString().split('T')[0];
                 }
             }
 
-            // Show bank selection and require it
+            if (methodWrapper) methodWrapper.style.display = '';
             if (bankWrapper) bankWrapper.style.display = '';
             if (bankSelect) bankSelect.setAttribute('required', 'required');
 
-            // Clear comments field
+            function syncDisburseDcb() {
+                const isDcb = disbursementMethod && disbursementMethod.value === 'dcb';
+                if (dcbWrapper) dcbWrapper.style.display = isDcb ? '' : 'none';
+                if (isDcb && typeof loadDcbInstitutions === 'function') {
+                    loadDcbInstitutions('dcb_disburse');
+                }
+            }
+            if (disbursementMethod) {
+                disbursementMethod.onchange = syncDisburseDcb;
+                syncDisburseDcb();
+            }
+
             if (commentsField) commentsField.value = '';
 
             modal.show();
@@ -3357,6 +3707,11 @@
         }
 
         function printThermalReceipt(receiptData) {
+            const fmtTzs = (value) => Number(value || 0).toLocaleString('en-US', {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2
+            });
+
             // Create a new window for thermal printer (narrow width)
             const printWindow = window.open('', '_blank', 'width=320,height=600');
 
@@ -3453,6 +3808,12 @@
                                     <span class="label">Receipt No:</span>
                                     <span class="value">${receiptData.receipt_number}</span>
                                 </div>
+                                ${receiptData.shared_receipt_installments ? `
+                                <div class="row">
+                                    <span class="label">Receipt total:</span>
+                                    <span class="value">TZS ${fmtTzs(receiptData.receipt_total_amount)} (${receiptData.shared_receipt_installments} installments)</span>
+                                </div>
+                                ` : ''}
                                 <div class="row">
                                     <span class="label">Date:</span>
                                     <span class="value">${receiptData.date}</span>
@@ -3480,26 +3841,26 @@
 
                                 <div class="row">
                                     <span class="label">Principal:</span>
-                                    <span class="value">TZS ${receiptData.payment_breakdown.principal.toLocaleString()}</span>
+                                    <span class="value">TZS ${fmtTzs(receiptData.payment_breakdown.principal)}</span>
                                 </div>
                                 <div class="row">
                                     <span class="label">Interest:</span>
-                                    <span class="value">TZS ${receiptData.payment_breakdown.interest.toLocaleString()}</span>
+                                    <span class="value">TZS ${fmtTzs(receiptData.payment_breakdown.interest)}</span>
                                 </div>
                                 <div class="row">
                                     <span class="label">Penalty:</span>
-                                    <span class="value">TZS ${receiptData.payment_breakdown.penalty.toLocaleString()}</span>
+                                    <span class="value">TZS ${fmtTzs(receiptData.payment_breakdown.penalty)}</span>
                                 </div>
                                 <div class="row">
                                     <span class="label">Fee:</span>
-                                    <span class="value">TZS ${receiptData.payment_breakdown.fee.toLocaleString()}</span>
+                                    <span class="value">TZS ${fmtTzs(receiptData.payment_breakdown.fee)}</span>
                                 </div>
 
                                 <div class="divider"></div>
 
                                 <div class="row total">
-                                    <span class="label">TOTAL PAID:</span>
-                                    <span class="value">TZS ${receiptData.amount_paid.toLocaleString()}</span>
+                                    <span class="label">INSTALLMENT PAID:</span>
+                                    <span class="value">TZS ${fmtTzs(receiptData.amount_paid)}</span>
                                 </div>
 
                                 <div class="divider"></div>
@@ -3508,7 +3869,7 @@
 
                                 <div class="row">
                                     <span class="label">Remaining on Schedule:</span>
-                                    <span class="value">TZS ${receiptData.remain_schedule.toLocaleString()}</span>
+                                    <span class="value">TZS ${fmtTzs(receiptData.remain_schedule)}</span>
                                 </div>
                                 <div class="row">
                                     <span class="label">Remaining Schedules:</span>
@@ -3516,7 +3877,7 @@
                                 </div>
                                 <div class="row">
                                     <span class="label">Total Remaining:</span>
-                                    <span class="value">TZS ${receiptData.remaining_schedules_amount.toLocaleString()}</span>
+                                    <span class="value">TZS ${fmtTzs(receiptData.remaining_schedules_amount)}</span>
                                 </div>
 
                                 <div class="divider"></div>
@@ -4124,12 +4485,27 @@
             // Create FormData for file uploads
             const formData = new FormData(this);
 
+            const MAX_COLLATERAL_BYTES = {{ \App\Support\Upload\FileUploadLimits::maxBytes() }};
+            const MAX_COLLATERAL_MB = {{ \App\Support\Upload\FileUploadLimits::maxMegabytesLabel() }};
+            for (const input of ['images', 'documents']) {
+                const el = form.find(`[name="${input}[]"]`)[0];
+                if (!el || !el.files) continue;
+                for (const file of el.files) {
+                    if (file.size > MAX_COLLATERAL_BYTES) {
+                        showToast('Error!', `${file.name} is too large. Maximum size is ${MAX_COLLATERAL_MB}MB.`, 'error');
+                        submitBtn.prop('disabled', false).html(originalText);
+                        return;
+                    }
+                }
+            }
+
             $.ajax({
                 url: "{{ route('loan-collaterals.store') }}",
                 method: 'POST',
                 data: formData,
                 processData: false,
                 contentType: false,
+                timeout: 600000,
                 headers: {
                     'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content')
                 },
@@ -4177,6 +4553,7 @@
                 data: formData,
                 processData: false,
                 contentType: false,
+                timeout: 600000,
                 headers: {
                     'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content')
                 },
@@ -4642,6 +5019,7 @@
             const settlePaymentSource = document.getElementById('settle_payment_source');
             const settleBankSection = document.getElementById('settle_bank_account_section');
             const settleCashDepositSection = document.getElementById('settle_cash_deposit_section');
+            const settleDcbSection = document.getElementById('settle_dcb_section');
             const settleCashDepositSelect = document.getElementById('settle_cash_deposit_id');
             const settleDepositBalanceInfo = document.getElementById('settle_deposit_balance_info');
             const settleSelectedBalance = document.getElementById('settle_selected_balance');
@@ -4651,13 +5029,21 @@
                     if (this.value === 'bank') {
                         settleBankSection.style.display = 'block';
                         settleCashDepositSection.style.display = 'none';
+                        if (settleDcbSection) settleDcbSection.style.display = 'none';
                         settleDepositBalanceInfo.style.display = 'none';
                     } else if (this.value === 'cash_deposit') {
                         settleBankSection.style.display = 'none';
                         settleCashDepositSection.style.display = 'block';
+                        if (settleDcbSection) settleDcbSection.style.display = 'none';
+                    } else if (this.value === 'dcb') {
+                        settleBankSection.style.display = 'block';
+                        settleCashDepositSection.style.display = 'none';
+                        if (settleDcbSection) settleDcbSection.style.display = 'block';
+                        settleDepositBalanceInfo.style.display = 'none';
                     } else {
                         settleBankSection.style.display = 'none';
                         settleCashDepositSection.style.display = 'none';
+                        if (settleDcbSection) settleDcbSection.style.display = 'none';
                         settleDepositBalanceInfo.style.display = 'none';
                     }
                 });
@@ -5021,4 +5407,5 @@
         });
 
     </script>
+@include('partials.dcb-payment-scripts')
 @endpush

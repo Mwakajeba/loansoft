@@ -2,30 +2,14 @@
 
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
-use App\Jobs\CollectMatureInterestJob;
-use App\Jobs\RepaymentReminderJob;
 
 Artisan::command('inspire', function () {
     $this->comment(Inspiring::quote());
 })->purpose('Display an inspiring quote');
 
-// NOTE: Scheduling is handled in ScheduleServiceProvider — no duplicate entries here.
-
-// Artisan command — runs job SYNCHRONOUSLY (no queue worker needed, useful for manual runs)
-Artisan::command('loans:collect-mature-interest', function () {
-    $this->info('Starting mature interest collection...');
-
-    try {
-        // dispatchSync runs the job immediately in the same process
-        CollectMatureInterestJob::dispatchSync();
-        $this->info('Mature interest collection completed successfully.');
-    } catch (\Exception $e) {
-        $this->error('Error: ' . $e->getMessage());
-        return 1;
-    }
-
-    return 0;
-})->purpose('Collect mature interest from active loans and post to GL');
+// NOTE: All cron scheduling is in App\Providers\ScheduleServiceProvider.
+// Run every minute: php artisan schedule:run
+// Or use scripts/run-scheduler.bat (Windows Task Scheduler)
 
 Artisan::command('emails:send-invitations', function () {
     $this->info('🚀 Starting bulk email invitation process...');

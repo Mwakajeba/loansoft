@@ -120,7 +120,6 @@
         </tr>
         
         @php
-            $running_balance = $cashBookData['opening_balance'];
             $total_receipts = 0;
             $total_payments = 0;
         @endphp
@@ -129,11 +128,8 @@
             @php
                 $debit = $transaction['debit'];
                 $credit = $transaction['credit'];
-
                 $total_receipts += $debit;
                 $total_payments += $credit;
-
-                $running_balance += $debit - $credit;
             @endphp
             
             <tr>
@@ -142,16 +138,16 @@
                 <td class="text-left">{{ $transaction['customer_name'] }}</td>
                 <td class="text-left">{{ $transaction['bank_account'] }}</td>
                 <td>{{ $transaction['transaction_no'] }}</td>
-                <td>{{ $transaction['reference_no'] }}</td>
+                <td>{{ $transaction['reference_no'] ?: '—' }}</td>
                 <td class="text-right">{{ $debit > 0 ? number_format($debit, 2) : '' }}</td>
                 <td class="text-right">{{ $credit > 0 ? number_format($credit, 2) : '' }}</td>
-                <td class="text-right">{{ number_format($running_balance, 2) }}</td>
+                <td class="text-right">{{ number_format($transaction['balance'], 2) }}</td>
             </tr>
         @endforeach
         
         <tr class="total-row">
             <td colspan="6" class="text-right">Total Debit</td>
-            <td class="text-right">{{ number_format($total_receipts, 2) }}</td>
+            <td class="text-right">{{ number_format($cashBookData['total_receipts'], 2) }}</td>
             <td></td>
             <td></td>
         </tr>
@@ -159,7 +155,7 @@
         <tr class="total-row">
             <td colspan="6" class="text-right">Total Credit</td>
             <td></td>
-            <td class="text-right">{{ number_format($total_payments, 2) }}</td>
+            <td class="text-right">{{ number_format($cashBookData['total_payments'], 2) }}</td>
             <td></td>
         </tr>
         
@@ -167,12 +163,12 @@
             <td colspan="6" class="text-right">Final Balance</td>
             <td></td>
             <td></td>
-            <td class="text-right">{{ number_format($running_balance, 2) }}</td>
+            <td class="text-right">{{ number_format($cashBookData['final_balance'], 2) }}</td>
         </tr>
         
         <tr class="closing-balance">
             <td colspan="8" class="text-right">Closing Balance</td>
-            <td class="text-right">{{ number_format($running_balance, 2) }}</td>
+            <td class="text-right">{{ number_format($cashBookData['final_balance'], 2) }}</td>
         </tr>
     </table>
 

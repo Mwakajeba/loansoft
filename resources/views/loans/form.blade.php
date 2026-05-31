@@ -1,5 +1,7 @@
 @php
 $isEdit = isset($loan);
+$productFeesMeta = $productFeesMeta ?? [];
+$initialCustomFeeAmounts = old('custom_fee_amounts', ($isEdit && isset($loan->custom_fee_amounts) && is_array($loan->custom_fee_amounts)) ? $loan->custom_fee_amounts : []);
 @endphp
 
 @if($errors->any())
@@ -65,7 +67,7 @@ $isEdit = isset($loan);
         <!-- Product Select -->
         <div class="col-md-6 mb-3">
             <label class="form-label">Product</label>
-            <select id="productSelect" name="product_id" class="form-select @error('product_id') is-invalid @enderror">
+            <select id="productSelect" name="product_id" class="form-select @error('product_id') is-invalid @enderror" required>
                 <option value="">Select Product</option>
                 @foreach($products as $product)
                 <option value="{{ $product->id }}" {{ old('product_id', $loan->product_id ?? '') == $product->id ? 'selected' : '' }}>
@@ -74,6 +76,16 @@ $isEdit = isset($loan);
                 @endforeach
             </select>
             @error('product_id') <div class="invalid-feedback">{{ $message }}</div> @enderror
+        </div>
+
+        <div class="col-12 mb-3" id="customFeeFieldsWrapper" style="display:none;">
+            <div class="card border-secondary">
+                <div class="card-body">
+                    <h6 class="card-title mb-2">Custom product fees (TZS)</h6>
+                    <p class="text-muted small mb-3">This product includes one or more fees whose amount is set per loan. Enter each amount below.</p>
+                    <div class="row" id="customFeeFields"></div>
+                </div>
+            </div>
         </div>
 
 
@@ -97,10 +109,23 @@ $isEdit = isset($loan);
             <input
                 type="date"
                 name="date_applied"
+                id="date_applied"
                 class="form-control @error('date_applied') is-invalid @enderror"
                 value="{{ old('date_applied', $loan->date_applied ?? now()->toDateString()) }}"
                 required>
             @error('date_applied') <div class="invalid-feedback">{{ $message }}</div> @enderror
+        </div>
+
+        <div class="col-md-6 mb-3">
+            <label class="form-label">First repayment date</label>
+            <input
+                type="date"
+                name="first_repayment_date"
+                id="first_repayment_date"
+                class="form-control @error('first_repayment_date') is-invalid @enderror"
+                value="{{ old('first_repayment_date', isset($loan->first_repayment_date) ? \Carbon\Carbon::parse($loan->first_repayment_date)->format('Y-m-d') : '') }}">
+            @error('first_repayment_date') <div class="invalid-feedback">{{ $message }}</div> @enderror
+            <small class="text-muted">Leave blank to use the default from the interest cycle (e.g. first installment one month after disbursement for monthly loans).</small>
         </div>
 
 
@@ -374,6 +399,37 @@ $isEdit = isset($loan);
 
 <script>
     const products = @json($products);
+    const productFeesMeta = @json($productFeesMeta);
+    const initialCustomFeeAmounts = @json($initialCustomFeeAmounts);
+    window.productFeesMeta = productFeesMeta;
+    window.initialCustomFeeAmounts = initialCustomFeeAmounts;
+
+    function renderCustomFeeAmountInputs() {
+        const productSelect = document.getElementById('productSelect');
+        const wrap = document.getElementById('customFeeFieldsWrapper');
+        const box = document.getElementById('customFeeFields');
+        if (!productSelect || !wrap || !box) return;
+        const pid = productSelect.value;
+        const fees = (pid && productFeesMeta[pid]) ? productFeesMeta[pid].filter(f => f.fee_type === 'custom') : [];
+        box.innerHTML = '';
+        if (!fees.length) {
+            wrap.style.display = 'none';
+            return;
+        }
+        wrap.style.display = 'block';
+        fees.forEach(f => {
+            const val = (initialCustomFeeAmounts[f.id] !== undefined && initialCustomFeeAmounts[f.id] !== null)
+                ? initialCustomFeeAmounts[f.id]
+                : (initialCustomFeeAmounts[String(f.id)] ?? '');
+            const col = document.createElement('div');
+            col.className = 'col-md-6 mb-3';
+            col.innerHTML = `
+                <label class="form-label">${f.name} <span class="text-danger">*</span></label>
+                <input type="number" class="form-control" name="custom_fee_amounts[${f.id}]" value="${val}" min="0" step="0.01" required>
+            `;
+            box.appendChild(col);
+        });
+    }
 
     document.addEventListener("DOMContentLoaded", function() {
         const productSelect = document.getElementById("productSelect");
@@ -409,6 +465,9 @@ $isEdit = isset($loan);
                 const minFormatted = product.minimum_principal ? product.minimum_principal.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',') : '';
                 const maxFormatted = product.maximum_principal ? product.maximum_principal.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',') : '';
                 amountRangeLabel.innerText = `(min: ${minFormatted}, max: ${maxFormatted})`;
+                if (product.interest_method && interestRangeLabel) {
+                    interestRangeLabel.innerText += ` · method: ${product.interest_method.replace(/_/g, ' ')}`;
+                }
 
             } else {
                 periodInput.removeAttribute('min');
@@ -418,9 +477,13 @@ $isEdit = isset($loan);
                 periodRangeLabel.innerText = '';
                 interestRangeLabel.innerText = '';
             }
+            renderCustomFeeAmountInputs();
         });
 
-        // Initialize Select2 for all .select2-single selects
+        renderCustomFeeAmountInputs();
+        if (productSelect.value) {
+            productSelect.dispatchEvent(new Event('change'));
+        }
         if (window.jQuery) {
             $('.select2-single').select2({
                 placeholder: 'Select Customer',
@@ -604,6 +667,17 @@ $isEdit = isset($loan);
                 // Include selected bank account so GL summary can balance debits/credits
                 account_id: formData.get('account_id'),
             };
+
+            const customMap = {};
+            form.querySelectorAll('input[name^="custom_fee_amounts"]').forEach(inp => {
+                const m = inp.name.match(/^custom_fee_amounts\[(\d+)\]$/);
+                if (m) {
+                    customMap[m[1]] = inp.value;
+                }
+            });
+            if (Object.keys(customMap).length) {
+                data.custom_fee_amounts = customMap;
+            }
             
             // Validate required fields
             if (!data.product_id || !data.period || !data.interest || !data.amount || !data.interest_cycle) {
@@ -615,7 +689,22 @@ $isEdit = isset($loan);
                 });
                 return;
             }
-            
+
+            const customFeesForProduct = (data.product_id && window.productFeesMeta && window.productFeesMeta[data.product_id])
+                ? window.productFeesMeta[data.product_id].filter(f => f.fee_type === 'custom')
+                : [];
+            for (const f of customFeesForProduct) {
+                const inp = form.querySelector(`input[name="custom_fee_amounts[${f.id}]"]`);
+                if (!inp || inp.value === '' || isNaN(parseFloat(inp.value)) || parseFloat(inp.value) < 0) {
+                    Swal.fire({
+                        icon: 'error',
+                        title: 'Custom fee amount required',
+                        text: 'Please enter a valid amount for: ' + f.name,
+                        confirmButtonText: 'OK'
+                    });
+                    return;
+                }
+            }
             // Show loading
             Swal.fire({
                 title: 'Calculating Loan Summary...',

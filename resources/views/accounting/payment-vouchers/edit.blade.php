@@ -17,10 +17,10 @@
             <div class="row">
                 <div class="col-12">
                     <div class="card radius-10">
-                        <div class="card-header bg-warning text-dark">
+                        <div class="card-header bg-secondary text-white">
                             <div class="d-flex align-items-center">
                                 <div>
-                                    <h5 class="mb-0 text-dark">
+                                    <h5 class="mb-0 text-white">
                                         <i class="bx bx-edit me-2"></i>Edit Payment Voucher
                                     </h5>
                                     <p class="mb-0 opacity-75">Update payment voucher entry</p>
@@ -93,7 +93,7 @@
                                 <div class="row mb-4">
                                     <div class="col-lg-12">
                                         <div class="card border-warning">
-                                            <div class="card-header bg-light">
+                                            <div class="card-header bg-secondary text-white">
                                                 <h6 class="mb-0 fw-bold">
                                                     <i class="bx bx-user me-2"></i>Payee Information
                                                 </h6>
@@ -238,7 +238,7 @@
                                 <div class="row mb-4">
                                     <div class="col-12">
                                         <div class="card border-warning">
-                                            <div class="card-header bg-light">
+                                            <div class="card-header bg-secondary text-white">
                                                 <h6 class="mb-0 fw-bold">
                                                     <i class="bx bx-list-ul me-2"></i>Line Items
                                                 </h6>

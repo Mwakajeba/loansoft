@@ -13,4 +13,7 @@ class AppColors {
   static const Color backgroundLight = Color(0xFFF6F6F8);
   static const Color backgroundDark = Color(0xFF101622);
   static const Color navyDeep = Color(0xFF0A0E17);
+
+  /// Splash / login light theme: text on #FFFFFF (darker green for readability).
+  static const Color logoTextOnWhite = Color(0xFF0A6B32);
 }

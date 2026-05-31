@@ -36,6 +36,22 @@ return [
     ],
 
 
+    'dcb' => [
+        'enabled' => filter_var(env('DCB_ENABLED', false), FILTER_VALIDATE_BOOLEAN),
+        'base_url' => env('DCB_BASE_URL', 'https://gateway.smartsot.tz'),
+        'business_id' => env('DCB_BUSINESS_ID'),
+        'api_key' => env('DCB_API_KEY'),
+        'api_secret' => env('DCB_API_SECRET', env('DCB_SECRET_KEY')),
+        'secret_key' => env('DCB_SECRET_KEY'),
+        'sender_name' => env('DCB_SENDER_NAME', env('APP_NAME', 'SmartFinance')),
+        'callback_secret' => env('DCB_CALLBACK_SECRET'),
+        'token_ttl' => (int) env('DCB_TOKEN_TTL', 300),
+        'timeout' => (int) env('DCB_TIMEOUT', 30),
+        'default_institution_code' => env('DCB_DEFAULT_INSTITUTION_CODE'),
+        'collection_account' => env('DCB_COLLECTION_ACCOUNT'),
+        'settlement_bank_account_id' => env('DCB_SETTLEMENT_BANK_ACCOUNT_ID'),
+    ],
+
     'sms' => [
         // Beem Africa SMS credentials
         'provider' => env('SMS_PROVIDER', 'kilakona'),
@@ -57,17 +73,24 @@ return [
             'group_notifications' => env('SMS_EVENT_GROUP_NOTIFICATIONS', true),
             'cash_collateral' => env('SMS_EVENT_CASH_COLLATERAL', true),
             'mature_interest' => env('SMS_EVENT_MATURE_INTEREST', true),
+            'loan_penalty'   => env('SMS_EVENT_LOAN_PENALTY', true),
         ],
+        // loan_disbursement / loan_repayment: customer | customer_and_company
+        'loan_disbursement_recipients' => env('SMS_LOAN_DISBURSEMENT_RECIPIENTS', 'customer'),
+        'loan_repayment_recipients' => env('SMS_LOAN_REPAYMENT_RECIPIENTS', 'customer'),
         // Custom message templates per event (empty = use system default)
         'templates' => [
             'otp_verification'     => env('SMS_TEMPLATE_OTP_VERIFICATION', ''),
             'loan_disbursement'    => env('SMS_TEMPLATE_LOAN_DISBURSEMENT', ''),
+            'loan_disbursement_company' => env('SMS_TEMPLATE_LOAN_DISBURSEMENT_COMPANY', ''),
             'loan_repayment'       => env('SMS_TEMPLATE_LOAN_REPAYMENT', ''),
+            'loan_repayment_company' => env('SMS_TEMPLATE_LOAN_REPAYMENT_COMPANY', ''),
             'loan_arrears_reminder'=> env('SMS_TEMPLATE_LOAN_ARREARS_REMINDER', ''),
             'customer_notifications' => env('SMS_TEMPLATE_CUSTOMER_NOTIFICATIONS', ''),
             'group_notifications'  => env('SMS_TEMPLATE_GROUP_NOTIFICATIONS', ''),
             'cash_collateral'      => env('SMS_TEMPLATE_CASH_COLLATERAL', ''),
             'mature_interest'      => env('SMS_TEMPLATE_MATURE_INTEREST', ''),
+            'loan_penalty'        => env('SMS_TEMPLATE_LOAN_PENALTY', ''),
         ],
     ],
 

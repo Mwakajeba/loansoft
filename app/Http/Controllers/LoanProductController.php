@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\LoanProduct;
+use App\Support\Loans\InterestAccrualMethod;
 use App\Models\ChartAccount;
 use App\Models\Fee;
 use App\Models\Penalty;
@@ -125,7 +126,7 @@ class LoanProductController extends Controller
             'grace_period' => 'nullable|integer|min:0',
             'maximum_number_of_loans' => 'nullable|integer|min:1',
             // Accrual Interest Calculation Method (supports legacy values too)
-            'penalt_deduction_criteria' => 'nullable|in:daily,as_expected_interest,daily_bases,full_amount',
+            'penalt_deduction_criteria' => 'required|in:daily,as_expected_interest,daily_bases,full_amount',
             'has_top_up' => 'boolean',
             'top_up_type' => 'nullable|required_if:has_top_up,1|string|max:50',
             'top_up_type_value' => 'nullable|required_if:top_up_type,percentage,fixed_amount|numeric|min:0',
@@ -238,6 +239,11 @@ class LoanProductController extends Controller
             $data['approval_levels'] = !empty($approvalLevels)
                 ? implode(',', $approvalLevels)
                 : null;
+
+            if (!empty($data['penalt_deduction_criteria'])) {
+                $data['penalt_deduction_criteria'] = InterestAccrualMethod::normalize($data['penalt_deduction_criteria'])
+                    ?? $data['penalt_deduction_criteria'];
+            }
 
             $loanProduct = LoanProduct::create($data);
 
@@ -388,6 +394,7 @@ class LoanProductController extends Controller
             'maximum_period' => 'required|integer|min:1|gte:minimum_period',
             'grace_period' => 'nullable|integer|min:0', // Add grace period validation
             'maximum_number_of_loans' => 'nullable|integer|min:1',
+            'penalt_deduction_criteria' => 'required|in:daily,as_expected_interest,daily_bases,full_amount',
             'has_top_up' => 'boolean',
             'top_up_type' => 'nullable|required_if:has_top_up,1|string|max:50',
             'top_up_type_value' => 'nullable|required_if:top_up_type,percentage,fixed_amount|numeric|min:0',
@@ -500,6 +507,11 @@ class LoanProductController extends Controller
             $data['approval_levels'] = !empty($approvalLevels)
                 ? implode(',', $approvalLevels)
                 : null;
+
+            if (!empty($data['penalt_deduction_criteria'])) {
+                $data['penalt_deduction_criteria'] = InterestAccrualMethod::normalize($data['penalt_deduction_criteria'])
+                    ?? $data['penalt_deduction_criteria'];
+            }
 
             $loanProduct->update($data);
 

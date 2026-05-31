@@ -161,13 +161,22 @@ class BulkRepaymentJob implements ShouldQueue
      */
     private function getUnpaidSchedules($loan)
     {
+        $interestExpr = $loan->usesDailyInterestAccrual()
+            ? 'COALESCE(loan_schedules.accrued_interest, 0)'
+            : 'COALESCE(loan_schedules.interest, 0)';
+
         return $loan->schedule()
             ->where('status', '!=', 'restructured') // Exclude restructured schedules
-            ->whereRaw('(
+            ->whereRaw(
+                "(
                 SELECT COALESCE(SUM(principal), 0) + COALESCE(SUM(interest), 0) + COALESCE(SUM(fee_amount), 0) + COALESCE(SUM(penalt_amount), 0)
                 FROM repayments
                 WHERE repayments.loan_schedule_id = loan_schedules.id
-            ) < (loan_schedules.principal + loan_schedules.interest + loan_schedules.fee_amount + loan_schedules.penalty_amount)')
+                AND repayments.deleted_at IS NULL
+            ) < (
+                loan_schedules.principal + {$interestExpr} + COALESCE(loan_schedules.fee_amount, 0) + COALESCE(loan_schedules.penalty_amount, 0)
+            )"
+            )
             ->orderBy('due_date')
             ->get();
     }

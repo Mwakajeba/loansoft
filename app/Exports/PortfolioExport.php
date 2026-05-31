@@ -66,7 +66,7 @@ class PortfolioExport implements FromView, ShouldAutoSize, WithStyles, WithEvent
                 ],
             ],
             // Style for data headers
-            10 => [
+            9 => [
                 'font' => ['bold' => true],
                 'fill' => [
                     'fillType' => \PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID,

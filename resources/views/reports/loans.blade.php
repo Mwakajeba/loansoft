@@ -260,6 +260,22 @@
                             @endcan
 
 
+                            <!-- Portfolio Classification Report -->
+                            <div class="col-md-6 col-lg-4 mb-4">
+                                <div class="card border-dark">
+                                    <div class="card-body text-center">
+                                        <div class="mb-3">
+                                            <i class="bx bx-table fs-1 text-dark"></i>
+                                        </div>
+                                        <h5 class="card-title">Portfolio Classification Report</h5>
+                                        <p class="card-text">Loan portfolio with arrears aging buckets, provision rates and provision amounts based on days past due.</p>
+                                        <a href="{{ route('reports.loans.portfolio_classification') }}" class="btn btn-dark">
+                                            <i class="bx bx-file me-1"></i> Generate Report
+                                        </a>
+                                    </div>
+                                </div>
+                            </div>
+
                             <!-- Internal Portfolio Analysis Report -->
                             @can('view loan internal portfolio analysis report')
 
@@ -289,6 +305,24 @@
                                         <h5 class="card-title">Non Performing Loan Report</h5>
                                         <p class="card-text text-muted">View and analyze non performing loans, provisions, and risk metrics.</p>
                                         <a href="{{ route('accounting.loans.reports.npl') }}" class="btn btn-danger">
+                                            <i class="bx bx-file me-1"></i> Generate Report
+                                        </a>
+                                    </div>
+                                </div>
+                            </div>
+                            @endcan
+
+                               <!-- CRB Report -->
+                            @can('view loan crb report')
+                            <div class="col-lg-4 col-md-6 mb-4">
+                                <div class="card h-100 border-primary">
+                                    <div class="card-body text-center">
+                                        <div class="icon-box mb-3">
+                                            <i class="bx bx-file-find fs-1 text-primary"></i>
+                                        </div>
+                                        <h5 class="card-title">CRB Report</h5>
+                                        <p class="card-text text-muted">Credit Reference Bureau report with loan details, installments, and past due information.</p>
+                                        <a href="{{ route('accounting.loans.reports.crb') }}" class="btn btn-primary">
                                             <i class="bx bx-file me-1"></i> Generate Report
                                         </a>
                                     </div>

@@ -2,10 +2,10 @@
 
 namespace App\Exports;
 
+use App\Models\Company;
 use Illuminate\Contracts\View\View;
 use Maatwebsite\Excel\Concerns\FromView;
 use Maatwebsite\Excel\Concerns\WithTitle;
-use Maatwebsite\Excel\Concerns\WithDrawings;
 use Maatwebsite\Excel\Concerns\ShouldAutoSize;
 use Maatwebsite\Excel\Concerns\WithStyles;
 use PhpOffice\PhpSpreadsheet\Worksheet\Worksheet;
@@ -15,32 +15,44 @@ use PhpOffice\PhpSpreadsheet\Style\Fill;
 
 class PortfolioAtRiskExport implements FromView, WithTitle, ShouldAutoSize, WithStyles
 {
+    /** @var array<int, array<string, mixed>> */
     protected $par_data;
+
+    /** @var array<string, mixed> */
     protected $filters;
+
     protected $company;
 
-    public function __construct($par_data, $filters, $company = null)
+    /**
+     * @param  array{par_data?: array, as_of_date?: string, par_days?: int, branch_name?: string, group_name?: string, loan_officer_name?: string, company?: mixed}  $payload
+     */
+    public function __construct(array $payload)
     {
-        $this->par_data = $par_data;
-        $this->filters = $filters;
-        $this->company = $company;
+        $this->par_data = $payload['par_data'] ?? [];
+        $this->filters = [
+            'as_of_date' => $payload['as_of_date'] ?? now()->format('Y-m-d'),
+            'par_days' => $payload['par_days'] ?? 30,
+            'branch_name' => $payload['branch_name'] ?? 'All Branches',
+            'group_name' => $payload['group_name'] ?? 'All Groups',
+            'loan_officer_name' => $payload['loan_officer_name'] ?? 'All Officers',
+        ];
+        $this->company = $payload['company'] ?? Company::first();
     }
 
     public function view(): View
     {
-        // Calculate totals and ratios
-        $total_outstanding = array_sum(array_column($this->par_data, 'outstanding_balance'));
+        $total_outstanding = array_sum(array_column($this->par_data, 'total_outstanding'));
         $total_at_risk = array_sum(array_column($this->par_data, 'at_risk_amount'));
         $par_ratio = $total_outstanding > 0 ? ($total_at_risk / $total_outstanding) * 100 : 0;
-        $loans_at_risk = count(array_filter($this->par_data, function($item) { 
-            return $item['is_at_risk']; 
+        $loans_at_risk = count(array_filter($this->par_data, function ($item) {
+            return !empty($item['is_at_risk']);
         }));
-        
-        // Risk level breakdown
-        $risk_levels = ['Low' => 0, 'Medium' => 0, 'High' => 0, 'Critical' => 0];
+
+        $par_categories = ['Current' => 0, 'PAR1' => 0, 'PAR30' => 0, 'PAR90' => 0];
         foreach ($this->par_data as $loan) {
-            if (isset($risk_levels[$loan['risk_level']])) {
-                $risk_levels[$loan['risk_level']]++;
+            $c = $loan['par_category'] ?? 'Current';
+            if (isset($par_categories[$c])) {
+                $par_categories[$c]++;
             }
         }
 
@@ -59,13 +71,14 @@ class PortfolioAtRiskExport implements FromView, WithTitle, ShouldAutoSize, With
             'par_ratio' => $par_ratio,
             'loans_at_risk' => $loans_at_risk,
             'total_loans' => count($this->par_data),
-            'risk_levels' => $risk_levels,
+            'par_categories' => $par_categories,
         ]);
     }
 
     public function title(): string
     {
         $par_days = $this->filters['par_days'] ?? 30;
+
         return "PAR {$par_days} Report";
     }
 
@@ -74,7 +87,6 @@ class PortfolioAtRiskExport implements FromView, WithTitle, ShouldAutoSize, With
         $highestRow = $sheet->getHighestRow();
         $highestColumn = $sheet->getHighestColumn();
 
-        // Header styling (rows 1-8)
         $sheet->getStyle('A1:' . $highestColumn . '8')->applyFromArray([
             'font' => [
                 'bold' => true,
@@ -86,7 +98,6 @@ class PortfolioAtRiskExport implements FromView, WithTitle, ShouldAutoSize, With
             ],
         ]);
 
-        // Report title styling (row 1)
         $sheet->getStyle('A1:' . $highestColumn . '1')->applyFromArray([
             'font' => [
                 'bold' => true,
@@ -99,8 +110,7 @@ class PortfolioAtRiskExport implements FromView, WithTitle, ShouldAutoSize, With
             ],
         ]);
 
-        // Summary section styling (rows 10-15)
-        $sheet->getStyle('A10:D15')->applyFromArray([
+        $sheet->getStyle('A10:D16')->applyFromArray([
             'font' => [
                 'bold' => true,
             ],
@@ -115,8 +125,7 @@ class PortfolioAtRiskExport implements FromView, WithTitle, ShouldAutoSize, With
             ],
         ]);
 
-        // Data table header styling (row 17)
-        $sheet->getStyle('A17:' . $highestColumn . '17')->applyFromArray([
+        $sheet->getStyle('A18:' . $highestColumn . '18')->applyFromArray([
             'font' => [
                 'bold' => true,
                 'color' => ['rgb' => 'ffffff'],
@@ -136,9 +145,8 @@ class PortfolioAtRiskExport implements FromView, WithTitle, ShouldAutoSize, With
             ],
         ]);
 
-        // Data rows styling (from row 18 to end)
-        if ($highestRow > 17) {
-            $sheet->getStyle('A18:' . $highestColumn . $highestRow)->applyFromArray([
+        if ($highestRow > 18) {
+            $sheet->getStyle('A19:' . $highestColumn . $highestRow)->applyFromArray([
                 'borders' => [
                     'allBorders' => [
                         'borderStyle' => Border::BORDER_THIN,
@@ -149,21 +157,6 @@ class PortfolioAtRiskExport implements FromView, WithTitle, ShouldAutoSize, With
                 ],
             ]);
 
-            // Center alignment for specific columns
-            $centerColumns = ['A', 'C', 'E', 'L', 'M', 'O']; // #, Customer No, Loan No, Risk %, Days, Status
-            foreach ($centerColumns as $column) {
-                $sheet->getStyle($column . '18:' . $column . $highestRow)->getAlignment()
-                    ->setHorizontal(Alignment::HORIZONTAL_CENTER);
-            }
-
-            // Right alignment for amount columns
-            $rightColumns = ['F', 'J', 'K']; // Loan Amount, Outstanding, At Risk
-            foreach ($rightColumns as $column) {
-                $sheet->getStyle($column . '18:' . $column . $highestRow)->getAlignment()
-                    ->setHorizontal(Alignment::HORIZONTAL_RIGHT);
-            }
-
-            // Totals row styling (last row)
             $sheet->getStyle('A' . $highestRow . ':' . $highestColumn . $highestRow)->applyFromArray([
                 'font' => [
                     'bold' => true,
@@ -175,18 +168,15 @@ class PortfolioAtRiskExport implements FromView, WithTitle, ShouldAutoSize, With
             ]);
         }
 
-        // Auto-size columns
         foreach (range('A', $highestColumn) as $column) {
             $sheet->getColumnDimension($column)->setAutoSize(true);
         }
 
-        // Set row heights
         for ($row = 1; $row <= $highestRow; $row++) {
             $sheet->getRowDimension($row)->setRowHeight(20);
         }
 
-        // Freeze header row
-        $sheet->freezePane('A18');
+        $sheet->freezePane('A19');
 
         return [];
     }

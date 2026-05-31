@@ -2,19 +2,21 @@
 
 namespace App\Jobs;
 
+use App\Models\BankAccount;
 use App\Models\CashCollateral;
 use App\Models\Customer;
 use App\Models\GlTransaction;
+use App\Services\LoanDisbursementGlService;
 use App\Models\Journal;
 use App\Models\JournalItem;
 use App\Models\Loan;
 use App\Models\LoanProduct;
-use App\Models\LoanSchedule;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -22,138 +24,314 @@ class BulkLoanCreationJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    protected $csvData;
-    protected $validated;
-    protected $userId;
-    protected $chunkSize = 25;
+    public int $timeout = 3600;
+
+    public int $tries = 2;
+
+    /** @var array<int, array<int, mixed>> */
+    protected array $chunkData;
+
+    /** @var array<string, mixed> */
+    protected array $validated;
+
+    protected int $userId;
+
+    /** @var array<int, string> */
+    protected array $headerRow;
+
+    protected int $chunkIndex;
+
+    protected int $totalChunks;
+
+    protected ?string $importId;
+
+    /** @var array<string, int>|null */
+    protected ?array $columnMap = null;
 
     /**
-     * Create a new job instance.
+     * @param  array<int, array<int, mixed>>  $chunkData
+     * @param  array<string, mixed>  $validated
+     * @param  array<int, string>  $headerRow
      */
-    public function __construct($csvData, $validated, $userId)
-    {
-        $this->csvData = $csvData;
+    public function __construct(
+        array $chunkData,
+        array $validated,
+        int $userId,
+        array $headerRow,
+        int $chunkIndex = 0,
+        int $totalChunks = 1,
+        ?string $importId = null
+    ) {
+        $this->chunkData = $chunkData;
         $this->validated = $validated;
         $this->userId = $userId;
+        $this->headerRow = $headerRow;
+        $this->chunkIndex = $chunkIndex;
+        $this->totalChunks = $totalChunks;
+        $this->importId = $importId;
     }
 
-    /**
-     * Execute the job.
-     */
     public function handle(): void
     {
-        Log::info('Starting bulk loan creation job', [
-            'total_loans' => count($this->csvData),
-            'user_id' => $this->userId
+        Log::info('Opening balance chunk started', [
+            'import_id' => $this->importId,
+            'chunk_index' => $this->chunkIndex,
+            'total_chunks' => $this->totalChunks,
+            'chunk_size' => count($this->chunkData),
         ]);
 
         $product = LoanProduct::with('principalReceivableAccount')->findOrFail($this->validated['product_id']);
-        $chartAccountId = $this->validated['chart_account_id'];
+        $chartAccountId = (int) $this->validated['chart_account_id'];
 
-        $createdLoans = [];
-        $failedLoans = [];
-        $repaymentData = [];
+        $chunkSuccess = 0;
+        $chunkFailed = 0;
 
-        // Process loans in chunks
-        $chunks = array_chunk($this->csvData, $this->chunkSize);
+        foreach ($this->chunkData as $rowIndex => $row) {
+            if (! is_array($row)) {
+                $chunkFailed++;
+                $this->recordFailure($rowIndex, 'Unknown', 'Invalid row data');
 
-        foreach ($chunks as $chunkIndex => $chunk) {
-            Log::info("Processing chunk {$chunkIndex}", ['chunk_size' => count($chunk)]);
+                continue;
+            }
 
-            foreach ($chunk as $rowIndex => $row) {
-                try {
-                    $loanData = $this->processLoanRow($row, $product, $chartAccountId);
+            try {
+                $loanData = $this->processLoanRow($row, $product, $chartAccountId);
 
-
-                    if ($loanData) {
-                        $loan = $this->createLoan($loanData, $product, $chartAccountId);
-                        if ($loan) {
-                            $createdLoans[] = $loan;
-
-                            // Collect repayment data if amount_paid > 0
-                            if ($loanData['amount_paid'] > 0) {
-                                $repaymentData[] = [
-                                    'loan_id' => $loan->id,
-                                    'amount' => $loanData['amount_paid'],
-                                    'payment_date' => $loanData['date_applied']
-                                ];
-                            }
-                        }
-                    }
-                } catch (\Exception $e) {
-                    $failedLoans[] = [
-                        'row' => $rowIndex + 1,
-                        'customer_no' => $row[0] ?? 'Unknown',
-                        'error' => $e->getMessage()
-                    ];
-                    Log::error('Failed to create loan', [
-                        'row' => $rowIndex + 1,
-                        'customer_no' => $row[0] ?? 'Unknown',
-                        'error' => $e->getMessage()
-                    ]);
+                if (! $loanData) {
+                    continue;
                 }
+
+                $loan = $this->createLoan($loanData, $product, $chartAccountId);
+                if ($loan) {
+                    $chunkSuccess++;
+                    $this->touchProgress(1, 0);
+
+                    if ($loanData['amount_paid'] > 0) {
+                        $this->appendRepayment([
+                            'loan_id' => $loan->id,
+                            'amount' => $loanData['amount_paid'],
+                            'payment_date' => $loanData['date_applied'],
+                        ]);
+                    }
+                }
+            } catch (\Exception $e) {
+                $chunkFailed++;
+                $this->recordFailure(
+                    $rowIndex,
+                    (string) $this->cell($row, 'customer_no', 'Unknown'),
+                    $e->getMessage()
+                );
             }
         }
 
-        Log::info('Bulk loan creation completed', [
-            'created_loans' => count($createdLoans),
-            'failed_loans' => count($failedLoans)
-        ]);
+        if ($this->importId && ($this->chunkIndex + 1) >= $this->totalChunks) {
+            $this->finalizeImport();
+        }
 
-        // Dispatch repayment job if there are repayments to process
-        if (!empty($repaymentData)) {
-            Log::info('Dispatching bulk repayment job', ['repayment_count' => count($repaymentData)]);
-            BulkRepaymentJob::dispatch($repaymentData, $this->userId, $chartAccountId);
+        Log::info('Opening balance chunk completed', [
+            'import_id' => $this->importId,
+            'chunk_index' => $this->chunkIndex,
+            'success' => $chunkSuccess,
+            'failed' => $chunkFailed,
+        ]);
+    }
+
+    protected function touchProgress(int $successDelta, int $failedDelta): void
+    {
+        if (! $this->importId) {
+            return;
+        }
+
+        $progress = Cache::get($this->importId, []);
+        $progress['success'] = ($progress['success'] ?? 0) + $successDelta;
+        $progress['failed'] = ($progress['failed'] ?? 0) + $failedDelta;
+        $progress['current'] = ($progress['current'] ?? 0) + $successDelta + $failedDelta;
+        $total = max(1, (int) ($progress['total'] ?? 1));
+        $progress['percentage'] = min(99, (int) round(($progress['current'] / $total) * 100));
+        $progress['status'] = 'processing';
+
+        Cache::put($this->importId, $progress, 7200);
+    }
+
+    protected function recordFailure(int $rowIndex, string $customerNo, string $message): void
+    {
+        $this->touchProgress(0, 1);
+
+        if (! $this->importId) {
+            return;
+        }
+
+        $progress = Cache::get($this->importId, []);
+        $errors = $progress['errors'] ?? [];
+        if (count($errors) < 50) {
+            $globalRow = ($this->chunkIndex * max(1, count($this->chunkData))) + $rowIndex + 1;
+            $errors[] = [
+                'row' => $globalRow,
+                'customer_no' => $customerNo,
+                'message' => $message,
+            ];
+            $progress['errors'] = $errors;
+            Cache::put($this->importId, $progress, 7200);
+        }
+
+        Log::error('Opening balance row failed', [
+            'import_id' => $this->importId,
+            'customer_no' => $customerNo,
+            'error' => $message,
+        ]);
+    }
+
+    protected function finalizeImport(): void
+    {
+        $progress = Cache::get($this->importId, []);
+        $progress['status'] = 'completed';
+        $progress['percentage'] = 100;
+        $progress['current'] = $progress['total'] ?? $progress['current'] ?? 0;
+        Cache::put($this->importId, $progress, 7200);
+
+        $repayments = Cache::pull($this->importId.'_repayments', []);
+        if (! empty($repayments)) {
+            Log::info('Dispatching bulk repayment after opening balance', [
+                'import_id' => $this->importId,
+                'count' => count($repayments),
+            ]);
+            BulkRepaymentJob::dispatch($repayments, $this->userId, (int) $this->validated['chart_account_id']);
         }
     }
 
-    /**
-     * Process a single loan row
-     */
-    private function processLoanRow($row, $product, $chartAccountId)
+    protected function appendRepayment(array $entry): void
     {
-        // Map CSV columns to data
-        $data = [
-            'customer_no' => $row[0] ?? '',
-            'customer_name' => $row[1] ?? '',
-            'group_id' => $row[2] ?? '',
-            'group_name' => $row[3] ?? '',
-            'amount' => floatval($row[4] ?? 0),
-            'interest' => floatval($row[5] ?? 0),
-            'period' => intval($row[6] ?? 0),
-            'interest_cycle' => $product->interest_cycle ?? 'monthly', // Use product's interest cycle
-            'date_applied' => $row[7] ?? date('Y-m-d'),
-            'sector' => $row[8] ?? 'Business',
-            'amount_paid' => floatval($row[9] ?? 0)
+        if (! $this->importId) {
+            return;
+        }
+
+        $key = $this->importId.'_repayments';
+        $repayments = Cache::get($key, []);
+        $repayments[] = $entry;
+        Cache::put($key, $repayments, 7200);
+    }
+
+    /**
+     * @return array<string, int>
+     */
+    protected function getColumnMap(): array
+    {
+        if ($this->columnMap !== null) {
+            return $this->columnMap;
+        }
+
+        if (! empty($this->headerRow)) {
+            $this->columnMap = [];
+            foreach ($this->headerRow as $i => $h) {
+                $key = strtolower(preg_replace('/^\xEF\xBB\xBF/', '', trim((string) $h)));
+                if ($key !== '') {
+                    $this->columnMap[$key] = $i;
+                }
+            }
+
+            return $this->columnMap;
+        }
+
+        $this->columnMap = [
+            'customer_no' => 0,
+            'customer_name' => 1,
+            'group_id' => 2,
+            'group_name' => 3,
+            'amount' => 4,
+            'interest' => 5,
+            'period' => 6,
+            'date_applied' => 7,
+            'sector' => 8,
+            'amount_paid' => 9,
         ];
 
-        // Validate required fields
+        return $this->columnMap;
+    }
+
+    /**
+     * @param  array<int, mixed>  $row
+     */
+    protected function cell(array $row, string $name, $default = '')
+    {
+        $map = $this->getColumnMap();
+        $i = $map[strtolower($name)] ?? null;
+        if ($i === null || ! array_key_exists($i, $row)) {
+            return $default;
+        }
+
+        return $row[$i];
+    }
+
+    /**
+     * @param  array<int, mixed>  $row
+     * @return array<string, mixed>|null
+     */
+    private function processLoanRow(array $row, LoanProduct $product, int $chartAccountId): ?array
+    {
+        $firstRepaymentRaw = trim((string) $this->cell($row, 'first_repayment_date', ''));
+        $firstRepaymentDate = $firstRepaymentRaw !== '' ? $firstRepaymentRaw : null;
+
+        $cycleRaw = strtolower(trim((string) $this->cell($row, 'interest_cycle', '')));
+        if ($cycleRaw === '') {
+            // Default is independent of loan product; template forces user choice.
+            $cycleRaw = 'monthly';
+        }
+        if ($cycleRaw === 'yearly') {
+            $cycleRaw = 'annually';
+        }
+
+        $validCycles = ['daily', 'weekly', 'bimonthly', 'monthly', 'quarterly', 'semi_annually', 'annually'];
+        if (! in_array($cycleRaw, $validCycles, true)) {
+            throw new \Exception(
+                'Invalid interest_cycle. Allowed: '.implode(', ', $validCycles)
+            );
+        }
+
+        $data = [
+            'customer_no' => trim((string) $this->cell($row, 'customer_no', '')),
+            'customer_name' => trim((string) $this->cell($row, 'customer_name', '')),
+            'group_id' => trim((string) $this->cell($row, 'group_id', '')),
+            'group_name' => trim((string) $this->cell($row, 'group_name', '')),
+            'amount' => floatval($this->cell($row, 'amount', 0)),
+            'interest' => floatval($this->cell($row, 'interest', 0)),
+            'period' => intval($this->cell($row, 'period', 0)),
+            'interest_cycle' => $cycleRaw,
+            'date_applied' => $this->cell($row, 'date_applied', date('Y-m-d')),
+            'first_repayment_date' => $firstRepaymentDate,
+            'sector' => $this->cell($row, 'sector', 'Business'),
+            'amount_paid' => floatval($this->cell($row, 'amount_paid', 0)),
+        ];
+
+        if ($firstRepaymentDate) {
+            $dFirst = \Carbon\Carbon::parse($firstRepaymentDate)->startOfDay();
+            $dDisb = \Carbon\Carbon::parse($data['date_applied'])->startOfDay();
+            if ($dFirst->lt($dDisb)) {
+                throw new \Exception('first_repayment_date must be on or after date_applied');
+            }
+        }
+
         if (empty($data['customer_no']) || $data['amount'] <= 0 || $data['interest'] <= 0 || $data['period'] <= 0) {
             throw new \Exception('Invalid loan data: missing required fields or invalid values');
         }
 
-        // Find customer by customer number
         $customer = Customer::where('customerNo', $data['customer_no'])->first();
-        if (!$customer) {
-            throw new \Exception("Customer not found: {$data['customer_no']} - {$data['customer_name']}");
+        if (! $customer) {
+            throw new \Exception("Customer not found: {$data['customer_no']}");
         }
 
-        // Validate product limits
-        if (!$product->isAmountWithinLimits($data['amount'])) {
+        if (! $product->isAmountWithinLimits($data['amount'])) {
             throw new \Exception("Loan amount {$data['amount']} is outside product limits");
         }
 
-        if (!$product->isPeriodWithinLimits($data['period'])) {
+        if (! $product->isPeriodWithinLimits($data['period'])) {
             throw new \Exception("Loan period {$data['period']} is outside product limits");
         }
 
-        // Check maximum number of active loans allowed for this product
         if ($product->hasReachedMaxLoans($customer->id)) {
             $maxLoans = $product->maximum_number_of_loans ?? 'the configured maximum';
             throw new \Exception("Customer has reached the maximum number of active loans ({$maxLoans}) for this product");
         }
 
-        // Check collateral if required
         if ($product->requiresCollateral()) {
             $requiredCollateral = $product->calculateRequiredCollateral($data['amount']);
             $availableCollateral = CashCollateral::getCashCollateralBalance($customer->id);
@@ -167,17 +345,16 @@ class BulkLoanCreationJob implements ShouldQueue
             'customer_id' => $customer->id,
             'product_id' => $product->id,
             'branch_id' => $this->validated['branch_id'],
-            'chart_account_id' => $chartAccountId
+            'chart_account_id' => $chartAccountId,
         ]);
     }
 
     /**
-     * Create a single loan
+     * @param  array<string, mixed>  $loanData
      */
-    private function createLoan($loanData, $product, $chartAccountId)
+    private function createLoan(array $loanData, LoanProduct $product, int $chartAccountId): ?Loan
     {
         return DB::transaction(function () use ($loanData, $product, $chartAccountId) {
-            // Create loan
             $loan = Loan::create([
                 'product_id' => $loanData['product_id'],
                 'period' => $loanData['period'],
@@ -185,7 +362,7 @@ class BulkLoanCreationJob implements ShouldQueue
                 'amount' => $loanData['amount'],
                 'customer_id' => $loanData['customer_id'],
                 'group_id' => $loanData['group_id'] ?: null,
-                'bank_account_id' => null, // Not using bank account anymore
+                'bank_account_id' => null,
                 'date_applied' => $loanData['date_applied'],
                 'disbursed_on' => $loanData['date_applied'],
                 'sector' => $loanData['sector'],
@@ -195,11 +372,9 @@ class BulkLoanCreationJob implements ShouldQueue
                 'loan_officer_id' => $this->userId,
             ]);
 
-            // Calculate interest and repayment dates
             $interestAmount = $loan->calculateInterestAmount($loanData['interest']);
-            $repaymentDates = $loan->getRepaymentDates();
+            $repaymentDates = $loan->resolveRepaymentDates($loanData['first_repayment_date'] ?? null);
 
-            // Update loan with totals and schedule
             $loan->update([
                 'interest_amount' => $interestAmount,
                 'amount_total' => $loan->amount + $interestAmount,
@@ -207,58 +382,32 @@ class BulkLoanCreationJob implements ShouldQueue
                 'last_repayment_date' => $repaymentDates['last_repayment_date'],
             ]);
 
-            // Generate repayment schedule
             $loan->generateRepaymentSchedule($loanData['interest']);
-
-            // Post matured interest for past loans
             $loan->postMaturedInterestForPastLoan();
+            $loan->accruePenaltiesForPastLoanWhenReady();
 
-            // Create journal entry for loan disbursement
-            $notes = "Being disbursement for loan of {$product->name}, paid to {$loan->customer->name}, TSHS.{$loanData['amount']}";
+            $disbursementGlService = app(LoanDisbursementGlService::class);
+            $loan->loadMissing(['product', 'customer']);
+            $notes = $disbursementGlService->disbursementDescription($loan);
             $principalReceivable = $product->principal_receivable_account_id;
 
-            if (!$principalReceivable) {
+            if (! $principalReceivable) {
                 throw new \Exception('Principal receivable account not set for this loan product.');
             }
 
-            // Calculate release fees
-            $releaseFeeTotal = 0;
-            // if ($product && $product->fees_ids) {
-            //     $feeIds = is_array($product->fees_ids) ? $product->fees_ids : json_decode($product->fees_ids, true);
-            //     if (is_array($feeIds)) {
-            //         $releaseFees = \DB::table('fees')
-            //             ->whereIn('id', $feeIds)
-            //             ->where('deduction_criteria', 'charge_fee_on_release_date')
-            //             ->where('status', 'active')
-            //             ->get();
-
-            //         foreach ($releaseFees as $fee) {
-            //             $feeAmount = (float) $fee->amount;
-            //             $feeType = $fee->fee_type;
-            //             $calculatedFee = $feeType === 'percentage'
-            //                 ? ((float) $loanData['amount'] * (float) $feeAmount / 100)
-            //                 : (float) $feeAmount;
-            //             $releaseFeeTotal += $calculatedFee;
-            //         }
-            //     }
-            // }
-
-            $disbursementAmount = $loanData['amount'] - $releaseFeeTotal;
-
-            // Generate a unique reference for the journal
-            $nextId = Journal::max('id') + 1;
-            $reference = 'JRN-' . str_pad($nextId, 6, '0', STR_PAD_LEFT);
+            $principalAmount = round((float) $loan->amount, 2);
+            $releaseFeeTotal = $disbursementGlService->calculateReleaseFeeTotal($loan);
+            $disbursementAmount = round($principalAmount - $releaseFeeTotal, 2);
 
             $journal = Journal::create([
                 'date' => $loanData['date_applied'],
                 'description' => $notes,
                 'branch_id' => $loanData['branch_id'],
                 'user_id' => $this->userId,
-                'reference_type' => 'Loan Disbursement',
+                'reference_type' => LoanDisbursementGlService::TRANSACTION_TYPE,
                 'reference' => $loan->id,
             ]);
 
-            // Create journal items
             JournalItem::create([
                 'journal_id' => $journal->id,
                 'chart_account_id' => $chartAccountId,
@@ -270,76 +419,54 @@ class BulkLoanCreationJob implements ShouldQueue
             JournalItem::create([
                 'journal_id' => $journal->id,
                 'chart_account_id' => $principalReceivable,
-                'amount' => $loanData['amount'],
+                'amount' => $principalAmount,
                 'nature' => 'debit',
                 'description' => $notes,
             ]);
 
-            // Create GL transactions
-            GlTransaction::insert([
-                [
-                    'chart_account_id' => $chartAccountId,
-                    'customer_id' => $loan->customer_id,
-                    'amount' => $disbursementAmount,
-                    'nature' => 'credit',
-                    'transaction_id' => $loan->id,
-                    'transaction_type' => 'Loan Disbursement',
-                    'date' => $loanData['date_applied'],
-                    'description' => $notes,
-                    'branch_id' => $loanData['branch_id'],
-                    'user_id' => $this->userId,
-                ],
-                [
-                    'chart_account_id' => $principalReceivable,
-                    'customer_id' => $loan->customer_id,
-                    'amount' => $loanData['amount'],
-                    'nature' => 'debit',
-                    'transaction_id' => $loan->id,
-                    'transaction_type' => 'Loan Disbursement',
-                    'date' => $loanData['date_applied'],
-                    'description' => $notes,
-                    'branch_id' => $loanData['branch_id'],
-                    'user_id' => $this->userId,
-                ]
-            ]);
+            $bankAccount = BankAccount::where('chart_account_id', $chartAccountId)->first();
+            if ($bankAccount) {
+                $loan->update(['bank_account_id' => $bankAccount->id]);
+                $loan->refresh();
+            }
 
-            // Post penalty amount to GL if exists
-            // $penalty = $product->penalty;
-            // $penaltyAmount = LoanSchedule::where('loan_id', $loan->id)->sum('penalty_amount');
-
-            // if ($penaltyAmount > 0 && $penalty) {
-            //     $receivableId = $penalty->penalty_receivables_account_id;
-            //     $incomeId = $penalty->penalty_income_account_id;
-
-            //     if ($receivableId && $incomeId) {
-            //         GlTransaction::insert([
-            //             [
-            //                 'chart_account_id' => $receivableId,
-            //                 'customer_id' => $loan->customer_id,
-            //                 'amount' => $penaltyAmount,
-            //                 'nature' => 'debit',
-            //                 'transaction_id' => $loan->id,
-            //                 'transaction_type' => 'Loan Penalty',
-            //                 'date' => $loanData['date_applied'],
-            //                 'description' => $notes,
-            //                 'branch_id' => $loanData['branch_id'],
-            //                 'user_id' => $this->userId,
-            //             ],
-            //             [
-            //                 'chart_account_id' => $incomeId,
-            //                 'customer_id' => $loan->customer_id,
-            //                 'amount' => $penaltyAmount,
-            //                 'nature' => 'credit',
-            //                 'transaction_id' => $loan->id,
-            //                 'transaction_type' => 'Loan Penalty',
-            //                 'date' => $loanData['date_applied'],
-            //                 'description' => $notes,
-            //                 'branch_id' => $loanData['branch_id'],
-            //                 'user_id' => $this->userId,
-            //             ]
-            //         ]);
-            //     }
-            // }
+            if (! $disbursementGlService->hasDisbursementGl($loan->id)) {
+                if ($loan->bank_account_id) {
+                    $disbursementGlService->postDisbursement(
+                        $loan,
+                        $loanData['date_applied'],
+                        $this->userId,
+                        $loanData['branch_id']
+                    );
+                } else {
+                    GlTransaction::insert([
+                        [
+                            'chart_account_id' => $chartAccountId,
+                            'customer_id' => $loan->customer_id,
+                            'amount' => $disbursementAmount,
+                            'nature' => 'credit',
+                            'transaction_id' => $loan->id,
+                            'transaction_type' => LoanDisbursementGlService::TRANSACTION_TYPE,
+                            'date' => $loanData['date_applied'],
+                            'description' => $notes,
+                            'branch_id' => $loanData['branch_id'],
+                            'user_id' => $this->userId,
+                        ],
+                        [
+                            'chart_account_id' => $principalReceivable,
+                            'customer_id' => $loan->customer_id,
+                            'amount' => $principalAmount,
+                            'nature' => 'debit',
+                            'transaction_id' => $loan->id,
+                            'transaction_type' => LoanDisbursementGlService::TRANSACTION_TYPE,
+                            'date' => $loanData['date_applied'],
+                            'description' => $notes,
+                            'branch_id' => $loanData['branch_id'],
+                            'user_id' => $this->userId,
+                        ],
+                    ]);
+                }
+            }
 
             return $loan;
         });

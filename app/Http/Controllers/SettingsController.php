@@ -20,9 +20,18 @@ use Yajra\DataTables\Facades\DataTables;
 use App\Jobs\AccruePenaltyJob;
 use App\Jobs\CalculateDailyInterestJob;
 use Barryvdh\DomPDF\Facade\Pdf;
+use App\Models\ArrearsClassification;
 
 class SettingsController extends Controller
 {
+    private function authorizeArrearsClassifications(): void
+    {
+        // Reuse existing permission to avoid migration/seed changes.
+        if (!auth()->user()->hasRole('super-admin') && !auth()->user()->can('manage penalty setting')) {
+            abort(403, 'You do not have permission to manage arrears classifications.');
+        }
+    }
+
     public function __construct()
     {
         // Middleware is applied in routes/web.php
@@ -279,6 +288,7 @@ class SettingsController extends Controller
             'general'       => 'General Settings',
             'email'         => 'Email Configuration',
             'security'      => 'Security Settings',
+            'microfinance'  => 'Loans & Microfinance',
             'backup'        => 'Backup Configuration',
             'maintenance'   => 'Maintenance Settings',
             'notifications' => 'SMS Reminders',
@@ -288,6 +298,7 @@ class SettingsController extends Controller
             'general'       => 'bx-cog',
             'email'         => 'bx-envelope',
             'security'      => 'bx-shield',
+            'microfinance'  => 'bx-money',
             'backup'        => 'bx-data',
             'maintenance'   => 'bx-wrench',
             'notifications' => 'bx-bell',
@@ -317,11 +328,9 @@ class SettingsController extends Controller
             'Pacific/Auckland'
         ];
 
-        // Auto-initialize defaults whenever core settings are missing.
-        // initializeDefaults() uses updateOrCreate so it is safe to call repeatedly.
-        if (\App\Models\SystemSetting::where('group', 'general')->doesntExist()) {
-            \App\Models\SystemSetting::initializeDefaults();
-        }
+        // Ensure defaults exist (safe: updateOrCreate).
+        // This also seeds newly-added settings keys on existing installations.
+        \App\Models\SystemSetting::initializeDefaults();
 
         $settings = [];
         foreach ($groups as $groupKey => $groupName) {
@@ -888,25 +897,27 @@ class SettingsController extends Controller
     {
         $smsEvents = [
             'otp_verification'      => 'User login / OTP verification',
-            'loan_disbursement'     => 'On loan disbursement / approval',
-            'loan_repayment'        => 'On loan repayment posting',
+            'loan_disbursement'     => 'On loan disbursement',
+            'loan_repayment'        => 'On loan repayment',
             'loan_arrears_reminder' => 'Loan arrears / reminder messages',
             'customer_notifications'=> 'Customer automatic notifications',
             'group_notifications'   => 'Group automatic notifications',
             'cash_collateral'       => 'Cash collateral notifications',
             'mature_interest'       => 'Mature interest collection notifications',
+            'loan_penalty'          => 'Loan penalty / overdue fine notifications',
         ];
 
         // Available template variables per event (shown as hints in the UI)
         $eventVariables = [
             'otp_verification'      => ['{code}'],
-            'loan_disbursement'     => ['{customer_name}', '{amount}', '{loan_date}', '{repayment_start_date}', '{payment_amount}', '{cycle}', '{company_name}', '{company_phone}'],
-            'loan_repayment'        => ['{customer_name}', '{amount}', '{payment_date}', '{loan_no}', '{company_name}', '{company_phone}'],
+            'loan_disbursement'     => ['{customer_name}', '{amount}', '{loan_date}', '{repayment_start_date}', '{payment_amount}', '{cycle}', '{company_name}', '{company_phone}', '{loan_no}'],
+            'loan_repayment'        => ['{customer_name}', '{amount}', '{payment_date}', '{loan_no}', '{next_schedule_amount}', '{outstanding_amount}', '{company_name}', '{company_phone}'],
             'loan_arrears_reminder' => ['{customer_name}', '{amount}', '{days_overdue}', '{loan_no}', '{due_date}', '{reminder_type}', '{company_name}', '{company_phone}'],
             'customer_notifications'=> ['{customer_name}', '{company_name}'],
             'group_notifications'   => ['{customer_name}', '{amount_paid}', '{remaining_amount}', '{company_name}'],
             'cash_collateral'       => ['{amount}', '{action}', '{company_name}'],
-            'mature_interest'       => ['{customer_name}', '{loan_no}', '{amount}', '{company_name}', '{company_phone}'],
+            'mature_interest'       => ['{customer_name}', '{loan_no}', '{amount}', '{company_name}'],
+            'loan_penalty'          => ['{customer_name}', '{amount}', '{days_overdue}', '{loan_no}', '{due_date}', '{company_name}', '{company_phone}'],
         ];
 
         // System default message shown as placeholder when no custom template is set
@@ -919,6 +930,7 @@ class SettingsController extends Controller
             'group_notifications'   => 'Habari! {customer_name}, umelipa rejesho kiasi cha Tsh {amount_paid}. Salio: Tsh {remaining_amount}. {company_name}',
             'cash_collateral'       => 'Cash {action} processed successfully. Amount: TSHS{amount}',
             'mature_interest'       => 'Habari {customer_name}. Mkopo namba {loan_no} una deni la faini ya TZS {amount} kwa kuchelewa kulipa. Tafadhali lipa haraka ili uepuke faini zaidi. Asante.',
+            'loan_penalty'          => 'Habari ndugu mteja {customer_name}. Adhabu ya TZS {amount} imeongezwa kwenye mkopo namba {loan_no} kwa kuchelewa kulipa ({days_overdue}). Tafadhali lipa haraka ili uepuke adhabu zaidi. Asante, kwa mawasiliano piga {company_phone}.',
         ];
 
         $enabledEvents = [];
@@ -932,7 +944,28 @@ class SettingsController extends Controller
             $customTemplates[$key] = config("services.sms.templates.$key", '');
         }
 
-        return view('settings.sms', compact('smsEvents', 'enabledEvents', 'eventVariables', 'defaultMessages', 'customTemplates'));
+        $customTemplates['loan_disbursement_company'] = config('services.sms.templates.loan_disbursement_company', '');
+        $customTemplates['loan_repayment_company'] = config('services.sms.templates.loan_repayment_company', '');
+
+        $loanDisbursementRecipients = config('services.sms.loan_disbursement_recipients', 'customer');
+        if (!in_array($loanDisbursementRecipients, ['customer', 'customer_and_company'], true)) {
+            $loanDisbursementRecipients = 'customer';
+        }
+
+        $loanRepaymentRecipients = config('services.sms.loan_repayment_recipients', 'customer');
+        if (!in_array($loanRepaymentRecipients, ['customer', 'customer_and_company'], true)) {
+            $loanRepaymentRecipients = 'customer';
+        }
+
+        return view('settings.sms', compact(
+            'smsEvents',
+            'enabledEvents',
+            'eventVariables',
+            'defaultMessages',
+            'customTemplates',
+            'loanDisbursementRecipients',
+            'loanRepaymentRecipients'
+        ));
     }
 
     /**
@@ -950,6 +983,8 @@ class SettingsController extends Controller
             'sms_events.*'     => 'string',
             'sms_templates'    => 'nullable|array',
             'sms_templates.*'  => 'nullable|string|max:500',
+            'loan_disbursement_recipients' => 'nullable|in:customer,customer_and_company',
+            'loan_repayment_recipients' => 'nullable|in:customer,customer_and_company',
         ]);
 
         try {
@@ -977,6 +1012,7 @@ class SettingsController extends Controller
                 'group_notifications',
                 'cash_collateral',
                 'mature_interest',
+                'loan_penalty',
             ];
 
             $selectedEvents = $request->input('sms_events', []);
@@ -992,6 +1028,24 @@ class SettingsController extends Controller
                 $templateEnvKey = 'SMS_TEMPLATE_' . strtoupper($eventKey);
                 $envKeys[$templateEnvKey] = trim($submittedTemplates[$eventKey] ?? '');
             }
+
+            // Company copy templates (use same event toggles as loan_disbursement / loan_repayment)
+            $companyTemplateKeys = ['loan_disbursement_company', 'loan_repayment_company'];
+            foreach ($companyTemplateKeys as $eventKey) {
+                $envKeys['SMS_TEMPLATE_' . strtoupper($eventKey)] = trim($submittedTemplates[$eventKey] ?? '');
+            }
+
+            $disbursementRecipients = $request->input('loan_disbursement_recipients', 'customer');
+            if (!in_array($disbursementRecipients, ['customer', 'customer_and_company'], true)) {
+                $disbursementRecipients = 'customer';
+            }
+            $envKeys['SMS_LOAN_DISBURSEMENT_RECIPIENTS'] = $disbursementRecipients;
+
+            $repaymentRecipients = $request->input('loan_repayment_recipients', 'customer');
+            if (!in_array($repaymentRecipients, ['customer', 'customer_and_company'], true)) {
+                $repaymentRecipients = 'customer';
+            }
+            $envKeys['SMS_LOAN_REPAYMENT_RECIPIENTS'] = $repaymentRecipients;
 
             foreach ($envKeys as $key => $value) {
                 if (!update_env_file($key, $value)) {
@@ -1074,6 +1128,94 @@ class SettingsController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Test failed: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    public function dcbSettings()
+    {
+        $recentTransactions = \App\Models\DcbTransaction::query()
+            ->when(current_company_id(), fn ($q) => $q->where('company_id', current_company_id()))
+            ->orderByDesc('id')
+            ->limit(15)
+            ->get();
+
+        $callbackUrl = url('/dcb/callback');
+        $bankAccounts = \App\Models\BankAccount::forUserBranches()->orderBy('name')->get();
+
+        return view('settings.dcb', compact('recentTransactions', 'callbackUrl', 'bankAccounts'));
+    }
+
+    public function updateDcbSettings(Request $request)
+    {
+        $request->validate([
+            'dcb_enabled' => 'nullable|boolean',
+            'dcb_base_url' => 'required|url',
+            'dcb_business_id' => 'required|string|max:255',
+            'dcb_api_key' => 'required|string|max:255',
+            'dcb_api_secret' => 'required|string|max:255',
+            'dcb_sender_name' => 'required|string|max:120',
+            'dcb_callback_secret' => 'nullable|string|max:255',
+            'dcb_default_institution_code' => 'nullable|string|max:64',
+            'dcb_settlement_bank_account_id' => 'nullable|exists:bank_accounts,id',
+        ]);
+
+        try {
+            $envKeys = [
+                'DCB_ENABLED' => $request->boolean('dcb_enabled') ? 'true' : 'false',
+                'DCB_BASE_URL' => $request->dcb_base_url,
+                'DCB_BUSINESS_ID' => $request->dcb_business_id,
+                'DCB_API_KEY' => $request->dcb_api_key,
+                'DCB_API_SECRET' => $request->dcb_api_secret,
+                'DCB_SENDER_NAME' => $request->dcb_sender_name,
+                'DCB_CALLBACK_SECRET' => $request->dcb_callback_secret ?? '',
+                'DCB_DEFAULT_INSTITUTION_CODE' => $request->dcb_default_institution_code ?? '',
+                'DCB_SETTLEMENT_BANK_ACCOUNT_ID' => $request->dcb_settlement_bank_account_id ?? '',
+            ];
+
+            foreach ($envKeys as $key => $value) {
+                if (!update_env_file($key, $value)) {
+                    throw new \Exception("Failed to update {$key} in .env file");
+                }
+            }
+
+            \Artisan::call('config:clear');
+            app(\App\Services\DcbGatewayService::class)->clearToken();
+
+            return redirect()->route('settings.dcb')->with('success', 'DCB gateway settings updated successfully.');
+        } catch (\Exception $e) {
+            Log::error('DCB Settings Update Error: ' . $e->getMessage());
+
+            return redirect()->route('settings.dcb')->with('error', 'Failed to update DCB settings: ' . $e->getMessage());
+        }
+    }
+
+    public function testDcbSettings(Request $request)
+    {
+        try {
+            if ($request->filled('dcb_base_url')) {
+                config([
+                    'services.dcb.base_url' => $request->dcb_base_url,
+                    'services.dcb.business_id' => $request->dcb_business_id,
+                    'services.dcb.api_key' => $request->dcb_api_key,
+                    'services.dcb.api_secret' => $request->dcb_api_secret,
+                ]);
+            }
+
+            app(\App\Services\DcbGatewayService::class)->clearToken();
+            $result = app(\App\Services\DcbGatewayService::class)->testConnection();
+
+            return response()->json([
+                'success' => (bool) ($result['success'] ?? false),
+                'message' => $result['message'] ?? 'Connection test completed.',
+                'institutions_count' => $result['institutions_count'] ?? null,
+            ], ($result['success'] ?? false) ? 200 : 400);
+        } catch (\Exception $e) {
+            Log::error('DCB Test Error: ' . $e->getMessage());
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Test failed: ' . $e->getMessage(),
             ], 500);
         }
     }
@@ -1200,6 +1342,173 @@ class SettingsController extends Controller
         } catch (\Exception $e) {
             return redirect()->route('settings.payment-voucher-approval')->with('error', 'Failed to update payment voucher approval settings: ' . $e->getMessage());
         }
+    }
+
+    /**
+     * Arrears classifications (loan aging buckets) UI
+     */
+    public function arrearsClassificationsIndex()
+    {
+        $this->authorizeArrearsClassifications();
+
+        return view('settings.arrears-classifications');
+    }
+
+    /**
+     * DataTables: arrears classifications
+     */
+    public function arrearsClassificationsData()
+    {
+        $this->authorizeArrearsClassifications();
+
+        $query = ArrearsClassification::forCompany()->orderBy('sort_order')->orderBy('days_from');
+
+        return DataTables::of($query)
+            ->addColumn('bucket_label', function (ArrearsClassification $c) {
+                $to = $c->days_to === null ? '+' : $c->days_to;
+                return e(($c->bucket_label ?: ($c->days_from . '-' . $to))) . '<br><small class="text-muted">' . e($c->days_from . ' - ' . $to . ' days') . '</small>';
+            })
+            ->addColumn('status_badge', function (ArrearsClassification $c) {
+                $status = (string) $c->status;
+                $badge = 'bg-secondary';
+                $statusLower = strtolower($status);
+                if (str_contains($statusLower, 'current')) $badge = 'bg-success';
+                if (str_contains($statusLower, 'past')) $badge = 'bg-warning text-dark';
+                if (str_contains($statusLower, 'especially')) $badge = 'bg-info';
+                if (str_contains($statusLower, 'watch')) $badge = 'bg-info';
+                if (str_contains($statusLower, 'substandard')) $badge = 'bg-danger';
+                if (str_contains($statusLower, 'doubtful')) $badge = 'bg-danger';
+                if (str_contains($statusLower, 'loss')) $badge = 'bg-dark';
+                return '<span class="badge ' . $badge . '">' . e($status) . '</span>';
+            })
+            ->addColumn('provision_formatted', function (ArrearsClassification $c) {
+                return '<span class="fw-bold">' . number_format((float) $c->provision_percentage, 2) . '%</span>';
+            })
+            ->addColumn('active_badge', function (ArrearsClassification $c) {
+                return $c->is_active
+                    ? '<span class="badge bg-success">Active</span>'
+                    : '<span class="badge bg-secondary">Inactive</span>';
+            })
+            ->addColumn('actions', function (ArrearsClassification $c) {
+                $row = [
+                    'id' => $c->id,
+                    'days_from' => $c->days_from,
+                    'days_to' => $c->days_to,
+                    'bucket_label' => $c->bucket_label,
+                    'status' => $c->status,
+                    'provision_percentage' => (float) $c->provision_percentage,
+                    'sort_order' => $c->sort_order,
+                    'is_active' => (bool) $c->is_active,
+                    'comments' => $c->comments,
+                ];
+
+                return '<div class="d-flex gap-1 justify-content-center">'
+                    . '<button type="button" class="btn btn-sm btn-outline-primary btn-edit-classification" data-row=\'' . e(json_encode($row)) . '\'><i class="bx bx-edit"></i></button>'
+                    . '<button type="button" class="btn btn-sm btn-outline-danger delete-classification-btn" data-id="' . e($c->id) . '" data-bucket-label="' . e($c->bucket_label) . '"><i class="bx bx-trash"></i></button>'
+                    . '</div>';
+            })
+            ->rawColumns(['bucket_label', 'status_badge', 'provision_formatted', 'active_badge', 'actions'])
+            ->make(true);
+    }
+
+    public function arrearsClassificationsStore(Request $request)
+    {
+        $this->authorizeArrearsClassifications();
+
+        $data = $request->validate([
+            'days_from' => 'required|integer|min:0',
+            'days_to' => 'nullable|integer|min:0',
+            'bucket_label' => 'required|string|max:255',
+            'status' => 'required|string|max:255',
+            'provision_percentage' => 'required|numeric|min:0|max:100',
+            'comments' => 'nullable|string',
+            'is_active' => 'nullable|in:0,1',
+            'sort_order' => 'nullable|integer|min:0',
+        ]);
+
+        $data['company_id'] = current_company_id();
+        $data['is_active'] = (bool) ($data['is_active'] ?? true);
+        $data['sort_order'] = (int) ($data['sort_order'] ?? 0);
+
+        ArrearsClassification::create($data);
+
+        return redirect()->route('settings.arrears-classifications.index')->with('success', 'Classification created successfully.');
+    }
+
+    public function arrearsClassificationsUpdate(Request $request, ArrearsClassification $arrearsClassification)
+    {
+        $this->authorizeArrearsClassifications();
+
+        if ((int) $arrearsClassification->company_id !== (int) current_company_id()) {
+            abort(403, 'Unauthorized.');
+        }
+
+        $data = $request->validate([
+            'days_from' => 'required|integer|min:0',
+            'days_to' => 'nullable|integer|min:0',
+            'bucket_label' => 'required|string|max:255',
+            'status' => 'required|string|max:255',
+            'provision_percentage' => 'required|numeric|min:0|max:100',
+            'comments' => 'nullable|string',
+            'is_active' => 'nullable|in:0,1',
+            'sort_order' => 'nullable|integer|min:0',
+        ]);
+
+        $data['is_active'] = (bool) ($data['is_active'] ?? $arrearsClassification->is_active);
+        $data['sort_order'] = (int) ($data['sort_order'] ?? $arrearsClassification->sort_order);
+
+        $arrearsClassification->update($data);
+
+        return redirect()->route('settings.arrears-classifications.index')->with('success', 'Classification updated successfully.');
+    }
+
+    public function arrearsClassificationsDestroy(Request $request, ArrearsClassification $arrearsClassification)
+    {
+        $this->authorizeArrearsClassifications();
+
+        if ((int) $arrearsClassification->company_id !== (int) current_company_id()) {
+            abort(403, 'Unauthorized.');
+        }
+
+        $arrearsClassification->delete();
+
+        return response()->json(['success' => true, 'message' => 'Classification deleted.']);
+    }
+
+    public function arrearsClassificationsClearAll()
+    {
+        $this->authorizeArrearsClassifications();
+
+        ArrearsClassification::forCompany()->delete();
+
+        return response()->json(['success' => true, 'message' => 'All classifications cleared.']);
+    }
+
+    public function arrearsClassificationsSeedDefaults()
+    {
+        $this->authorizeArrearsClassifications();
+
+        if (ArrearsClassification::forCompany()->count() > 0) {
+            return response()->json(['success' => false, 'message' => 'Classifications already exist. Clear them first if you want to reseed.']);
+        }
+
+        $defaults = [
+            ['days_from' => 0, 'days_to' => 5, 'bucket_label' => '0-5', 'status' => 'Current', 'provision_percentage' => 1, 'sort_order' => 1],
+            ['days_from' => 6, 'days_to' => 30, 'bucket_label' => '6-30', 'status' => 'Especially Mentioned', 'provision_percentage' => 5, 'sort_order' => 2],
+            ['days_from' => 31, 'days_to' => 60, 'bucket_label' => '31-60', 'status' => 'Substandard', 'provision_percentage' => 25, 'sort_order' => 3],
+            ['days_from' => 61, 'days_to' => 90, 'bucket_label' => '61-90', 'status' => 'Doubtful', 'provision_percentage' => 50, 'sort_order' => 4],
+            ['days_from' => 91, 'days_to' => null, 'bucket_label' => '91+', 'status' => 'Loss/NPL', 'provision_percentage' => 100, 'sort_order' => 5],
+        ];
+
+        foreach ($defaults as $row) {
+            ArrearsClassification::create(array_merge($row, [
+                'company_id' => current_company_id(),
+                'is_active' => true,
+                'comments' => null,
+            ]));
+        }
+
+        return response()->json(['success' => true, 'message' => 'Default Tanzania classifications created.']);
     }
 
     /**
@@ -1496,7 +1805,7 @@ class SettingsController extends Controller
             $accrualDate = $request->input('accrual_date', now()->toDateString());
 
             // Run the penalty accrual job synchronously for immediate processing
-            $job = new AccruePenaltyJob($accrualDate);
+            $job = new AccruePenaltyJob($accrualDate, true, null, true);
             dispatch_sync($job);
 
             return response()->json([
@@ -1517,6 +1826,45 @@ class SettingsController extends Controller
     /**
      * Run Daily Accrual Interest Job
      */
+    /**
+     * Run all daily scheduled loan/accounting jobs (same order as cron).
+     */
+    public function runDailyBatch(Request $request)
+    {
+        if (!auth()->user()->can('manage penalty setting')) {
+            return response()->json([
+                'success' => false,
+                'message' => 'You do not have permission to run scheduled jobs.',
+            ], 403);
+        }
+
+        try {
+            $date = $request->input('accrual_date', now()->toDateString());
+            $params = ['--date' => $date];
+
+            \Illuminate\Support\Facades\Artisan::call('subscription:check-expiry');
+            \Illuminate\Support\Facades\Artisan::call('accounting:accrue-penalties', [
+                '--sync' => true,
+                '--no-daily-interest' => true,
+                '--date' => $date,
+            ]);
+            \Illuminate\Support\Facades\Artisan::call('loans:accrue-daily-interest', ['--date' => $date]);
+            \Illuminate\Support\Facades\Artisan::call('loans:collect-mature-interest');
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Daily batch completed (subscription, penalties, daily interest, mature interest). Check Job Logs.',
+            ]);
+        } catch (\Exception $e) {
+            \Log::error('Daily batch failed: ' . $e->getMessage());
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Daily batch failed: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
     public function runDailyAccrualInterest(Request $request)
     {
         // Check permissions

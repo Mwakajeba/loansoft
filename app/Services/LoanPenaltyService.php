@@ -2,96 +2,182 @@
 
 namespace App\Services;
 
+use App\Models\GlTransaction;
+use App\Models\Loan;
 use App\Models\Penalty;
-use App\Models\GlTransaction; 
 use Illuminate\Support\Collection;
 
 class LoanPenaltyService
 {
     /**
-     * Get total penalty balance (debit - credit) from active penalty receivable accounts.
+     * All active penalty receivable chart account IDs.
      */
-    public static function getTotalPenaltyBalance($branchId = null): float
+    public static function penaltyReceivableAccountIds(): array
     {
-        // Retrieve the penalty receivables account ID from the Penalty model
-        $penaltyAccountId = Penalty::query()
+        return Penalty::query()
             ->where('status', 'active')
             ->whereNotNull('penalty_receivables_account_id')
-            ->value('penalty_receivables_account_id');
+            ->pluck('penalty_receivables_account_id')
+            ->unique()
+            ->values()
+            ->all();
+    }
 
-            info($penaltyAccountId);
-        // If no active penalty account is found, return 0.0
-        if (!$penaltyAccountId) {
+    /**
+     * Outstanding penalty total from active loan schedules (matches loan details).
+     */
+    public static function getTotalPenaltyBalance(?int $branchId = null): float
+    {
+        $query = Loan::query()
+            ->where('status', Loan::STATUS_ACTIVE);
+
+        if ($branchId) {
+            $query->where('branch_id', $branchId);
+        }
+
+        $total = 0.0;
+        foreach ($query->with(['schedule.repayments'])->get() as $loan) {
+            $total += $loan->getOutstandingBalanceBreakdown()['outstanding_penalty'];
+        }
+
+        return round($total, 2);
+    }
+
+    /**
+     * Net penalty balance from GL receivable accounts (debit − credit).
+     */
+    public static function getTotalPenaltyGlBalance(?int $branchId = null): float
+    {
+        $accountIds = self::penaltyReceivableAccountIds();
+        if (empty($accountIds)) {
             return 0.0;
         }
 
-        // Use the GlTransaction model to query for total debit and credit amounts
         $query = GlTransaction::query()
-            ->where('chart_account_id', $penaltyAccountId);
-            
-        // Filter by branch if provided
+            ->whereIn('chart_account_id', $accountIds);
+
         if ($branchId) {
-            $query->whereHas('journal', function($q) use ($branchId) {
-                $q->where('branch_id', $branchId);
-            });
+            $query->where('branch_id', $branchId);
         }
-        
+
         $totals = $query->selectRaw('
                 SUM(CASE WHEN nature = "debit" THEN amount ELSE 0 END) as total_debit,
                 SUM(CASE WHEN nature = "credit" THEN amount ELSE 0 END) as total_credit
             ')
             ->first();
 
-
-            info($totals);
-
-        // Cast totals to float, defaulting to 0 if null
         $debit = (float) ($totals->total_debit ?? 0);
         $credit = (float) ($totals->total_credit ?? 0);
 
-        // Calculate and return the net balance
-        return $debit - $credit;
+        return round($debit - $credit, 2);
     }
 
     /**
-     * Get penalty balance per customer, optimized to avoid DB::raw.
+     * Per-customer outstanding penalties from active loan schedules.
      */
-    public static function getCustomerPenaltyBalances(): Collection
+    public static function getCustomerPenaltyBalances(?int $branchId = null): Collection
     {
-        // Retrieve the penalty receivables account ID from the Penalty model
-        $penaltyAccountId = Penalty::query()
-            ->where('status', 'active')
-            ->whereNotNull('penalty_receivables_account_id')
-            ->value('penalty_receivables_account_id');
-            info($penaltyAccountId);
+        $query = Loan::query()
+            ->where('status', Loan::STATUS_ACTIVE)
+            ->with(['customer', 'schedule.repayments']);
 
-        // If no active penalty account is found, return an empty collection
-        if (!$penaltyAccountId) {
+        if ($branchId) {
+            $query->where('branch_id', $branchId);
+        }
+
+        $byCustomer = [];
+
+        foreach ($query->get() as $loan) {
+            $penalty = $loan->getOutstandingBalanceBreakdown()['outstanding_penalty'];
+            if ($penalty <= 0) {
+                continue;
+            }
+
+            $customerId = (int) $loan->customer_id;
+            if (!isset($byCustomer[$customerId])) {
+                $byCustomer[$customerId] = [
+                    'customer_id' => $customerId,
+                    'customer_name' => $loan->customer->name ?? 'Unknown Customer',
+                    'customer_phone' => $loan->customer->phone1 ?? '',
+                    'penalty_balance' => 0.0,
+                ];
+            }
+
+            $byCustomer[$customerId]['penalty_balance'] += $penalty;
+        }
+
+        return collect($byCustomer)
+            ->map(function (array $row) {
+                $row['penalty_balance'] = round($row['penalty_balance'], 2);
+
+                return $row;
+            })
+            ->sortBy('customer_name')
+            ->values();
+    }
+
+    /**
+     * Per-customer net penalty balance from GL receivable accounts.
+     */
+    public static function getCustomerPenaltyGlBalances(?int $branchId = null): Collection
+    {
+        $accountIds = self::penaltyReceivableAccountIds();
+        if (empty($accountIds)) {
             return collect();
         }
 
-        // We select only the necessary columns from gl_transactions.
-        $transactions = GlTransaction::query()
-            ->with('customer') // Eager load the customer relationship
-            ->where('chart_account_id', $penaltyAccountId)
-            ->select('customer_id', 'nature', 'amount') // Only select from gl_transactions table
-            ->get();
+        $query = GlTransaction::query()
+            ->with('customer')
+            ->whereIn('chart_account_id', $accountIds)
+            ->whereNotNull('customer_id');
 
-        // Group transactions by customer_id and calculate balances using collection methods
-        return $transactions->groupBy('customer_id')->map(function ($customerTransactions, $customerId) {
-            $totalDebit = $customerTransactions->where('nature', 'debit')->sum('amount');
-            $totalCredit = $customerTransactions->where('nature', 'credit')->sum('amount');
+        if ($branchId) {
+            $query->where('branch_id', $branchId);
+        }
 
-            // Check if customer relationship exists before accessing its properties
-            $customerName = $customerTransactions->first()->customer->name ?? 'Unknown Customer';
-            $customerPhone = $customerTransactions->first()->customer->phone1 ?? '+25555......';
+        return $query->get(['customer_id', 'nature', 'amount'])
+            ->groupBy('customer_id')
+            ->map(function ($customerTransactions, $customerId) {
+                $totalDebit = $customerTransactions->where('nature', 'debit')->sum('amount');
+                $totalCredit = $customerTransactions->where('nature', 'credit')->sum('amount');
+
+                return [
+                    'customer_id' => (int) $customerId,
+                    'customer_name' => $customerTransactions->first()->customer->name ?? 'Unknown Customer',
+                    'customer_phone' => $customerTransactions->first()->customer->phone1 ?? '',
+                    'gl_balance' => round($totalDebit - $totalCredit, 2),
+                ];
+            })
+            ->values();
+    }
+
+    /**
+     * Merge schedule outstanding and GL balances for the customer penalty list.
+     */
+    public static function getCustomerPenaltyComparison(?int $branchId = null): Collection
+    {
+        $outstanding = self::getCustomerPenaltyBalances($branchId)->keyBy('customer_id');
+        $gl = self::getCustomerPenaltyGlBalances($branchId)->keyBy('customer_id');
+
+        $customerIds = $outstanding->keys()->merge($gl->keys())->unique();
+
+        return $customerIds->map(function ($customerId) use ($outstanding, $gl) {
+            $outRow = $outstanding->get($customerId);
+            $glRow = $gl->get($customerId);
+            $outAmount = (float) ($outRow['penalty_balance'] ?? 0);
+            $glAmount = (float) ($glRow['gl_balance'] ?? 0);
 
             return [
-                'customer_id' => $customerId,
-                'customer_name' => $customerName, 
-                'customer_phone' => $customerPhone, 
-                'penalty_balance' => round($totalDebit - $totalCredit, 2)
+                'customer_id' => (int) $customerId,
+                'customer_name' => $outRow['customer_name'] ?? $glRow['customer_name'] ?? 'Unknown Customer',
+                'customer_phone' => $outRow['customer_phone'] ?? $glRow['customer_phone'] ?? '',
+                'penalty_balance' => round($outAmount, 2),
+                'gl_balance' => round($glAmount, 2),
+                'difference' => round($glAmount - $outAmount, 2),
             ];
-        })->values(); // Use values() to reset keys if needed, making it a simple array of objects.
+        })
+            ->filter(fn (array $row) => $row['penalty_balance'] > 0 || $row['gl_balance'] > 0)
+            ->sortBy('customer_name')
+            ->values();
     }
 }

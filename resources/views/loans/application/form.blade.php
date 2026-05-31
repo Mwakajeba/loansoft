@@ -1,5 +1,7 @@
 @php
     $isEdit = isset($loanApplication);
+    $productFeesMeta = $productFeesMeta ?? [];
+    $initialCustomFeeAmounts = old('custom_fee_amounts', ($isEdit && isset($loanApplication->custom_fee_amounts) && is_array($loanApplication->custom_fee_amounts)) ? $loanApplication->custom_fee_amounts : []);
 @endphp
 
 @if($errors->any())
@@ -24,12 +26,10 @@
         <!-- Customer -->
         <div class="col-md-6 mb-3">
             <label class="form-label">Customer <span class="text-danger">*</span></label>
-            <select name="customer_id" id="customerSelect" class="form-select select2-single @error('customer_id') is-invalid @enderror" required>
+            <select name="customer_id" id="customer_id" class="form-select select2-single @error('customer_id') is-invalid @enderror" required>
                 <option value="">Select Customer</option>
                 @foreach($customers as $customer)
-                    <option value="{{ $customer->id }}" 
-                        data-groups="{{ $customer->groups->pluck('id')->toJson() }}"
-                        {{ old('customer_id', $loanApplication->customer_id ?? '') == $customer->id ? 'selected' : '' }}>
+                    <option value="{{ $customer->id }}" {{ old('customer_id', $loanApplication->customer_id ?? '') == $customer->id ? 'selected' : '' }}>
                         {{ $customer->name }} - {{ $customer->phone1 ?? 'No phone' }}
                     </option>
                 @endforeach
@@ -46,6 +46,25 @@
         <!-- Hidden Group ID for form submission -->
         <input type="hidden" name="group_id" id="group_id" value="{{ old('group_id', $loanApplication->group_id ?? '') }}">
 
+        <!-- Loan Officer (align with direct loan form; stored as current user in backend) -->
+        @isset($loanOfficers)
+        <div class="col-md-6 mb-3">
+            <label class="form-label">Loan Officer <span class="text-danger">*</span></label>
+            <select name="loan_officer"
+                class="form-select select2-single @error('loan_officer') is-invalid @enderror">
+                <option value="">-- Select Loan Officer --</option>
+                @foreach($loanOfficers as $officer)
+                    <option value="{{ $officer->id }}" {{ old('loan_officer') == $officer->id ? 'selected' : '' }}>
+                        {{ $officer->name }} ({{ $officer->email }})
+                    </option>
+                @endforeach
+            </select>
+            @error('loan_officer')
+            <div class="invalid-feedback">{{ $message }}</div>
+            @enderror
+        </div>
+        @endisset
+
         <!-- Product Select -->
         <div class="col-md-6 mb-3">
             <label class="form-label">Loan Product <span class="text-danger">*</span></label>
@@ -61,6 +80,16 @@
             @error('product_id') <div class="invalid-feedback">{{ $message }}</div> @enderror
         </div>
 
+        <div class="col-12 mb-3" id="customFeeFieldsWrapper" style="display:none;">
+            <div class="card border-secondary">
+                <div class="card-body">
+                    <h6 class="card-title mb-2">Custom product fees (TZS)</h6>
+                    <p class="text-muted small mb-3">This product includes one or more fees whose amount is set per application. Enter each amount below.</p>
+                    <div class="row" id="customFeeFields"></div>
+                </div>
+            </div>
+        </div>
+
 
         <!-- Date Applied -->
         <div class="col-md-6 mb-3">
@@ -70,14 +99,16 @@
             @error('date_applied') <div class="invalid-feedback">{{ $message }}</div> @enderror
         </div>
 
-        <!-- Amount -->
+        <!-- Amount (formatted like direct loan form) -->
         <div class="col-md-6 mb-3">
             <label class="form-label">Loan Amount <span class="text-danger">*</span>
                 <small id="amountRangeLabel" class="text-muted ms-2"></small>
             </label>
-            <input type="number" id="amountInput" step="0.000000000000001" name="amount"
+            <input type="text" id="amountInput"
                 class="form-control @error('amount') is-invalid @enderror"
-                value="{{ old('amount', $loanApplication->amount ?? '') }}" placeholder="Enter loan amount" required>
+                value="{{ old('amount', isset($loanApplication) && $loanApplication->amount ? number_format($loanApplication->amount, 0, '.', ',') : '') }}"
+                placeholder="Enter loan amount" required>
+            <input type="hidden" id="amountInputHidden" name="amount" value="{{ old('amount', $loanApplication->amount ?? '') }}">
             @error('amount') <div class="invalid-feedback">{{ $message }}</div> @enderror
         </div>
 
@@ -99,30 +130,51 @@
             @error('period') <div class="invalid-feedback">{{ $message }}</div> @enderror
         </div>
 
-        <!-- Interest Rate -->
+        <!-- Interest Rate (enter as monthly %; system converts by Interest Cycle — same as direct loan / calculator) -->
         <div class="col-md-6 mb-3">
             <label class="form-label">
                 Interest Rate (%) <span class="text-danger">*</span>
                 <small id="interestRangeLabel" class="text-muted ms-2"></small>
             </label>
+            @php
+                $interestFormValue = old('interest');
+                if ($interestFormValue === null && isset($loanApplication) && $loanApplication->exists && $loanApplication->interest !== null) {
+                    $interestFormValue = round(
+                        \App\Support\InterestRateConverter::fromCycleToMonthly(
+                            (float) $loanApplication->interest,
+                            (string) ($loanApplication->interest_cycle ?? 'monthly')
+                        ),
+                        8
+                    );
+                }
+            @endphp
             <input type="number" id="interestInput" step="0.000000000000001" name="interest"
                 class="form-control @error('interest') is-invalid @enderror"
-                value="{{ old('interest', $loanApplication->interest ?? '') }}" placeholder="Enter interest rate in %"
+                value="{{ $interestFormValue ?? '' }}" placeholder="Monthly rate % (e.g. product range)"
                 required>
             @error('interest') <div class="invalid-feedback">{{ $message }}</div> @enderror
         </div>
 
-        <!-- Interest Cycle -->
+        <!-- Interest Cycle (use same list as direct loans, including Bi-monthly) -->
         <div class="col-md-6 mb-3">
             <label class="form-label">Interest Cycle <span class="text-danger">*</span></label>
             <select name="interest_cycle" class="form-select select2-single @error('interest_cycle') is-invalid @enderror" required>
                 <option value="">Select Interest Cycle</option>
-                <option value="daily" {{ old('interest_cycle', $loanApplication->interest_cycle ?? '') == 'daily' ? 'selected' : '' }}>Daily</option>
-                <option value="weekly" {{ old('interest_cycle', $loanApplication->interest_cycle ?? '') == 'weekly' ? 'selected' : '' }}>Weekly</option>
-                <option value="monthly" {{ old('interest_cycle', $loanApplication->interest_cycle ?? '') == 'monthly' ? 'selected' : '' }}>Monthly</option>
-                <option value="quarterly" {{ old('interest_cycle', $loanApplication->interest_cycle ?? '') == 'quarterly' ? 'selected' : '' }}>Quarterly</option>
-                <option value="semi_annually" {{ old('interest_cycle', $loanApplication->interest_cycle ?? '') == 'semi_annually' ? 'selected' : '' }}>Semi-Annually</option>
-                <option value="annually" {{ old('interest_cycle', $loanApplication->interest_cycle ?? '') == 'annually' ? 'selected' : '' }}>Annually</option>
+                @isset($interestCycles)
+                    @foreach($interestCycles as $key => $label)
+                        <option value="{{ $key }}" {{ old('interest_cycle', $loanApplication->interest_cycle ?? '') == $key ? 'selected' : '' }}>
+                            {{ $label }}
+                        </option>
+                    @endforeach
+                @else
+                    <option value="daily" {{ old('interest_cycle', $loanApplication->interest_cycle ?? '') == 'daily' ? 'selected' : '' }}>Daily</option>
+                    <option value="weekly" {{ old('interest_cycle', $loanApplication->interest_cycle ?? '') == 'weekly' ? 'selected' : '' }}>Weekly</option>
+                    <option value="bimonthly" {{ old('interest_cycle', $loanApplication->interest_cycle ?? '') == 'bimonthly' ? 'selected' : '' }}>Bi-monthly</option>
+                    <option value="monthly" {{ old('interest_cycle', $loanApplication->interest_cycle ?? '') == 'monthly' ? 'selected' : '' }}>Monthly</option>
+                    <option value="quarterly" {{ old('interest_cycle', $loanApplication->interest_cycle ?? '') == 'quarterly' ? 'selected' : '' }}>Quarterly</option>
+                    <option value="semi_annually" {{ old('interest_cycle', $loanApplication->interest_cycle ?? '') == 'semi_annually' ? 'selected' : '' }}>Semi-Annually</option>
+                    <option value="annually" {{ old('interest_cycle', $loanApplication->interest_cycle ?? '') == 'annually' ? 'selected' : '' }}>Annually</option>
+                @endisset
             </select>
             @error('interest_cycle') <div class="invalid-feedback">{{ $message }}</div> @enderror
         </div>
@@ -382,10 +434,40 @@
 <script>
     const products = @json($products);
     const customers = @json($customers);
+    const productFeesMeta = @json($productFeesMeta);
+    const initialCustomFeeAmounts = @json($initialCustomFeeAmounts);
+    window.productFeesMeta = productFeesMeta;
+    window.initialCustomFeeAmounts = initialCustomFeeAmounts;
+
+    function renderCustomFeeAmountInputs() {
+        const productSelect = document.getElementById('productSelect');
+        const wrap = document.getElementById('customFeeFieldsWrapper');
+        const box = document.getElementById('customFeeFields');
+        if (!productSelect || !wrap || !box) return;
+        const pid = productSelect.value;
+        const fees = (pid && productFeesMeta[pid]) ? productFeesMeta[pid].filter(f => f.fee_type === 'custom') : [];
+        box.innerHTML = '';
+        if (!fees.length) {
+            wrap.style.display = 'none';
+            return;
+        }
+        wrap.style.display = 'block';
+        fees.forEach(f => {
+            const val = (initialCustomFeeAmounts[f.id] !== undefined && initialCustomFeeAmounts[f.id] !== null)
+                ? initialCustomFeeAmounts[f.id]
+                : (initialCustomFeeAmounts[String(f.id)] ?? '');
+            const col = document.createElement('div');
+            col.className = 'col-md-6 mb-3';
+            col.innerHTML = `
+                <label class="form-label">${f.name} <span class="text-danger">*</span></label>
+                <input type="number" class="form-control" name="custom_fee_amounts[${f.id}]" value="${val}" min="0" step="0.01" required>
+            `;
+            box.appendChild(col);
+        });
+    }
 
     document.addEventListener("DOMContentLoaded", function () {
-        const customerSelect = document.getElementById("customerSelect");
-        const groupSelect = document.getElementById("groupSelect");
+        const customerSelect = document.getElementById("customer_id");
         const productSelect = document.getElementById("productSelect");
         const periodInput = document.getElementById("periodInput");
         const interestInput = document.getElementById("interestInput");
@@ -410,32 +492,22 @@
             }
         }
 
-        customerSelect.addEventListener("change", function () {
-            const selectedOption = this.options[this.selectedIndex];
-            const customerGroups = selectedOption.getAttribute('data-groups');
-            
-            // Reset group selection
-            groupSelect.value = '';
-            // If using Select2 or similar, trigger change so UI updates
-            if (typeof $ !== 'undefined' && $(groupSelect).trigger) {
-                $(groupSelect).trigger('change');
-            }
-            
-            if (customerGroups) {
-                try {
-                    const groupIds = JSON.parse(customerGroups);
-                    if (groupIds.length > 0) {
-                        // Auto-select the first group if customer has groups
-                        groupSelect.value = groupIds[0];
-                        if (typeof $ !== 'undefined' && $(groupSelect).trigger) {
-                            $(groupSelect).trigger('change');
-                        }
-                    }
-                } catch (e) {
-                    console.error('Error parsing customer groups:', e);
+        if (customerSelect) {
+            // When customer changes, update hidden group based on first group (same behaviour as direct loan form)
+            if (window.jQuery) {
+                $('#customer_id').on('change', function() {
+                    updateGroupForCustomer(this.value);
+                });
+                $('#customer_id').trigger('change');
+            } else {
+                customerSelect.addEventListener('change', function() {
+                    updateGroupForCustomer(this.value);
+                });
+                if (customerSelect.value) {
+                    updateGroupForCustomer(customerSelect.value);
                 }
             }
-        });
+        }
 
         productSelect.addEventListener("change", function () {
             const selectedId = parseInt(this.value);
@@ -492,16 +564,74 @@
                 interestRangeLabel.innerText = '';
                 amountRangeLabel.innerText = '';
             }
+            renderCustomFeeAmountInputs();
         });
+
+        renderCustomFeeAmountInputs();
 
         // Initialize Select2 for all .select2-single selects
         if (window.jQuery) {
             $('.select2-single').select2({
-                placeholder: 'Select Customer',
+                placeholder: 'Select option',
                 allowClear: true,
                 width: '100%',
                 theme: 'bootstrap-5'
             });
+        }
+
+        // Format number with commas for amount input (same behaviour as direct loans)
+        function formatNumberWithCommas(value) {
+            let numValue = value.toString().replace(/[^\d]/g, '');
+            return numValue.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+        }
+
+        function removeCommas(value) {
+            return value.toString().replace(/,/g, '');
+        }
+
+        if (amountInput) {
+            amountInput.addEventListener('input', function(e) {
+                let value = e.target.value;
+                let cursorPosition = e.target.selectionStart;
+
+                let beforeCursor = value.substring(0, cursorPosition);
+                let commasBefore = (beforeCursor.match(/,/g) || []).length;
+
+                let formatted = formatNumberWithCommas(value);
+
+                let commasAfter = (formatted.substring(0, cursorPosition).match(/,/g) || []).length;
+                let cursorOffset = commasAfter - commasBefore;
+
+                e.target.value = formatted;
+
+                const amountInputHidden = document.getElementById('amountInputHidden');
+                if (amountInputHidden) {
+                    amountInputHidden.value = removeCommas(formatted);
+                }
+
+                let newCursorPosition = cursorPosition + cursorOffset;
+                e.target.setSelectionRange(newCursorPosition, newCursorPosition);
+            });
+
+            amountInput.addEventListener('blur', function(e) {
+                let value = removeCommas(e.target.value);
+                if (value && !isNaN(value)) {
+                    e.target.value = formatNumberWithCommas(value);
+                    const amountInputHidden = document.getElementById('amountInputHidden');
+                    if (amountInputHidden) {
+                        amountInputHidden.value = value;
+                    }
+                }
+            });
+
+            if (amountInput.value) {
+                let initialValue = removeCommas(amountInput.value);
+                amountInput.value = formatNumberWithCommas(initialValue);
+                const amountInputHidden = document.getElementById('amountInputHidden');
+                if (amountInputHidden) {
+                    amountInputHidden.value = initialValue;
+                }
+            }
         }
 
         // On edit, set group from $loanApplication if available
@@ -686,8 +816,15 @@
 
         // Calculate loan in modal
         function calculateLoanInModal() {
-            const formData = $('#loanCalculatorModal #loanCalculatorForm').serialize();
-            
+            let formData = $('#loanCalculatorModal #loanCalculatorForm').serialize();
+            const customParts = [];
+            document.querySelectorAll('#customFeeFields input[name^="custom_fee_amounts"]').forEach(inp => {
+                customParts.push(encodeURIComponent(inp.name) + '=' + encodeURIComponent(inp.value));
+            });
+            if (customParts.length) {
+                formData += (formData.length ? '&' : '') + customParts.join('&');
+            }
+
             $.ajax({
                 url: '{{ route("loan-calculator.calculate") }}',
                 method: 'POST',
@@ -906,7 +1043,14 @@
                 '{{ route("loan-calculator.export-excel") }}';
             
             // Get form data and build query string
-            const formData = $('#loanCalculatorModal #loanCalculatorForm').serialize();
+            let formData = $('#loanCalculatorModal #loanCalculatorForm').serialize();
+            const customParts = [];
+            document.querySelectorAll('#customFeeFields input[name^="custom_fee_amounts"]').forEach(inp => {
+                customParts.push(encodeURIComponent(inp.name) + '=' + encodeURIComponent(inp.value));
+            });
+            if (customParts.length) {
+                formData += (formData.length ? '&' : '') + customParts.join('&');
+            }
             const exportUrl = url + '?' + formData;
             
             // Open in new window

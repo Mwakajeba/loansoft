@@ -164,7 +164,7 @@
                                                 @endcan
 
                                                 @can('edit loan')
-                                                @if(in_array($application->status, ['applied', 'rejected']))
+                                                @if($application->canBeEdited() && $application->usesApplicationEditForm())
                                                 <a href="{{ route('loans.application.edit', Hashids::encode($application->id)) }}"
                                                     class="btn btn-sm btn-outline-warning"
                                                     title="Edit Application">Edit
@@ -179,7 +179,7 @@
                                                 @endcan
                                                 
                                                 @can('delete loan')
-                                                @if(!in_array($application->status, ['authorized', 'checked', 'approved']))
+                                                @if($application->canBeDeleted())
                                                 <button type="button"
                                                     class="btn btn-sm btn-outline-dark"
                                                     title="Delete Application"

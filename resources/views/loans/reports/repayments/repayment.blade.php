@@ -50,11 +50,11 @@
                             <div class="row">
                                 <div class="col-md-6 col-lg-3 mb-3">
                                     <label for="start_date" class="form-label">Start Date</label>
-                                    <input type="date" class="form-control" id="start_date" name="start_date" value="{{ request('start_date', date('Y-m-d')) }}">
+                                    <input type="date" class="form-control" id="start_date" name="start_date" value="{{ $startDate ?? request('start_date', now()->startOfMonth()->format('Y-m-d')) }}">
                                 </div>
                                 <div class="col-md-6 col-lg-3 mb-3">
                                     <label for="end_date" class="form-label">End Date</label>
-                                    <input type="date" class="form-control" id="end_date" name="end_date" value="{{ request('end_date', date('Y-m-d')) }}">
+                                    <input type="date" class="form-control" id="end_date" name="end_date" value="{{ $endDate ?? request('end_date', now()->format('Y-m-d')) }}">
                                 </div>
                                 <div class="col-md-6 col-lg-3 mb-3">
                                     <label for="branch_id" class="form-label">Branch</label>
@@ -114,9 +114,9 @@
                         <div class="row">
                             <div class="col-md-2 mb-3">
                                 <div class="border-l-4 border-blue-500 rounded-lg p-4 bg-gray-50">
-                                    <p class="text-sm font-medium text-gray-500">Total Repayments</p>
+                                    <p class="text-sm font-medium text-gray-500">Total Payments</p>
                                     <h3 class="text-2xl font-bold mt-1 text-blue-600">
-                                        {{ number_format($summary['repayment_count'] ?? 0) }}
+                                        {{ number_format($summary['transaction_count'] ?? 0) }}
                                     </h3>
                                 </div>
                             </div>
@@ -146,7 +146,7 @@
                             </div>
                             <div class="col-md-2 mb-3">
                                 <div class="border-l-4 border-info rounded-lg p-4 bg-gray-50">
-                                    <p class="text-sm font-medium text-gray-500">Total Fees</p>
+                                    <p class="text-sm font-medium text-gray-500">Total Fee Amount</p>
                                     <h3 class="text-2xl font-bold mt-1 text-info">
                                         {{ number_format($summary['total_fees'] ?? 0, 2) }}
                                     </h3>
@@ -154,7 +154,7 @@
                             </div>
                             <div class="col-md-2 mb-3">
                                 <div class="border-l-4 border-danger rounded-lg p-4 bg-gray-50">
-                                    <p class="text-sm font-medium text-gray-500">Total Penalty</p>
+                                    <p class="text-sm font-medium text-gray-500">Total Penalty Amount</p>
                                     <h3 class="text-2xl font-bold mt-1 text-danger">
                                         {{ number_format($summary['total_penalty'] ?? 0, 2) }}
                                     </h3>
@@ -173,54 +173,75 @@
                         <h6 class="mb-0">Repayment Details</h6>
                     </div>
                     <div class="card-body">
-                        @if(isset($repayments) && count($repayments) > 0)
+                        @if(isset($repayments) && (($summary['transaction_count'] ?? 0) > 0))
                         <div class="table-responsive">
                             <table class="table table-bordered table-striped">
                                 <thead>
                                     <tr>
-                                        <th scope="col">Repayment Date</th>
+                                        <th scope="col">Payment Date</th>
                                         <th scope="col">Amount Paid</th>
                                         <th scope="col">Payment Method</th>
-                                         <th scope="col">Loan Officer</th>
+                                        <th scope="col">Loan Officer</th>
                                         <th scope="col">Customer Name</th>
                                         <th scope="col">Loan No</th>
                                         <th scope="col">Loan Product</th>
                                         <th scope="col">Principal</th>
                                         <th scope="col">Interest</th>
-                                        <th scope="col">Fees</th>
-                                        <th scope="col">Penalties</th>
+                                        <th scope="col">Fee Amount</th>
+                                        <th scope="col">Penalty Amount</th>
                                         <th scope="col">Balance</th>
                                         <th scope="col">Branch</th>
-                                         <th scope="col">Group Naame</th>
+                                        <th scope="col">Group Name</th>
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    @foreach($repayments as $repayment)
-                                    <tr>
-                                        <td>{{ \Carbon\Carbon::parse($repayment->payment_date)->format('M d, Y') }}</td>
-                                        <td class="text-right">
-                                            {{ number_format(
-                                            $repayment->principal +
-                                            $repayment->interest +
-                                            $repayment->fee_amount +
-                                            $repayment->penalt_amount,
-                                            2
-                                        ) }}
-                                        </td>
-                                        <td>{{ $repayment->chartAccount->account_name ?? 'N/A'}}</td>
-                                        <td>{{ $repayment->loan->loanOfficer->name ?? 'N/A' }}</td>
-                                        <td>{{ $repayment->loan->customer->name ?? 'N/A' }}</td>
-                                        <td>{{ $repayment->loan->loanNo ?? 'N/A'}}</td>
-                                        <td>{{ $repayment->loan->product->name ?? 'N/A' }}</td>
-                                        <td class="text-right">{{ number_format($repayment->principal, 2) }}</td>
-                                        <td class="text-right">{{ number_format($repayment->interest, 2) }}</td>
-                                        <td class="text-right">{{ number_format($repayment->fee_amount, 2) }}</td>
-                                        <td class="text-right">{{ number_format($repayment->penalt_amount, 2) }}</td>
-                                        <td class="text-right">{{ number_format($repayment->loan->balance, 2) }}</td>
-                                        <td>{{ $repayment->loan->branch->name ?? 'N/A' }}</td>
-                                        <td>{{ $repayment->loan->group->name ?? 'N/A' }}</td>
+                                    @foreach($monthlyGroups as $monthGroup)
+                                    <tr class="table-secondary">
+                                        <td colspan="14" class="fw-bold">{{ $monthGroup->month_label }}</td>
+                                    </tr>
+                                        @forelse($monthGroup->rows as $repayment)
+                                        <tr>
+                                            <td>{{ \Carbon\Carbon::parse($repayment->payment_date)->format('M d, Y') }}</td>
+                                            <td class="text-right">{{ number_format((float) ($repayment->amount_paid ?? 0), 2) }}</td>
+                                            <td>{{ $repayment->payment_method ?? 'N/A' }}</td>
+                                            <td>{{ $repayment->loan_officer_name ?? 'N/A' }}</td>
+                                            <td>{{ $repayment->customer_name ?? 'N/A' }}</td>
+                                            <td>{{ $repayment->loan_no ?? 'N/A' }}</td>
+                                            <td>{{ $repayment->loan_product ?? 'N/A' }}</td>
+                                            <td class="text-right">{{ number_format((float) ($repayment->principal ?? 0), 2) }}</td>
+                                            <td class="text-right">{{ number_format((float) ($repayment->interest ?? 0), 2) }}</td>
+                                            <td class="text-right">{{ number_format((float) ($repayment->fee_amount ?? 0), 2) }}</td>
+                                            <td class="text-right">{{ number_format((float) ($repayment->penalty_amount ?? 0), 2) }}</td>
+                                            <td class="text-right">{{ number_format((float) ($repayment->balance ?? 0), 2) }}</td>
+                                            <td>{{ $repayment->branch_name ?? 'N/A' }}</td>
+                                            <td>{{ $repayment->group_name ?? 'N/A' }}</td>
+                                        </tr>
+                                        @empty
+                                        <tr>
+                                            <td colspan="14" class="text-center text-muted">No payments found for this month.</td>
+                                        </tr>
+                                        @endforelse
+                                    <tr class="table-light fw-bold">
+                                        <td>{{ $monthGroup->month_label }} Total</td>
+                                        <td class="text-right">{{ number_format($monthGroup->summary['total_paid'] ?? 0, 2) }}</td>
+                                        <td colspan="5"></td>
+                                        <td class="text-right">{{ number_format($monthGroup->summary['total_principal'] ?? 0, 2) }}</td>
+                                        <td class="text-right">{{ number_format($monthGroup->summary['total_interest'] ?? 0, 2) }}</td>
+                                        <td class="text-right">{{ number_format($monthGroup->summary['total_fees'] ?? 0, 2) }}</td>
+                                        <td class="text-right">{{ number_format($monthGroup->summary['total_penalty'] ?? 0, 2) }}</td>
+                                        <td colspan="3"></td>
                                     </tr>
                                     @endforeach
+                                    <tr class="table-dark text-white fw-bold">
+                                        <td>Grand Total</td>
+                                        <td class="text-right">{{ number_format($summary['total_paid'] ?? 0, 2) }}</td>
+                                        <td colspan="5"></td>
+                                        <td class="text-right">{{ number_format($summary['total_principal'] ?? 0, 2) }}</td>
+                                        <td class="text-right">{{ number_format($summary['total_interest'] ?? 0, 2) }}</td>
+                                        <td class="text-right">{{ number_format($summary['total_fees'] ?? 0, 2) }}</td>
+                                        <td class="text-right">{{ number_format($summary['total_penalty'] ?? 0, 2) }}</td>
+                                        <td colspan="3"></td>
+                                    </tr>
                                 </tbody>
                             </table>
                         </div>

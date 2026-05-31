@@ -385,11 +385,13 @@
                                         <div class="row">
                                             <div class="col-lg-5">
                                                 <div class="mb-3">
-                                                    <label class="form-label fw-bold">Chart Account <span class="text-danger">*</span></label>
-                                                    <select class="form-select chart-account-select select2-single" name="line_items[${lineItemCount}][chart_account_id]" required>
-                                                        <option value="">-- Select Chart Account --</option>
-                                                        @foreach($chartAccounts as $chartAccount)
-                                                            <option value="{{ $chartAccount->id }}">{{ $chartAccount->account_name }} ({{ $chartAccount->account_code }})</option>
+                                                    <label class="form-label fw-bold">Configured Fee <span class="text-danger">*</span></label>
+                                                    <select class="form-select fee-select select2-single" name="line_items[${lineItemCount}][fee_id]" required>
+                                                        <option value="">-- Select Fee --</option>
+                                                        @foreach($fees as $fee)
+                                                            <option value="{{ $fee->id }}" data-default="{{ $fee->calculated_amount }}">
+                                                                {{ $fee->name }} (Initial: {{ number_format($fee->calculated_amount, 2) }})
+                                                            </option>
                                                         @endforeach
                                                     </select>
                                                 </div>
@@ -448,6 +450,16 @@
                 calculateTotal();
             });
 
+            $(document).on('change', '.fee-select', function () {
+                const selected = $(this).find('option:selected');
+                const defaultAmount = parseFloat(selected.data('default')) || 0;
+                const amountInput = $(this).closest('.line-item-row').find('.amount-input');
+                if (!amountInput.val() || parseFloat(amountInput.val()) <= 0) {
+                    amountInput.val(defaultAmount > 0 ? defaultAmount.toFixed(2) : '');
+                    calculateTotal();
+                }
+            });
+
             // Form validation
             $('#receiptVoucherForm').submit(function (e) {
                 console.log('Form submission started');
@@ -499,12 +511,12 @@
 
                 // Check line items
                 $('.line-item-row').each(function (index) {
-                    const accountSelect = $(this).find('.chart-account-select');
+                    const feeSelect = $(this).find('.fee-select');
                     const amountInput = $(this).find('.amount-input');
 
-                    if (!accountSelect.val()) {
-                        accountSelect.addClass('is-invalid');
-                        accountSelect.after('<div class="invalid-feedback">Please select an account.</div>');
+                    if (!feeSelect.val()) {
+                        feeSelect.addClass('is-invalid');
+                        feeSelect.after('<div class="invalid-feedback">Please select a fee.</div>');
                         hasErrors = true;
                     }
 

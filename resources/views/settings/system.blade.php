@@ -107,6 +107,10 @@
                                                         
                                                         @if($setting->type === 'boolean')
                                                             <div class="form-check form-switch">
+                                                                {{-- Ensure unchecked checkbox submits 0 --}}
+                                                                <input type="hidden"
+                                                                       name="settings[{{ $setting->key }}]"
+                                                                       value="0">
                                                                 <input class="form-check-input" 
                                                                        type="checkbox" 
                                                                        id="{{ $setting->key }}" 
@@ -192,6 +196,26 @@
                                                                 <option value="notice" {{ $setting->value === 'notice' ? 'selected' : '' }}>Notice</option>
                                                                 <option value="info" {{ $setting->value === 'info' ? 'selected' : '' }}>Info</option>
                                                                 <option value="debug" {{ $setting->value === 'debug' ? 'selected' : '' }}>Debug</option>
+                                                            </select>
+                                                        @elseif($setting->key === 'loan_rounding_method')
+                                                            <select class="form-select"
+                                                                    id="{{ $setting->key }}"
+                                                                    name="settings[{{ $setting->key }}]"
+                                                                    @cannot('edit system configurations') disabled @endcannot>
+                                                                <option value="nearest" {{ $setting->value === 'nearest' ? 'selected' : '' }}>Nearest</option>
+                                                                <option value="up" {{ $setting->value === 'up' ? 'selected' : '' }}>Round Up</option>
+                                                                <option value="down" {{ $setting->value === 'down' ? 'selected' : '' }}>Round Down</option>
+                                                            </select>
+                                                        @elseif($setting->key === 'loan_rounding_step')
+                                                            <select class="form-select"
+                                                                    id="{{ $setting->key }}"
+                                                                    name="settings[{{ $setting->key }}]"
+                                                                    @cannot('edit system configurations') disabled @endcannot>
+                                                                @foreach([1,5,10,50,100,500,1000] as $step)
+                                                                    <option value="{{ $step }}" {{ (int) $setting->value === (int) $step ? 'selected' : '' }}>
+                                                                        {{ $step }}
+                                                                    </option>
+                                                                @endforeach
                                                             </select>
                                                         @elseif($setting->key === 'mail_encryption')
                                                             <select class="form-select" 

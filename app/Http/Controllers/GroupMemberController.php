@@ -174,37 +174,72 @@ class GroupMemberController extends Controller
     }
 
     /**
-     * Remove a member from the group.
+     * Remove a member from the group (URL member id = group_members.id).
      */
-    public function destroy($encodedId, GroupMember $member)
+    public function destroy(Request $request, $encodedId, $member)
     {
-        // Decode the ID
         $decoded = Hashids::decode($encodedId);
         if (empty($decoded)) {
+            if ($request->ajax()) {
+                return response()->json(['success' => false, 'message' => 'Group not found.'], 404);
+            }
             return redirect()->route('groups.index')->withErrors(['Group not found.']);
         }
 
         $group = Group::findOrFail($decoded[0]);
 
-        // Ensure the member belongs to this group
-        if ($member->group_id !== $group->id) {
+        $groupMember = $member instanceof GroupMember
+            ? $member
+            : GroupMember::where('group_id', $group->id)->where('id', $member)->first();
+
+        if (!$groupMember || $groupMember->group_id !== $group->id) {
+            if ($request->ajax()) {
+                return response()->json(['success' => false, 'message' => 'Member not found in this group.'], 404);
+            }
             return redirect()->back()->with('error', 'Invalid member.');
         }
 
-        // ✅ Check kama ana mkopo
-        $hasLoan = Loan::where('customer_id', $member->customer_id)
-            ->where('status', 'active')
-            ->exists();
+        $customerId = $groupMember->customer_id;
 
-        if ($hasLoan) {
-            return redirect()->back()->with('error', 'Cannot remove member with active loan.');
+        if ($group->memberHasOngoingLoans($customerId)) {
+            if ($request->ajax()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Cannot remove member. They have ongoing loans in this group that must be completed first.',
+                ], 422);
+            }
+            return redirect()->back()->with('error', 'Cannot remove member. They have ongoing loans in this group that must be completed first.');
         }
 
         try {
-            $member->delete();
+            $groupMember->delete();
+
+            if ($group->group_leader == $customerId) {
+                $group->update(['group_leader' => null]);
+            }
+
+            $individualGroupId = Group::getIndividualGroupId();
+            $individualGroup = Group::find($individualGroupId);
+            if ($individualGroup && !$individualGroup->members()->where('customer_id', $customerId)->exists()) {
+                $individualGroup->members()->attach($customerId, [
+                    'joined_date' => now(),
+                    'status' => 'active',
+                ]);
+            }
+
+            if ($request->ajax()) {
+                return response()->json([
+                    'success' => true,
+                    'message' => 'Member removed and assigned to individual group successfully.',
+                ]);
+            }
+
             return redirect()->route('groups.show', Hashids::encode($group->id))
-                ->with('success', 'Member removed successfully!');
+                ->with('success', 'Member removed from group and assigned to individual group successfully!');
         } catch (\Exception $e) {
+            if ($request->ajax()) {
+                return response()->json(['success' => false, 'message' => 'Failed to remove member. Please try again.'], 500);
+            }
             return redirect()->back()->with('error', 'Failed to remove member. Please try again.');
         }
     }

@@ -404,6 +404,7 @@ class PermissionGroupsSeeder extends Seeder
                 'view other income report',
                 'view budget report',
                 'view bank reconciliation report',
+                'view loan crb report',
             ],
 
             'chat' => [

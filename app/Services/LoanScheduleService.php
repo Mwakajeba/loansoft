@@ -10,35 +10,40 @@ use Illuminate\Support\Facades\Log;
 class LoanScheduleService
 {
     /**
-     * Update accrued interest in loan schedules
-     *
-     * @param Loan $loan
-     * @param float $dailyInterestAmount
-     * @param Carbon $date
-     * @return void
+     * Add daily accrued interest to the active (first unpaid) schedule.
      */
     public function updateAccruedInterest(Loan $loan, float $dailyInterestAmount, Carbon $date): void
     {
-        // Get the next unpaid or partially paid schedule
-        $nextSchedule = LoanSchedule::where('loan_id', $loan->id)
-            ->where('due_date', '>=', $date)
-            ->orderBy('due_date', 'asc')
-            ->first();
+        $schedule = $this->resolveAccrualTargetSchedule($loan);
 
-        if ($nextSchedule) {
-            // Add daily interest to accrued_interest
-            $nextSchedule->increment('accrued_interest', $dailyInterestAmount);
-            Log::info("Added {$dailyInterestAmount} to accrued_interest for schedule ID {$nextSchedule->id}, due date: {$nextSchedule->due_date}");
-        } else {
-            // If no future schedule, add to the last schedule
-            $lastSchedule = LoanSchedule::where('loan_id', $loan->id)
-                ->orderBy('due_date', 'desc')
-                ->first();
-            
-            if ($lastSchedule) {
-                $lastSchedule->increment('accrued_interest', $dailyInterestAmount);
-                Log::info("Added {$dailyInterestAmount} to accrued_interest for last schedule ID {$lastSchedule->id}");
+        if (!$schedule) {
+            Log::warning("Loan {$loan->loanNo}: no schedule found for daily interest accrual.");
+
+            return;
+        }
+
+        $schedule->increment('accrued_interest', $dailyInterestAmount);
+        Log::info("Added {$dailyInterestAmount} to accrued_interest for schedule ID {$schedule->id}, due {$schedule->due_date}");
+    }
+
+    /**
+     * First schedule with remaining balance; else last schedule on the loan.
+     */
+    public function resolveAccrualTargetSchedule(Loan $loan): ?LoanSchedule
+    {
+        $loan->loadMissing(['schedule.repayments', 'product']);
+
+        $schedules = $loan->schedule
+            ->where('status', '!=', 'restructured')
+            ->sortBy('due_date');
+
+        foreach ($schedules as $schedule) {
+            $schedule->setRelation('loan', $loan);
+            if ($schedule->remaining_amount > 0.01) {
+                return $schedule;
             }
         }
+
+        return $schedules->last();
     }
 }

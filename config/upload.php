@@ -11,7 +11,7 @@ return [
     |
     */
 
-    'max_file_size' => env('UPLOAD_MAX_FILE_SIZE', 51200), // 50MB in KB
+    'max_file_size' => env('UPLOAD_MAX_FILE_SIZE', 30720), // 30MB in KB (override via .env)
     'max_files' => env('UPLOAD_MAX_FILES', 10),
     'allowed_mimes' => [
         'pdf',

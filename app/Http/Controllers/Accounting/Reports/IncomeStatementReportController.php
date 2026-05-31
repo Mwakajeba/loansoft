@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Accounting\Reports;
 
 use App\Http\Controllers\Controller;
+use App\Support\Accounting\GlTransactionReportFilter;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -96,7 +97,7 @@ class IncomeStatementReportController extends Controller
         $company = $user->company;
 
         // Build the base query for income accounts
-        $incomeQuery = DB::table('gl_transactions')
+        $incomeQuery = GlTransactionReportFilter::apply(DB::table('gl_transactions'))
             ->join('chart_accounts', 'gl_transactions.chart_account_id', '=', 'chart_accounts.id')
             ->join('account_class_groups', 'chart_accounts.account_class_group_id', '=', 'account_class_groups.id')
             ->join('account_class', 'account_class_groups.class_id', '=', 'account_class.id')
@@ -105,7 +106,7 @@ class IncomeStatementReportController extends Controller
             ->whereIn('account_class.name', ['income', 'revenue']);
 
         // Build the base query for expense accounts
-        $expenseQuery = DB::table('gl_transactions')
+        $expenseQuery = GlTransactionReportFilter::apply(DB::table('gl_transactions'))
             ->join('chart_accounts', 'gl_transactions.chart_account_id', '=', 'chart_accounts.id')
             ->join('account_class_groups', 'chart_accounts.account_class_group_id', '=', 'account_class_groups.id')
             ->join('account_class', 'account_class_groups.class_id', '=', 'account_class.id')

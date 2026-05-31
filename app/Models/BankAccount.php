@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Traits\LogsActivity;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use App\Models\User;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
@@ -41,6 +42,38 @@ class BankAccount extends Model
     public function branch(): BelongsTo
     {
         return $this->belongsTo(Branch::class, 'branch_id');
+    }
+
+    /**
+     * Whether this bank account is usable for the given user / active branch.
+     * Uses branch_id + is_all_branches (no bank_branches pivot).
+     */
+    public function isAccessibleByUser(?User $user = null): bool
+    {
+        $user = $user ?? auth()->user();
+        if (!$user) {
+            return false;
+        }
+
+        if ($this->is_all_branches) {
+            return true;
+        }
+
+        $currentBranchId = function_exists('current_branch_id') ? current_branch_id() : null;
+        if (!$currentBranchId) {
+            $currentBranchId = $user->branch_id;
+        }
+
+        if ($currentBranchId && (int) $this->branch_id === (int) $currentBranchId) {
+            return true;
+        }
+
+        $userBranchIds = $user->branches()->pluck('branches.id')->map(fn ($id) => (int) $id)->all();
+        if (empty($userBranchIds)) {
+            return false;
+        }
+
+        return $this->branch_id && in_array((int) $this->branch_id, $userBranchIds, true);
     }
 
     /**

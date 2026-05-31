@@ -13,8 +13,6 @@ use App\Models\Region;
 use App\Models\District;
 use App\Models\User;
 use App\Models\CashCollateralType;
-use App\Models\Receipt;
-use App\Services\LoanDeletionService;
 use App\Models\Filetype;
 use App\Services\LoanPenaltyService;
 use App\Exports\CustomerBulkUploadSampleExport;
@@ -25,7 +23,6 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Spatie\Permission\Models\Role;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Schema;
 use Vinkla\Hashids\Facades\Hashids;
 use Yajra\DataTables\Facades\DataTables;
 use Maatwebsite\Excel\Facades\Excel;
@@ -69,7 +66,7 @@ class CustomerController extends Controller
         // Return as is if already in correct format
         return $phoneNumber;
     }
-    
+
     /**
      * Validate National ID and extract information
      */
@@ -79,42 +76,42 @@ class CustomerController extends Controller
         if (!preg_match('/^(\d{4})(\d{2})(\d{2})-(\d{5})-(\d{5})-(\d{2})$/', $nationalId, $matches)) {
             return ['valid' => false, 'message' => 'Invalid National ID format'];
         }
-        
+
         $year = (int)$matches[1];
         $month = (int)$matches[2];
         $day = (int)$matches[3];
         $lastTwoDigits = $matches[6];
-        
+
         // Validate date
         if (!checkdate($month, $day, $year)) {
             return ['valid' => false, 'message' => 'Invalid date in National ID'];
         }
-        
+
         // Extract date from National ID
         $idDate = \Carbon\Carbon::create($year, $month, $day);
-        
+
         // Compare with entered DOB
         $enteredDob = \Carbon\Carbon::parse($dob);
         if (!$idDate->isSameDay($enteredDob)) {
             return ['valid' => false, 'message' => 'Date of Birth does not match National ID date'];
         }
-        
+
         // Validate age (must be 18 or older)
         $age = $idDate->age;
         if ($age < 18) {
             return ['valid' => false, 'message' => 'Age from National ID must be 18 years or older'];
         }
-        
+
         // Validate sex - second digit from last (first digit of last two digits)
         $secondFromLast = (int)substr($lastTwoDigits, 0, 1);
         $expectedSexCode = $sex === 'M' ? 2 : 1;
-        
+
         if ($secondFromLast !== $expectedSexCode) {
             $expectedSex = $sex === 'M' ? 'Male' : 'Female';
             $actualSex = $secondFromLast === 2 ? 'Male' : 'Female';
             return ['valid' => false, 'message' => "Sex does not match National ID. National ID indicates {$actualSex}, but you selected {$expectedSex}"];
         }
-        
+
         return ['valid' => true];
     }
 
@@ -125,8 +122,11 @@ class CustomerController extends Controller
         $borrowerCount = Customer::where('category', 'Borrower')->where('branch_id', $branchId)->count();
         $guarantorCount = Customer::where('category', 'Guarantor')->where('branch_id', $branchId)->count();
         $customerCount = Customer::where('branch_id', $branchId)->count();
+        $todayNewCustomerCount = Customer::where('branch_id', $branchId)
+            ->whereDate('created_at', today())
+            ->count();
 
-        return view('customers.index', compact('borrowerCount', 'guarantorCount', 'customerCount'));
+        return view('customers.index', compact('borrowerCount', 'guarantorCount', 'customerCount', 'todayNewCustomerCount'));
     }
 
     // Ajax endpoint for DataTables
@@ -138,6 +138,14 @@ class CustomerController extends Controller
             $customers = Customer::with(['branch', 'company', 'user', 'region', 'district'])
                 ->where('branch_id', $branchId)
                 ->select('customers.*');
+
+            $filter = $request->input('filter', 'all');
+            match ($filter) {
+                'borrower' => $customers->where('category', 'Borrower'),
+                'guarantor' => $customers->where('category', 'Guarantor'),
+                'today' => $customers->whereDate('created_at', today()),
+                default => null,
+            };
 
             return DataTables::eloquent($customers)
                 ->addColumn('avatar_name', function ($customer) {
@@ -196,9 +204,19 @@ class CustomerController extends Controller
     /////////DISPLAY ALL CUSTOMER WITH PENALTY AMOUNT  FOR THEIR LAON ///////
     public function penaltList()
     {
-        $customerPenalties = LoanPenaltyService::getCustomerPenaltyBalances();
-        $penaltyBalance = LoanPenaltyService::getTotalPenaltyBalance();
-        return view('customers.penalty', compact('customerPenalties', 'penaltyBalance'));
+        $branchId = auth()->user()->branch_id ?? null;
+
+        $customerPenalties = LoanPenaltyService::getCustomerPenaltyComparison($branchId);
+        $penaltyBalance = LoanPenaltyService::getTotalPenaltyBalance($branchId);
+        $penaltyGlBalance = LoanPenaltyService::getTotalPenaltyGlBalance($branchId);
+        $penaltyDifference = round($penaltyGlBalance - $penaltyBalance, 2);
+
+        return view('customers.penalty', compact(
+            'customerPenalties',
+            'penaltyBalance',
+            'penaltyGlBalance',
+            'penaltyDifference'
+        ));
     }
 
     // Show form to create a new customer
@@ -285,6 +303,25 @@ class CustomerController extends Controller
         $data['dateRegistered'] = $date;
         $data['has_cash_collateral'] = $request->has('has_cash_collateral');
 
+        // Uniqueness checks must run BEFORE insert. The previous code checked after create()
+        // so where('phone1', ...) always matched the row just inserted and aborted every save.
+        if (Customer::where('phone1', $data['phone1'])->exists()) {
+            return back()->withInput()->with('error', 'Phone number already exists.');
+        }
+        if (!empty($data['phone2'])) {
+            if (
+                Customer::where('phone2', $data['phone2'])->exists()
+                || Customer::where('phone1', $data['phone2'])->exists()
+            ) {
+                return back()->withInput()->with('error', 'Phone number already exists.');
+            }
+        }
+        if (!empty($data['idType']) && !empty($data['idNumber'])) {
+            if (Customer::where('idType', $data['idType'])->where('idNumber', $data['idNumber'])->exists()) {
+                return back()->withInput()->with('error', 'ID number already exists.');
+            }
+        }
+
         // Upload photo
         if ($request->hasFile('photo')) {
             $data['photo'] = $request->file('photo')->store('photos', 'public');
@@ -297,7 +334,7 @@ class CustomerController extends Controller
 
         DB::beginTransaction();
         try {
-            $customer = \App\Models\Customer::create($data);
+            $customer = Customer::create($data);
 
             // Save group membership - check if customer is already in a group first
             $existingMembership = DB::table('group_members')->where('customer_id', $customer->id)->first();
@@ -386,7 +423,7 @@ class CustomerController extends Controller
             abort(404);
         }
 
-        $customer = Customer::with('collaterals.type', 'loans', 'loanOfficers', 'filetypes')->findOrFail($id);
+        $customer = Customer::with('collaterals.type', 'loans', 'loanOfficers', 'filetypes', 'groups')->findOrFail($id);
 
         return view('customers.show', compact('customer'));
     }
@@ -590,135 +627,6 @@ class CustomerController extends Controller
         }
     }
 
-    /**
-     * Remove financial and activity records for a customer (when they have no loans).
-     */
-    protected function deleteCustomerTransactionalData(int $customerId): void
-    {
-        if (Schema::hasTable('repayments')) {
-            $repaymentIds = DB::table('repayments')->where('customer_id', $customerId)->pluck('id')->all();
-            if (!empty($repaymentIds) && Schema::hasTable('receipts')) {
-                $repaymentReceiptIds = DB::table('receipts')
-                    ->whereIn('reference', $repaymentIds)
-                    ->where('reference_type', 'loan_repayment')
-                    ->pluck('id')
-                    ->all();
-                if (!empty($repaymentReceiptIds)) {
-                    DB::table('gl_transactions')
-                        ->whereIn('transaction_id', $repaymentReceiptIds)
-                        ->whereIn('transaction_type', ['receipt', 'receipt_reversal'])
-                        ->delete();
-                    if (Schema::hasTable('receipt_items')) {
-                        DB::table('receipt_items')->whereIn('receipt_id', $repaymentReceiptIds)->delete();
-                    }
-                    DB::table('receipts')->whereIn('id', $repaymentReceiptIds)->delete();
-                }
-            }
-            DB::table('gl_transactions')
-                ->whereIn('transaction_id', $repaymentIds)
-                ->delete();
-            DB::table('repayments')->where('customer_id', $customerId)->delete();
-        }
-
-        if (Schema::hasTable('receipts')) {
-            $receiptIds = Receipt::withTrashed()
-                ->where(function ($query) use ($customerId) {
-                    $query->where('customer_id', $customerId)
-                        ->orWhere(function ($q) use ($customerId) {
-                            $q->where('payee_type', 'customer')->where('payee_id', $customerId);
-                        });
-                })
-                ->pluck('id')
-                ->all();
-            if (!empty($receiptIds)) {
-                DB::table('gl_transactions')
-                    ->whereIn('transaction_id', $receiptIds)
-                    ->whereIn('transaction_type', ['receipt', 'receipt_reversal'])
-                    ->delete();
-                if (Schema::hasTable('receipt_items')) {
-                    DB::table('receipt_items')->whereIn('receipt_id', $receiptIds)->delete();
-                }
-                Receipt::withTrashed()->whereIn('id', $receiptIds)->forceDelete();
-            }
-        }
-
-        if (Schema::hasTable('payments')) {
-            $paymentQuery = DB::table('payments')->where(function ($query) use ($customerId) {
-                $query->where('customer_id', $customerId)
-                    ->orWhere(function ($q) use ($customerId) {
-                        $q->where('payee_type', 'customer')->where('payee_id', $customerId);
-                    });
-            });
-            $paymentIds = (clone $paymentQuery)->pluck('id')->all();
-            if (!empty($paymentIds)) {
-                DB::table('gl_transactions')
-                    ->whereIn('transaction_id', $paymentIds)
-                    ->where('transaction_type', 'payment')
-                    ->delete();
-                if (Schema::hasTable('payment_items')) {
-                    DB::table('payment_items')->whereIn('payment_id', $paymentIds)->delete();
-                }
-                $paymentQuery->delete();
-            }
-        }
-
-        if (Schema::hasTable('journals')) {
-            $journalIds = DB::table('journals')->where('customer_id', $customerId)->pluck('id')->all();
-            if (!empty($journalIds)) {
-                DB::table('gl_transactions')
-                    ->whereIn('transaction_id', $journalIds)
-                    ->whereIn('transaction_type', ['journal', 'journal repayment', 'Withdrawal'])
-                    ->delete();
-                if (Schema::hasTable('journal_items')) {
-                    DB::table('journal_items')->whereIn('journal_id', $journalIds)->delete();
-                }
-                DB::table('journals')->whereIn('id', $journalIds)->delete();
-            }
-        }
-
-        DB::table('gl_transactions')->where('customer_id', $customerId)->delete();
-
-        if (Schema::hasTable('cash_collaterals')) {
-            DB::table('cash_collaterals')->where('customer_id', $customerId)->delete();
-        }
-
-        if (Schema::hasTable('loan_schedules')) {
-            DB::table('loan_schedules')->where('customer_id', $customerId)->delete();
-        }
-
-        if (Schema::hasTable('loan_writeoffs')) {
-            DB::table('loan_writeoffs')->where('customer_id', $customerId)->delete();
-        }
-
-        if (Schema::hasTable('loan_guarantor')) {
-            DB::table('loan_guarantor')->where('customer_id', $customerId)->delete();
-        }
-
-        if (Schema::hasTable('complains')) {
-            DB::table('complains')->where('customer_id', $customerId)->delete();
-        }
-
-        if (Schema::hasTable('sms_logs')) {
-            DB::table('sms_logs')->where('customer_id', $customerId)->delete();
-        }
-
-        if (Schema::hasTable('customer_file_types')) {
-            DB::table('customer_file_types')->where('customer_id', $customerId)->delete();
-        }
-
-        if (Schema::hasTable('customer_officer')) {
-            DB::table('customer_officer')->where('customer_id', $customerId)->delete();
-        }
-
-        if (Schema::hasTable('group_members')) {
-            DB::table('group_members')->where('customer_id', $customerId)->delete();
-        }
-
-        if (Schema::hasTable('groups')) {
-            DB::table('groups')->where('group_leader', $customerId)->update(['group_leader' => null]);
-        }
-    }
-
     // Delete customer
     public function destroy($id)
     {
@@ -726,21 +634,35 @@ class CustomerController extends Controller
         try {
             $customer = Customer::findOrFail($decoded);
 
+            // Check for existing loans, cash collaterals, or GL transactions
+
             //check if member is in any group then he need to delete that mmeber from that group
             $existingMembership = DB::table('group_members')->where('customer_id', $customer->id)->where('group_id', '!=', 1)->first();
             if ($existingMembership) {
                 return redirect()->route('customers.index')->with('error', 'Customer is a member of a group. Please remove them from the group first.');
             }
+            $hasLoans = $customer->loans()->exists();
+            $hasCollaterals = $customer->collaterals()->exists();
+            $hasGLTransactions = \DB::table('gl_transactions')->where('customer_id', $customer->id)->exists();
 
-            DB::beginTransaction();
-            (new LoanDeletionService())->deleteAllForCustomer($customer->id);
-            $this->deleteCustomerTransactionalData($customer->id);
+            if ($hasLoans || $hasCollaterals || $hasGLTransactions) {
+                $msg = 'Cannot delete customer: ';
+                if ($hasLoans) {
+                    $msg .= 'Customer has existing loans. ';
+                }
+                if ($hasCollaterals) {
+                    $msg .= 'Customer has cash collaterals. ';
+                }
+                if ($hasGLTransactions) {
+                    $msg .= 'Customer has transactions.';
+                }
+                return redirect()->route('customers.index')->with('error', $msg);
+            }
+
             $customer->delete();
-            DB::commit();
 
             return redirect()->route('customers.index')->with('success', 'Customer deleted successfully.');
         } catch (\Exception $e) {
-            DB::rollBack();
             return back()->with('error', 'Failed to delete customer: ' . $e->getMessage());
         }
     }
@@ -778,15 +700,15 @@ class CustomerController extends Controller
                 $spreadsheet = IOFactory::load($path);
                 $worksheet = $spreadsheet->getActiveSheet();
                 $rows = $worksheet->toArray();
-                
+
                 if (empty($rows)) {
                     return back()->withErrors(['csv_file' => 'Excel file is empty.']);
                 }
-                
+
                 // Find header row (skip instruction rows)
                 $headerRowIndex = 0;
                 $header = [];
-                
+
                 // Look for header row - it should contain at least 'name' and 'phone1'
                 // Check more rows to handle instruction rows
                 for ($i = 0; $i < min(20, count($rows)); $i++) {
@@ -794,23 +716,23 @@ class CustomerController extends Controller
                         $value = is_null($cell) ? '' : (string)$cell;
                         return strtolower(trim($value));
                     }, $rows[$i]);
-                    
+
                     // Skip rows that are clearly not headers (empty, instructions, etc.)
                     $nonEmptyCells = array_filter($potentialHeader, function($val) {
-                        return !empty($val) && 
+                        return !empty($val) &&
                                !preg_match('/^(instruction|note|delete|fill|use|template|customer bulk)/i', $val);
                     });
-                    
+
                     if (count($nonEmptyCells) < 4) {
                         continue; // Skip rows with too few columns
                     }
-                    
+
                     // Normalize column names (remove spaces, handle variations)
                     $normalizedHeader = array_map(function($col) {
                         $col = strtolower(trim($col));
                         $col = preg_replace('/\s+/', '', $col); // Remove spaces
                         $col = preg_replace('/[^a-z0-9_]/', '', $col); // Remove special chars
-                        
+
                         // Handle common variations
                         $variations = [
                             'name' => ['name', 'fullname', 'full_name', 'customername', 'customer_name', 'fullname'],
@@ -828,7 +750,7 @@ class CustomerController extends Controller
                             'description' => ['description', 'desc', 'notes'],
                             'category' => ['category', 'role', 'borrower_guarantor', 'customer_type', 'customertype'],
                         ];
-                        
+
                         foreach ($variations as $standard => $aliases) {
                             if (in_array($col, $aliases)) {
                                 return $standard;
@@ -836,25 +758,25 @@ class CustomerController extends Controller
                         }
                         return $col;
                     }, $potentialHeader);
-                    
+
                     // Check if this row contains required columns (name and phone1)
                     $hasName = in_array('name', $normalizedHeader);
                     $hasPhone1 = in_array('phone1', $normalizedHeader);
-                    
+
                     if ($hasName && $hasPhone1) {
                         $header = $normalizedHeader;
                         $headerRowIndex = $i;
                         break;
                     }
                 }
-                
+
                 if (empty($header)) {
                     return back()->withErrors(['csv_file' => 'Could not find header row. Please ensure the file has columns: name, phone1, dob, sex']);
                 }
-                
+
                 // Remove rows before header and the header row itself
                 $rows = array_slice($rows, $headerRowIndex + 1);
-                
+
                 // Convert rows to associative arrays
                 foreach ($rows as $row) {
                     $rowData = [];
@@ -868,16 +790,16 @@ class CustomerController extends Controller
             } else {
                 // Read CSV file
                 $csvData = array_map('str_getcsv', file($path));
-                
+
                 // Find header row
                 $headerRowIndex = 0;
                 $header = [];
-                
+
                 for ($i = 0; $i < min(10, count($csvData)); $i++) {
                     $potentialHeader = array_map(function($cell) {
                         return strtolower(trim($cell ?? ''));
                     }, $csvData[$i]);
-                    
+
                     // Normalize column names
                     $normalizedHeader = array_map(function($col) {
                         $col = strtolower(trim($col));
@@ -898,7 +820,7 @@ class CustomerController extends Controller
                             'description' => ['description', 'desc', 'notes'],
                             'category' => ['category', 'role', 'borrower_guarantor', 'customer_type', 'customertype'],
                         ];
-                        
+
                         foreach ($variations as $standard => $aliases) {
                             if (in_array($col, $aliases)) {
                                 return $standard;
@@ -906,21 +828,21 @@ class CustomerController extends Controller
                         }
                         return $col;
                     }, $potentialHeader);
-                    
+
                     if (in_array('name', $normalizedHeader) && in_array('phone1', $normalizedHeader)) {
                         $header = $normalizedHeader;
                         $headerRowIndex = $i;
                         break;
                     }
                 }
-                
+
                 if (empty($header)) {
                     return back()->withErrors(['csv_file' => 'Could not find header row. Please ensure the file has columns: name, phone1, dob, sex']);
                 }
-                
+
                 // Remove rows before header and the header row itself
                 $csvData = array_slice($csvData, $headerRowIndex + 1);
-                
+
                 // Convert rows to associative arrays
                 foreach ($csvData as $row) {
                     if (count($row) >= count($header)) {
@@ -943,8 +865,8 @@ class CustomerController extends Controller
                 $foundColumns = implode(', ', array_keys(array_intersect_key($header, array_flip($requiredColumns))));
                 $allFoundColumns = implode(', ', array_keys($header));
                 return back()->withErrors([
-                    'csv_file' => 'Missing required columns: ' . implode(', ', $missingColumns) . 
-                    '. Found columns: ' . ($allFoundColumns ?: 'none') . 
+                    'csv_file' => 'Missing required columns: ' . implode(', ', $missingColumns) .
+                    '. Found columns: ' . ($allFoundColumns ?: 'none') .
                     '. Please ensure your file has the correct header row with: name, phone1, dob, sex'
                 ]);
             }
@@ -967,14 +889,14 @@ class CustomerController extends Controller
             $failedRecords = [];
 
             DB::beginTransaction();
-            
+
             try {
                 foreach ($chunks as $chunkIndex => $chunk) {
                     Log::info("Processing chunk {$chunkIndex} of {$totalChunks}", [
                         'chunk_size' => count($chunk),
                         'user_id' => auth()->id()
                     ]);
-                    
+
                     foreach ($chunk as $rowIndex => $rowData) {
                         try {
                             // Validate required fields
@@ -1093,11 +1015,11 @@ class CustomerController extends Controller
 
                 if ($errorCount > 0) {
                     DB::rollBack();
-                    
+
                     // Store failed records in session for export
                     $failedExportKey = 'failed_customer_upload_' . time();
                     session([$failedExportKey => $failedRecords]);
-                    
+
                     return back()
                         ->withErrors(['csv_file' => "Upload completed with errors. {$errorCount} rows failed, {$successCount} rows succeeded."])
                         ->with('upload_errors', $errors)
@@ -1126,17 +1048,17 @@ class CustomerController extends Controller
             return back()->withErrors(['csv_file' => 'Failed to process file: ' . $e->getMessage()]);
         }
     }
-    
+
     // Download failed records export
     public function downloadFailedRecords(Request $request)
     {
         $exportKey = $request->get('key');
         $failedRecords = session($exportKey, []);
-        
+
         if (empty($failedRecords)) {
             return back()->withErrors(['error' => 'Failed records not found.']);
         }
-        
+
         $filename = 'failed_customer_upload_' . date('Y-m-d_His') . '.xlsx';
         return Excel::download(new CustomerBulkUploadFailedExport($failedRecords), $filename);
     }
@@ -1147,7 +1069,7 @@ class CustomerController extends Controller
         $filename = 'customer_bulk_upload_sample_' . date('Y-m-d') . '.xlsx';
         return Excel::download(new CustomerBulkUploadSampleExport(), $filename);
     }
-    
+
     // Old CSV download method (kept for backward compatibility)
     public function downloadSampleCSV()
     {

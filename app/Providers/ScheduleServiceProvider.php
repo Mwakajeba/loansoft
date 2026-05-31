@@ -2,50 +2,60 @@
 
 namespace App\Providers;
 
-use App\Jobs\CollectMatureInterestJob;
-use App\Jobs\RepaymentReminderJob;
-use App\Jobs\CheckSubscriptionExpiryJob;
-use Illuminate\Support\ServiceProvider;
 use Illuminate\Console\Scheduling\Schedule;
+use Illuminate\Support\ServiceProvider;
 
+/**
+ * All scheduled tasks run synchronously (--sync) so cron only needs:
+ *   php artisan schedule:run
+ * No queue worker required.
+ */
 class ScheduleServiceProvider extends ServiceProvider
 {
-    /**
-     * Register services.
-     */
     public function register(): void
     {
         //
     }
 
-    /**
-     * Bootstrap services.
-     */
     public function boot(): void
     {
         $this->app->booted(function () {
             $schedule = $this->app->make(Schedule::class);
 
-            // Mature interest & penalty collection — daily at midnight
-            $schedule->job(new CollectMatureInterestJob())
+            // 00:00 — Subscription expiry check
+            $schedule->command('subscription:check-expiry')
                 ->dailyAt('00:00')
-                ->withoutOverlapping()
+                ->withoutOverlapping(120)
+                ->onOneServer()
+                ->appendOutputTo(storage_path('logs/subscription-expiry-check.log'));
+
+            // 00:05 — Penalty accrual (Penalties from /accounting/penalties)
+            $schedule->command('accounting:accrue-penalties --sync --no-daily-interest')
+                ->dailyAt('00:05')
+                ->withoutOverlapping(120)
+                ->onOneServer()
+                ->appendOutputTo(storage_path('logs/penalty-accrual.log'));
+
+            // 00:10 — Daily interest accrual (products with Daily method only)
+            $schedule->command('loans:accrue-daily-interest')
+                ->dailyAt('00:10')
+                ->withoutOverlapping(120)
+                ->onOneServer()
+                ->appendOutputTo(storage_path('logs/daily-interest-accrual.log'));
+
+            // 00:15 — Mature interest GL (As Expected products, due today)
+            $schedule->command('loans:collect-mature-interest')
+                ->dailyAt('00:15')
+                ->withoutOverlapping(120)
                 ->onOneServer()
                 ->appendOutputTo(storage_path('logs/mature-interest-collection.log'));
 
-            // Repayment SMS reminders — daily at 08:00 AM
-            $schedule->job(new RepaymentReminderJob())
+            // 08:00 — Repayment SMS reminders
+            $schedule->command('loans:send-repayment-reminders')
                 ->dailyAt('08:00')
-                ->withoutOverlapping()
+                ->withoutOverlapping(60)
                 ->onOneServer()
                 ->appendOutputTo(storage_path('logs/repayment-reminder.log'));
-
-            // Subscription expiry check — daily at midnight
-            $schedule->job(new CheckSubscriptionExpiryJob())
-                ->dailyAt('00:00')
-                ->withoutOverlapping()
-                ->onOneServer()
-                ->appendOutputTo(storage_path('logs/subscription-expiry-check.log'));
         });
     }
 }

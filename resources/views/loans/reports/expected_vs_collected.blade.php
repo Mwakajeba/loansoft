@@ -155,47 +155,20 @@
 
         <!-- Summary Cards -->
         @if(!empty($reportData))
+        @php
+            $sumExpected = array_sum(array_column($reportData, 'total_instalment_due'));
+            $sumCollected = array_sum(array_column($reportData, 'amount_paid'));
+            $sumArrearsBefore = array_sum(array_column($reportData, 'arrears_before_period'));
+            $sumBalanceDue = array_sum(array_column($reportData, 'balance_due'));
+        @endphp
         <div class="row">
             <div class="col-xl-3 col-md-6">
                 <div class="card radius-10 border-start border-0 border-4 border-info">
                     <div class="card-body">
                         <div class="d-flex align-items-center">
                             <div>
-                                <p class="mb-0 text-secondary">Total Expected</p>
-                                <h4 class="my-1 text-info" id="totalExpected">TZS {{ number_format(array_sum(array_column($reportData, 'expected_total')), 2) }}</h4>
-                            </div>
-                            <div class="widgets-icons-2 rounded-circle bg-gradient-blues text-white ms-auto">
-                                <i class='bx bxs-wallet'></i>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            <div class="col-xl-3 col-md-6">
-                <div class="card radius-10 border-start border-0 border-4 border-success">
-                    <div class="card-body">
-                        <div class="d-flex align-items-center">
-                            <div>
-                                <p class="mb-0 text-secondary">Total Collected</p>
-                                <h4 class="my-1 text-success" id="totalCollected">TZS {{ number_format(array_sum(array_column($reportData, 'collected_total')), 2) }}</h4>
-                            </div>
-                            <div class="widgets-icons-2 rounded-circle bg-gradient-greens text-white ms-auto">
-                                <i class='bx bxs-credit-card'></i>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            <div class="col-xl-3 col-md-6">
-                <div class="card radius-10 border-start border-0 border-4 border-danger">
-                    <div class="card-body">
-                        <div class="d-flex align-items-center">
-                            <div>
-                                <p class="mb-0 text-secondary">Variance</p>
-                                <h4 class="my-1 text-danger" id="totalVariance">TZS {{ number_format(array_sum(array_column($reportData, 'variance')), 2) }}</h4>
-                            </div>
-                            <div class="widgets-icons-2 rounded-circle bg-gradient-reds text-white ms-auto">
-                                <i class='bx bx-trending-down'></i>
+                                <p class="mb-0 text-secondary">Total Instalment Due</p>
+                                <h4 class="my-1 text-info" id="totalExpected">TZS {{ number_format($sumExpected, 2) }}</h4>
                             </div>
                         </div>
                     </div>
@@ -206,14 +179,53 @@
                     <div class="card-body">
                         <div class="d-flex align-items-center">
                             <div>
-                                <p class="mb-0 text-secondary">Collection Rate</p>
-                                <h4 class="my-1 text-warning" id="avgCollectionRate">
-                                    {{ array_sum(array_column($reportData, 'expected_total')) > 0 ? 
-                                       number_format((array_sum(array_column($reportData, 'collected_total')) / array_sum(array_column($reportData, 'expected_total'))) * 100, 1) : '0' }}%
-                                </h4>
+                                <p class="mb-0 text-secondary">Arrears (Before Period)</p>
+                                <h4 class="my-1 text-warning" id="totalArrearsBefore">TZS {{ number_format($sumArrearsBefore, 2) }}</h4>
                             </div>
                             <div class="widgets-icons-2 rounded-circle bg-gradient-oranges text-white ms-auto">
-                                <i class='bx bx-bar-chart-alt-2'></i>
+                                <i class='bx bx-timer'></i>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-xl-3 col-md-6">
+                <div class="card radius-10 border-start border-0 border-4 border-primary">
+                    <div class="card-body">
+                        <div class="d-flex align-items-center">
+                            <div>
+                                <p class="mb-0 text-secondary">Amount Paid</p>
+                                <h4 class="my-1 text-primary" id="totalDue">TZS {{ number_format($sumCollected, 2) }}</h4>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-xl-3 col-md-6">
+                <div class="card radius-10 border-start border-0 border-4 border-success">
+                    <div class="card-body">
+                        <div class="d-flex align-items-center">
+                            <div>
+                                <p class="mb-0 text-secondary">Amount Paid (Total)</p>
+                                <h4 class="my-1 text-success" id="totalCollected">TZS {{ number_format($sumCollected, 2) }}</h4>
+                            </div>
+                            <div class="widgets-icons-2 rounded-circle bg-gradient-greens text-white ms-auto">
+                                <i class='bx bxs-credit-card'></i>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-xl-3 col-md-6 mt-3">
+                <div class="card radius-10 border-start border-0 border-4 border-danger">
+                    <div class="card-body">
+                        <div class="d-flex align-items-center">
+                            <div>
+                                <p class="mb-0 text-secondary">Balance Due</p>
+                                <h4 class="my-1 text-danger" id="balanceDue">TZS {{ number_format($sumBalanceDue, 2) }}</h4>
+                            </div>
+                            <div class="widgets-icons-2 rounded-circle bg-gradient-reds text-white ms-auto">
+                                <i class='bx bx-minus-circle'></i>
                             </div>
                         </div>
                     </div>
@@ -325,22 +337,23 @@
                         @if(!empty($reportData))
                             <div class="table-responsive">
                                 <table class="table table-striped table-bordered" id="expectedVsCollectedTable">
-                                    <thead class="table-light">
+                                    <thead>
                                         <tr>
-                                            <th style="width: 3%;">#</th>
-                                            <th style="width: 10%;">Customer</th>
-                                            <th style="width: 6%;">Customer No</th>
-                                            <th style="width: 7%;">Phone</th>
-                                            <th style="width: 6%;">Loan No</th>
-                                            <th style="width: 7%;">Loan Amount</th>
-                                            <th style="width: 6%;">Branch</th>
-                                            <th style="width: 6%;">Group</th>
-                                            <th style="width: 7%;">Officer</th>
-                                            <th style="width: 8%;">Expected Total</th>
-                                            <th style="width: 8%;">Collected Total</th>
-                                            <th style="width: 7%;">Variance</th>
-                                            <th style="width: 6%;">Rate</th>
-                                            <th style="width: 6%;">Status</th>
+                                            <th>#</th>
+                                            <th>Customer</th>
+                                            <th>Customer No</th>
+                                            <th>Phone</th>
+                                            <th class="text-end">Loan Amount</th>
+                                            <th>Disbursed Date</th>
+                                            <th>Loan Officer</th>
+                                            <th>Instalment due date(s)</th>
+                                            <th class="text-end" style="background:#f4cccc;">Outstanding Fees</th>
+                                            <th class="text-end" style="background:#f4cccc;">Arrears (before period)</th>
+                                            <th class="text-end" style="background:#f4cccc;">Due Instalment</th>
+                                            <th class="text-end" style="background:#f4cccc;">Accrued Penalties</th>
+                                            <th class="text-end" style="background:#800020;color:#fff;">Total Instalment due</th>
+                                            <th class="text-end" style="background:#28a745;color:#fff;">Amount paid</th>
+                                            <th class="text-end" style="background:#dc3545;color:#fff;">Balance Due</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -348,47 +361,32 @@
                                             <tr>
                                                 <td class="text-center">{{ $index + 1 }}</td>
                                                 <td>{{ $row['customer'] }}</td>
-                                                <td class="text-center">{{ $row['customer_no'] }}</td>
-                                                <td class="text-center">{{ $row['phone'] }}</td>
-                                                <td class="text-center">{{ $row['loan_no'] }}</td>
-                                                <td class="text-end">{{ number_format($row['loan_amount'], 0) }}</td>
-                                                <td>{{ $row['branch'] }}</td>
-                                                <td>{{ $row['group'] }}</td>
+                                                <td>{{ $row['customer_no'] }}</td>
+                                                <td>{{ $row['phone'] }}</td>
+                                                <td class="text-end">{{ number_format($row['loan_amount'], 2) }}</td>
+                                                <td>{{ $row['disbursed_date'] }}</td>
                                                 <td>{{ $row['loan_officer'] }}</td>
-                                                <td class="text-end">{{ number_format($row['expected_total'], 2) }}</td>
-                                                <td class="text-end">{{ number_format($row['collected_total'], 2) }}</td>
-                                                <td class="text-end 
-                                                    @if($row['variance'] > 0) text-success fw-bold 
-                                                    @elseif($row['variance'] < 0) text-danger fw-bold 
-                                                    @else text-muted @endif">
-                                                    {{ number_format($row['variance'], 2) }}
-                                                </td>
-                                                <td class="text-center">{{ $row['collection_rate'] }}%</td>
-                                                <td class="text-center">
-                                                    <span class="badge 
-                                                        @if($row['collection_status'] == 'Excellent') bg-primary
-                                                        @elseif($row['collection_status'] == 'Good') bg-success
-                                                        @elseif($row['collection_status'] == 'Fair') bg-warning
-                                                        @elseif($row['collection_status'] == 'Poor') bg-danger
-                                                        @else bg-secondary
-                                                        @endif">
-                                                        {{ $row['collection_status'] }}
-                                                    </span>
-                                                </td>
+                                                <td class="text-nowrap small">{{ $row['instalment_due_dates'] ?? '—' }}</td>
+                                                <td class="text-end">{{ number_format($row['outstanding_fees'] ?? 0, 2) }}</td>
+                                                <td class="text-end">{{ number_format($row['arrears_before_period'] ?? 0, 2) }}</td>
+                                                <td class="text-end">{{ number_format($row['due_instalment'] ?? 0, 2) }}</td>
+                                                <td class="text-end">{{ number_format($row['accrued_penalties'] ?? 0, 2) }}</td>
+                                                <td class="text-end fw-semibold">{{ number_format($row['total_instalment_due'] ?? 0, 2) }}</td>
+                                                <td class="text-end">{{ number_format($row['amount_paid'] ?? 0, 2) }}</td>
+                                                <td class="text-end fw-semibold {{ ($row['balance_due'] ?? 0) < 0 ? 'text-danger' : '' }}">{{ number_format($row['balance_due'] ?? 0, 2) }}</td>
                                             </tr>
                                         @endforeach
                                     </tbody>
                                     <tfoot class="table-dark">
                                         <tr>
-                                            <td colspan="9" class="text-center fw-bold">TOTALS</td>
-                                            <td class="text-end fw-bold">{{ number_format(array_sum(array_column($reportData, 'expected_total')), 2) }}</td>
-                                            <td class="text-end fw-bold">{{ number_format(array_sum(array_column($reportData, 'collected_total')), 2) }}</td>
-                                            <td class="text-end fw-bold">{{ number_format(array_sum(array_column($reportData, 'variance')), 2) }}</td>
-                                            <td class="text-center fw-bold">
-                                                {{ array_sum(array_column($reportData, 'expected_total')) > 0 ? 
-                                                   number_format((array_sum(array_column($reportData, 'collected_total')) / array_sum(array_column($reportData, 'expected_total'))) * 100, 1) : '0' }}%
-                                            </td>
-                                            <td class="text-center fw-bold">{{ count($reportData) }} Loans</td>
+                                            <td colspan="8" class="text-center fw-bold">TOTALS</td>
+                                            <td class="text-end fw-bold">{{ number_format(array_sum(array_column($reportData, 'outstanding_fees')), 2) }}</td>
+                                            <td class="text-end fw-bold">{{ number_format(array_sum(array_column($reportData, 'arrears_before_period')), 2) }}</td>
+                                            <td class="text-end fw-bold">{{ number_format(array_sum(array_column($reportData, 'due_instalment')), 2) }}</td>
+                                            <td class="text-end fw-bold">{{ number_format(array_sum(array_column($reportData, 'accrued_penalties')), 2) }}</td>
+                                            <td class="text-end fw-bold">{{ number_format(array_sum(array_column($reportData, 'total_instalment_due')), 2) }}</td>
+                                            <td class="text-end fw-bold">{{ number_format(array_sum(array_column($reportData, 'amount_paid')), 2) }}</td>
+                                            <td class="text-end fw-bold">{{ number_format(array_sum(array_column($reportData, 'balance_due')), 2) }}</td>
                                         </tr>
                                     </tfoot>
                                 </table>

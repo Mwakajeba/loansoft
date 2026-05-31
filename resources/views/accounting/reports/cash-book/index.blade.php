@@ -166,7 +166,6 @@
                                                         </tr>
 
                                                         @php
-                                                            $running_balance = $cashBookData['opening_balance'];
                                                             $total_receipts = 0;
                                                             $total_payments = 0;
                                                         @endphp
@@ -175,11 +174,8 @@
                                                             @php
                                                                 $debit = $transaction['debit'];
                                                                 $credit = $transaction['credit'];
-
                                                                 $total_receipts += $debit;
                                                                 $total_payments += $credit;
-
-                                                                $running_balance += $debit - $credit;
                                                             @endphp
 
                                                             <tr>
@@ -188,34 +184,34 @@
                                                                 <td class="text-start">{{ $transaction['customer_name'] }}</td>
                                                                 <td class="text-start">{{ $transaction['bank_account'] }}</td>
                                                                 <td>{{ $transaction['transaction_no'] }}</td>
-                                                                <td>{{ $transaction['reference_no'] }}</td>
+                                                                <td>{{ $transaction['reference_no'] ?: '—' }}</td>
                                                                 <td class="text-end">{{ $debit > 0 ? number_format($debit, 2) : '' }}</td>
                                                                 <td class="text-end">{{ $credit > 0 ? number_format($credit, 2) : '' }}</td>
-                                                                <td class="text-end">{{ number_format($running_balance, 2) }}</td>
+                                                                <td class="text-end">{{ number_format($transaction['balance'], 2) }}</td>
                                                             </tr>
                                                         @endforeach
 
                                                         <tr>
                                                             <td colspan="6" class="text-end fw-bold">Total Debit</td>
-                                                            <td class="text-end fw-bold">{{ number_format($total_receipts, 2) }}</td>
+                                                            <td class="text-end fw-bold">{{ number_format($cashBookData['total_receipts'], 2) }}</td>
                                                             <td></td>
                                                             <td></td>
                                                         </tr>
                                                         <tr>
                                                             <td colspan="6" class="text-end fw-bold">Total Credit</td>
                                                             <td></td>
-                                                            <td class="text-end fw-bold">{{ number_format($total_payments, 2) }}</td>
+                                                            <td class="text-end fw-bold">{{ number_format($cashBookData['total_payments'], 2) }}</td>
                                                             <td></td>
                                                         </tr>
                                                         <tr>
                                                             <td colspan="6" class="text-end fw-bold">Final Balance</td>
                                                             <td></td>
                                                             <td></td>
-                                                            <td class="text-end fw-bold">{{ number_format($running_balance, 2) }}</td>
+                                                            <td class="text-end fw-bold">{{ number_format($cashBookData['final_balance'], 2) }}</td>
                                                         </tr>
                                                         <tr>
                                                             <td colspan="8" class="text-end fw-bold">Closing Balance</td>
-                                                            <td class="text-end fw-bold">{{ number_format($running_balance, 2) }}</td>
+                                                            <td class="text-end fw-bold">{{ number_format($cashBookData['final_balance'], 2) }}</td>
                                                         </tr>
                                                     </tbody>
                                                 </table>

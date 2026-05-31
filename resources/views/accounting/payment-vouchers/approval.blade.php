@@ -134,7 +134,7 @@
             <div class="col-lg-4">
                 <!-- Approval Information -->
                 <div class="card radius-10 mb-4">
-                    <div class="card-header bg-warning text-white">
+                    <div class="card-header bg-secondary text-white">
                         <h5 class="mb-0"><i class="bx bx-check-shield me-2"></i>Approval Information</h5>
                     </div>
                     <div class="card-body">
@@ -165,7 +165,7 @@
 
                 <!-- Approval Actions -->
                 <div class="card radius-10">
-                    <div class="card-header bg-success text-white">
+                    <div class="card-header bg-secondary text-white">
                         <h5 class="mb-0"><i class="bx bx-check-circle me-2"></i>Approval Actions</h5>
                     </div>
                     <div class="card-body">
@@ -200,7 +200,7 @@
                 <!-- Approval History -->
                 @if($paymentVoucher->approvals->count() > 0)
                     <div class="card radius-10 mt-4">
-                        <div class="card-header bg-info text-white">
+                        <div class="card-header bg-secondary text-white">
                             <h5 class="mb-0"><i class="bx bx-history me-2"></i>Approval History</h5>
                         </div>
                         <div class="card-body">

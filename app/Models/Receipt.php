@@ -86,6 +86,18 @@ class Receipt extends Model
     }
 
     /**
+     * Human-readable receipt number for print/PDF (not loan reference).
+     */
+    public function getDisplayNumberAttribute(): string
+    {
+        if (!empty($this->reference_number)) {
+            return (string) $this->reference_number;
+        }
+
+        return 'RCP-' . $this->id;
+    }
+
+    /**
      * Get the payee display name
      */
     public function getPayeeDisplayNameAttribute()

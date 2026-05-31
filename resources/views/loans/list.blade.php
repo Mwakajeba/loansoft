@@ -296,6 +296,186 @@
 
         </div>
     </div>
+
+    <!-- Quick Repayment Modal (matches loan show repayment design) -->
+    @can('process loan payments')
+    <div class="modal fade" id="quickRepaymentModal" tabindex="-1" aria-labelledby="quickRepaymentModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg">
+            <form id="quickRepaymentForm" class="modal-content">
+                @csrf
+                <input type="hidden" name="loan_id" id="qr_loan_id">
+                <input type="hidden" name="schedule_id" id="qr_schedule_id">
+                <div class="modal-header bg-primary text-white">
+                    <h5 class="modal-title" id="quickRepaymentModalLabel">
+                        <i class="bx bx-credit-card me-2"></i>Record Repayment
+                    </h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div id="qr_loading" class="text-center py-5">
+                        <div class="spinner-border text-primary" role="status"></div>
+                        <p class="text-muted mt-2 mb-0">Loading loan details...</p>
+                    </div>
+
+                    <div id="qr_content" style="display: none;">
+                        <div class="row mb-4">
+                            <div class="col-12">
+                                <h6 class="text-primary mb-3"><i class="bx bx-info-circle me-2"></i>Loan Details</h6>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label class="form-label text-muted small">Customer</label>
+                                    <p id="qr_customer_name" class="fw-bold text-dark mb-0"></p>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label class="form-label text-muted small">Loan Number</label>
+                                    <p id="qr_loan_no" class="fw-bold text-dark mb-0"></p>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label class="form-label text-muted small">Product</label>
+                                    <p id="qr_product_name" class="fw-bold text-dark mb-0"></p>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label class="form-label text-muted small">Total Outstanding</label>
+                                    <p id="qr_total_outstanding" class="fw-bold text-danger mb-0"></p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div id="qr_next_installment_section" class="row mb-4" style="display: none;">
+                            <div class="col-12">
+                                <h6 class="text-primary mb-3"><i class="bx bx-calendar me-2"></i>Next Installment</h6>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label class="form-label text-muted small">Due Date</label>
+                                    <p id="qr_due_date" class="fw-bold text-dark mb-0"></p>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label class="form-label text-muted small">Installment Due</label>
+                                    <p id="qr_installment_total" class="fw-bold text-success mb-0"></p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="row mb-4">
+                            <div class="col-12">
+                                <h6 class="text-primary mb-3"><i class="bx bx-calculator me-2"></i>Amount Breakdown</h6>
+                            </div>
+                            <div class="col-md-3 col-6">
+                                <div class="mb-3">
+                                    <label class="form-label text-muted small">Principal</label>
+                                    <p id="qr_principal" class="fw-bold text-dark mb-0"></p>
+                                </div>
+                            </div>
+                            <div class="col-md-3 col-6">
+                                <div class="mb-3">
+                                    <label class="form-label text-muted small">Accrued Interest</label>
+                                    <p id="qr_interest" class="fw-bold text-dark mb-0"></p>
+                                </div>
+                            </div>
+                            <div class="col-md-3 col-6">
+                                <div class="mb-3">
+                                    <label class="form-label text-muted small">Penalty</label>
+                                    <p id="qr_penalty" class="fw-bold text-danger mb-0"></p>
+                                </div>
+                            </div>
+                            <div class="col-md-3 col-6">
+                                <div class="mb-3">
+                                    <label class="form-label text-muted small">Fee</label>
+                                    <p id="qr_fee" class="fw-bold text-warning mb-0"></p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <hr class="my-4">
+
+                        <div class="row mb-2">
+                            <div class="col-12 d-flex flex-wrap gap-2 justify-content-between align-items-center mb-3">
+                                <h6 class="text-primary mb-0"><i class="bx bx-credit-card me-2"></i>Payment Details</h6>
+                                <div class="d-flex flex-wrap gap-2">
+                                    <button type="button" class="btn btn-sm btn-outline-primary" id="qr_use_installment_btn" style="display: none;">
+                                        Use installment amount
+                                    </button>
+                                    <button type="button" class="btn btn-sm btn-outline-secondary" id="qr_use_settle_btn">
+                                        Use settle amount
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label for="qr_payment_date" class="form-label">Payment Date</label>
+                                    <input type="date" class="form-control" id="qr_payment_date" name="payment_date" required max="{{ date('Y-m-d') }}">
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label for="qr_amount" class="form-label">Amount</label>
+                                    <input type="number" step="0.01" class="form-control" id="qr_amount" name="amount" min="0.01" required>
+                                    <small class="text-muted">Settle amount: <span id="qr_settle_hint" class="fw-semibold"></span></small>
+                                </div>
+                            </div>
+                            <div class="col-md-12">
+                                <div class="mb-3">
+                                    <label for="qr_payment_source" class="form-label">Payment Source</label>
+                                    <select class="form-select" id="qr_payment_source" name="payment_source" required>
+                                        <option value="">-- Select Payment Source --</option>
+                                        <option value="bank">Receive from Bank</option>
+                                        <option value="cash_deposit">Receive from Cash Deposit</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="col-md-12" id="qr_bank_section" style="display: none;">
+                                <div class="mb-3">
+                                    <label for="qr_bank_account_id" class="form-label">Bank Account</label>
+                                    <select class="form-select" id="qr_bank_account_id" name="bank_account_id">
+                                        <option value="">-- Select Bank Account --</option>
+                                        @foreach($bankAccounts ?? [] as $bankAccount)
+                                            <option value="{{ $bankAccount->id }}">{{ $bankAccount->name }} - {{ $bankAccount->account_number }}</option>
+                                        @endforeach
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="col-md-12" id="qr_cash_section" style="display: none;">
+                                <div class="mb-3">
+                                    <label for="qr_cash_deposit_id" class="form-label">Cash Deposit Account</label>
+                                    <select class="form-select" id="qr_cash_deposit_id" name="cash_deposit_id">
+                                        <option value="">-- Select Cash Deposit Account --</option>
+                                        @foreach($cashDeposits ?? [] as $deposit)
+                                            <option value="{{ $deposit->id }}" data-balance="{{ $deposit->amount }}">
+                                                {{ optional($deposit->customer)->name }} - {{ optional($deposit->type)->name }}
+                                                (Balance: TZS {{ number_format($deposit->amount, 2) }})
+                                            </option>
+                                        @endforeach
+                                    </select>
+                                    <small class="text-muted" id="qr_deposit_balance_info" style="display: none;">
+                                        Available Balance: <span id="qr_selected_balance" class="text-success fw-bold"></span>
+                                    </small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+                        <i class="bx bx-x me-1"></i>Cancel
+                    </button>
+                    <button type="submit" class="btn btn-primary" id="qr_submit_btn" disabled>
+                        <i class="bx bx-check me-1"></i>Add Repayment
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+    @endcan
 @endsection
 
 @push('scripts')
@@ -465,6 +645,9 @@
                         const level = $(this).data('level');
                         openApprovalModal(loanId, action, level);
                     });
+
+                    // Reinitialize quick repayment buttons
+                    bindQuickRepaymentButtons();
 
                     // Add search enhancement
                     const searchInput = $('.dataTables_filter input');
@@ -899,6 +1082,171 @@
                         });
                     }
                 });
+            });
+        });
+
+        let qrContextData = null;
+
+        function formatTzs(amount) {
+            return 'TZS ' + Number(amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        }
+
+        function resetQuickRepaymentModal() {
+            $('#qr_loading').show();
+            $('#qr_content').hide();
+            $('#qr_submit_btn').prop('disabled', true);
+            $('#qr_payment_source').val('');
+            $('#qr_bank_section, #qr_cash_section').hide();
+            $('#qr_bank_account_id, #qr_cash_deposit_id').prop('required', false).val('');
+            $('#qr_deposit_balance_info').hide();
+            $('#qr_schedule_id').val('');
+            $('#qr_next_installment_section').hide();
+            $('#qr_use_installment_btn').hide();
+            qrContextData = null;
+        }
+
+        function populateQuickRepaymentModal(data) {
+            qrContextData = data;
+
+            $('#quickRepaymentModalLabel').html('<i class="bx bx-credit-card me-2"></i>Record Repayment — ' + data.customer_name + ' (' + data.loan_no + ')');
+            $('#qr_customer_name').text(data.customer_name);
+            $('#qr_loan_no').text(data.loan_no);
+            $('#qr_product_name').text(data.product_name);
+            $('#qr_total_outstanding').text(formatTzs(data.total_outstanding));
+            $('#qr_principal').text(formatTzs(data.outstanding_principal));
+            $('#qr_interest').text(formatTzs(data.outstanding_interest));
+            $('#qr_penalty').text(formatTzs(data.outstanding_penalty));
+            $('#qr_fee').text(formatTzs(data.outstanding_fees));
+            $('#qr_settle_hint').text(formatTzs(data.settle_amount));
+
+            if (data.next_installment) {
+                const inst = data.next_installment;
+                $('#qr_schedule_id').val(inst.schedule_id);
+                $('#qr_due_date').text(inst.due_date);
+                $('#qr_installment_total').text(formatTzs(inst.total));
+                $('#qr_next_installment_section').show();
+                $('#qr_use_installment_btn').show().data('amount', inst.total);
+            } else {
+                $('#qr_next_installment_section').hide();
+                $('#qr_use_installment_btn').hide();
+            }
+
+            $('#qr_use_settle_btn').data('amount', data.settle_amount);
+            $('#qr_payment_date').val(new Date().toISOString().split('T')[0]);
+            $('#qr_amount').val(data.next_installment ? data.next_installment.total : '');
+
+            $('#qr_loading').hide();
+            $('#qr_content').show();
+            $('#qr_submit_btn').prop('disabled', false);
+        }
+
+        function bindQuickRepaymentButtons() {
+            $('.quick-repayment-btn').off('click').on('click', function () {
+                const loanId = $(this).data('loan-id');
+                resetQuickRepaymentModal();
+                $('#qr_loan_id').val(loanId);
+
+                const modal = new bootstrap.Modal(document.getElementById('quickRepaymentModal'));
+                modal.show();
+
+                $.ajax({
+                    url: '{{ route("repayments.context", ["loanId" => "__LOAN__"]) }}'.replace('__LOAN__', loanId),
+                    method: 'GET',
+                    headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                    success: function (data) {
+                        populateQuickRepaymentModal(data);
+                    },
+                    error: function () {
+                        $('#qr_loading').html('<p class="text-danger mb-0">Failed to load loan details. Please try again.</p>');
+                    }
+                });
+            });
+        }
+
+        $('#qr_payment_source').on('change', function () {
+            const selected = $(this).val();
+            if (selected === 'bank') {
+                $('#qr_bank_section').show();
+                $('#qr_cash_section').hide();
+                $('#qr_bank_account_id').prop('required', true);
+                $('#qr_cash_deposit_id').prop('required', false).val('');
+                $('#qr_deposit_balance_info').hide();
+            } else if (selected === 'cash_deposit') {
+                $('#qr_bank_section').hide();
+                $('#qr_cash_section').show();
+                $('#qr_cash_deposit_id').prop('required', true);
+                $('#qr_bank_account_id').prop('required', false).val('');
+            } else {
+                $('#qr_bank_section, #qr_cash_section').hide();
+                $('#qr_bank_account_id, #qr_cash_deposit_id').prop('required', false);
+            }
+        });
+
+        $('#qr_cash_deposit_id').on('change', function () {
+            const selected = $(this).find('option:selected');
+            const balance = selected.data('balance');
+            if (balance !== undefined && $(this).val()) {
+                $('#qr_selected_balance').text(formatTzs(balance));
+                $('#qr_deposit_balance_info').show();
+            } else {
+                $('#qr_deposit_balance_info').hide();
+            }
+        });
+
+        $('#qr_use_installment_btn').on('click', function () {
+            const amount = $(this).data('amount');
+            if (amount) {
+                $('#qr_amount').val(amount);
+            }
+        });
+
+        $('#qr_use_settle_btn').on('click', function () {
+            const amount = $(this).data('amount');
+            if (amount) {
+                $('#qr_amount').val(amount);
+            }
+        });
+
+        $('#quickRepaymentForm').on('submit', function (e) {
+            e.preventDefault();
+            const form = $(this);
+            const submitBtn = $('#qr_submit_btn');
+            submitBtn.prop('disabled', true).html('<i class="bx bx-loader-alt bx-spin me-1"></i>Processing...');
+
+            $.ajax({
+                url: '{{ route("repayments.store") }}',
+                method: 'POST',
+                data: form.serialize(),
+                headers: {
+                    'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content'),
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'Accept': 'application/json'
+                },
+                success: function (response) {
+                    bootstrap.Modal.getInstance(document.getElementById('quickRepaymentModal')).hide();
+                    Swal.fire({
+                        icon: 'success',
+                        title: 'Success!',
+                        text: response.message || 'Repayment recorded successfully!',
+                        timer: 2500,
+                        showConfirmButton: false
+                    });
+                    $('#loansTable').DataTable().ajax.reload(null, false);
+                },
+                error: function (xhr) {
+                    let msg = 'Failed to record repayment.';
+                    if (xhr.responseJSON) {
+                        if (xhr.responseJSON.message) {
+                            msg = xhr.responseJSON.message;
+                        } else if (xhr.responseJSON.errors) {
+                            msg = Object.values(xhr.responseJSON.errors).flat().join(', ');
+                        }
+                    }
+                    Swal.fire({ icon: 'error', title: 'Error!', text: msg });
+                },
+                complete: function () {
+                    submitBtn.prop('disabled', false).html('<i class="bx bx-check me-1"></i>Add Repayment');
+                }
             });
         });
 

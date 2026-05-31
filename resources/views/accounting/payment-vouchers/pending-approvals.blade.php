@@ -30,7 +30,7 @@
                 @foreach($pendingApprovals as $approval)
                     <div class="col-lg-6 col-xl-4 mb-4">
                         <div class="card radius-10 h-100">
-                            <div class="card-header bg-warning text-white">
+                            <div class="card-header bg-secondary text-white">
                                 <div class="d-flex justify-content-between align-items-center">
                                     <h6 class="mb-0">
                                         <i class="bx bx-check-shield me-2"></i>
@@ -188,7 +188,7 @@
                         <div class="col-md-6">
                             <!-- Approve Form -->
                             <div class="card border-success">
-                                <div class="card-header bg-success text-white">
+                            <div class="card-header bg-secondary text-white">
                                     <h6 class="mb-0"><i class="bx bx-check-circle me-2"></i>Approve</h6>
                                 </div>
                                 <div class="card-body">
@@ -205,7 +205,7 @@
                         <div class="col-md-6">
                             <!-- Reject Form -->
                             <div class="card border-danger">
-                                <div class="card-header bg-danger text-white">
+                            <div class="card-header bg-secondary text-white">
                                     <h6 class="mb-0"><i class="bx bx-x-circle me-2"></i>Reject</h6>
                                 </div>
                                 <div class="card-body">

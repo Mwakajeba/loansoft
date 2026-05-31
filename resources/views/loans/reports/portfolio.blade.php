@@ -117,7 +117,7 @@
                     <div class="card-body">
                         <div class="d-flex justify-content-between align-items-center">
                             <div>
-                                <h3 class="mb-0">{{ number_format($portfolioData['summary']['par_ratio'], 2) }}%</h3>
+                                <h3 class="mb-0">TZS {{ number_format($portfolioData['summary']['portfolio_at_risk'], 2) }}</h3>
                                 <p class="mb-0">Portfolio at Risk</p>
                             </div>
                             <div class="text-white-50">
@@ -222,19 +222,25 @@
             <div class="card-body">
                 <div class="table-responsive">
                     <table class="table table-bordered table-striped">
-                        <thead class="table-light">
+                        <thead class="text-white" style="background:#4472C4;">
                                 <tr>
-                                    <th>Customer</th>
+                                    <th>Customer Name</th>
                                     <th>Customer No</th>
-                                    <th>Branch</th>
-                                    <th>Group</th>
+                                    <th>Phone</th>
+                                    <th>Gender</th>
+                                    <th>Tenure</th>
+                                    <th>Subsector</th>
                                     <th>Loan Officer</th>
                                     <th>Status</th>
-                                    <th>Disbursed Amount</th>
-                                    <th>Outstanding</th>
-                                    <th>Repayment Rate</th>
-                                    <th>Days in Arrears</th>
                                     <th>Disbursed Date</th>
+                                    <th class="text-end">Disbursed Amount</th>
+                                    <th class="text-end">Management Fees Balance</th>
+                                    <th class="text-end">Outstanding principal</th>
+                                    <th class="text-end">Accrued/Outstanding Interest</th>
+                                    <th class="text-center">Days in Arrears</th>
+                                    <th class="text-end" style="background:#dc3545;">Accrued Penalties</th>
+                                    <th class="text-end" style="background:#fd7e14;">Outstanding Balance</th>
+                                    <th class="text-end">Repayment Rate</th>
                                     <th>Maturity Date</th>
                                 </tr>
                             </thead>
@@ -243,39 +249,26 @@
                                 <tr>
                                     <td>{{ $loan['customer'] }}</td>
                                     <td>{{ $loan['customer_no'] }}</td>
-                                    <td>{{ $loan['branch'] }}</td>
-                                    <td>{{ $loan['group'] }}</td>
+                                    <td>{{ $loan['phone'] }}</td>
+                                    <td>{{ $loan['gender'] ?? '' }}</td>
+                                    <td>{{ $loan['tenure'] ?? '' }}</td>
+                                    <td>{{ $loan['subsector'] ?? '' }}</td>
                                     <td>{{ $loan['loan_officer'] }}</td>
-                                    <td>
-                                        <span class="badge 
-                                            @if($loan['status'] == 'active') bg-success
-                                            @elseif($loan['status'] == 'completed') bg-primary
-                                            @elseif($loan['status'] == 'defaulted') bg-danger
-                                            @else bg-secondary
-                                            @endif">
-                                            {{ ucfirst($loan['status']) }}
-                                        </span>
-                                    </td>
+                                    <td>{{ ucfirst($loan['status']) }}</td>
+                                    <td>{{ $loan['disbursed_date_iso'] ?? $loan['disbursed_date'] }}</td>
                                     <td class="text-end">{{ number_format($loan['disbursed_amount'], 2) }}</td>
-                                    <td class="text-end">{{ number_format($loan['outstanding_amount'], 2) }}</td>
+                                    <td class="text-end">{{ number_format($loan['management_fees_balance'] ?? 0, 2) }}</td>
+                                    <td class="text-end">{{ number_format($loan['outstanding_principal'] ?? 0, 2) }}</td>
+                                    <td class="text-end">{{ number_format($loan['outstanding_interest'] ?? 0, 2) }}</td>
+                                    <td class="text-center {{ ($loan['days_in_arrears'] ?? 0) > 0 ? 'text-danger fw-bold' : '' }}">{{ $loan['days_in_arrears'] ?? 0 }}</td>
+                                    <td class="text-end">{{ number_format($loan['accrued_penalties'] ?? 0, 2) }}</td>
+                                    <td class="text-end fw-semibold">{{ number_format($loan['outstanding_balance'] ?? 0, 2) }}</td>
                                     <td class="text-end">{{ number_format($loan['repayment_rate'], 2) }}%</td>
-                                    <td class="text-end">
-                                        <span class="badge 
-                                            @if($loan['days_in_arrears'] == 0) bg-success
-                                            @elseif($loan['days_in_arrears'] <= 30) bg-warning
-                                            @elseif($loan['days_in_arrears'] <= 60) bg-orange
-                                            @elseif($loan['days_in_arrears'] <= 90) bg-danger
-                                            @else bg-dark
-                                            @endif">
-                                            {{ $loan['days_in_arrears'] }} days
-                                        </span>
-                                    </td>
-                                    <td>{{ $loan['disbursed_date'] }}</td>
                                     <td>{{ $loan['maturity_date'] }}</td>
                                 </tr>
                                 @empty
                                 <tr>
-                                    <td colspan="12" class="text-center">No loans found for the selected criteria.</td>
+                                    <td colspan="18" class="text-center">No loans found for the selected criteria.</td>
                                 </tr>
                                 @endforelse
                             </tbody>

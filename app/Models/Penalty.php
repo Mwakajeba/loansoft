@@ -226,6 +226,8 @@ class Penalty extends Model
             'weekly' => 'Weekly',
             'monthly' => 'Monthly',
             'quarterly' => 'Quarterly',
+            'semi_annually' => 'Semi Annually',
+            'annually' => 'Annually',
             'yearly' => 'Yearly',
         ];
     }

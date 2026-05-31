@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\GlTransaction;
 use App\Models\Loan;
+use App\Services\LoanDisbursementGlService;
 use App\Models\LoanApproval;
 use App\Models\Payment;
 use Illuminate\Http\Request;
@@ -212,8 +213,16 @@ class LoanApprovalController extends Controller
                 // Generate repayment schedule
                 $loan->generateRepaymentSchedule($loan->interest);
 
-                // Process disbursement
-                $this->processLoanDisbursement($loan);
+                if (app(LoanDisbursementGlService::class)->hasDisbursementGl($loan->id)) {
+                    throw new \Exception('Disbursement accounting entries already exist for this loan.');
+                }
+
+                app(LoanDisbursementGlService::class)->postDisbursement(
+                    $loan,
+                    now(),
+                    $user->id,
+                    $user->branch_id
+                );
             });
 
             return redirect()->route('loans.application.index')->with('success', 'Loan disbursed successfully.');
@@ -304,73 +313,4 @@ class LoanApprovalController extends Controller
         }
     }
 
-    /**
-     * Process loan disbursement (moved from LoanController)
-     */
-    private function processLoanDisbursement($loan)
-    {
-        $userId = auth()->id();
-        $branchId = auth()->user()->branch_id;
-        $product = $loan->product;
-        $bankAccount = $loan->bankAccount;
-
-        $notes = "Being disbursement for loan of {$product->name}, paid to {$loan->customer->name}, TSHS.{$loan->amount}";
-        $principalReceivable = optional($product->principalReceivableAccount)->id;
-
-        if (!$principalReceivable) {
-            throw new \Exception('Principal receivable account not set for this loan product.');
-        }
-
-        // Create Payment record
-        $payment = Payment::create([
-            'reference' => $loan->id,
-            'reference_type' => 'Loan Payment',
-            'reference_number' => null,
-            'date' => $loan->date_applied,
-            'amount' => $loan->amount,
-            'description' => $notes,
-            'user_id' => $userId,
-            'customer_id' => $loan->customer_id,
-            'bank_account_id' => $loan->bank_account_id,
-            'branch_id' => $branchId,
-            'approved' => true,
-            'approved_by' => $userId,
-            'approved_at' => now(),
-        ]);
-
-        Payment::create([
-            'payment_id' => $payment->id,
-            'chart_account_id' => $principalReceivable,
-            'amount' => $loan->amount,
-            'description' => $notes,
-        ]);
-
-        // Create GL Transactions
-        GlTransaction::insert([
-            [
-                'chart_account_id' => $bankAccount->chart_account_id,
-                'customer_id' => $loan->customer_id,
-                'amount' => $loan->amount,
-                'nature' => 'credit',
-                'transaction_id' => $loan->id,
-                'transaction_type' => 'Loan Disbursement',
-                'date' => $loan->date_applied,
-                'description' => $notes,
-                'branch_id' => $branchId,
-                'user_id' => $userId,
-            ],
-            [
-                'chart_account_id' => $principalReceivable,
-                'customer_id' => $loan->customer_id,
-                'amount' => $loan->amount,
-                'nature' => 'debit',
-                'transaction_id' => $loan->id,
-                'transaction_type' => 'Loan Disbursement',
-                'date' => $loan->date_applied,
-                'description' => $notes,
-                'branch_id' => $branchId,
-                'user_id' => $userId,
-            ]
-        ]);
-    }
 }

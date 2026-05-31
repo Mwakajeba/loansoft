@@ -62,6 +62,10 @@
                                 </li>
                                 <li class="mb-2">
                                     <i class="bx bx-check text-success me-2"></i>
+                                    <strong>First repayment date:</strong> Optional; must be on or after disbursement. Leave blank for the default schedule anchor.
+                                </li>
+                                <li class="mb-2">
+                                    <i class="bx bx-check text-success me-2"></i>
                                     <strong>Loan Officer:</strong> Assign responsible officer
                                 </li>
                                 <li class="mb-2">

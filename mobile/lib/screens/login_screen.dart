@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
 
@@ -115,84 +116,111 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: Container(
-        width: double.infinity,
-        height: double.infinity,
-        decoration: const BoxDecoration(
-          color: AppColors.backgroundDark,
-        ),
-        child: Stack(
-          children: [
-            // Background decoration
-            Positioned(
-              top: -96,
-              right: -96,
-              child: Container(
-                width: 384,
-                height: 384,
-                decoration: BoxDecoration(
-                  color: AppColors.primary.withOpacity(0.1),
-                  shape: BoxShape.circle,
-                  boxShadow: [
-                    BoxShadow(
-                      color: AppColors.primary.withOpacity(0.1),
-                      blurRadius: 96,
-                      spreadRadius: 24,
-                    ),
-                  ],
+    const borderGreen = AppColors.logoTextOnWhite;
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: SystemUiOverlayStyle.dark.copyWith(
+        statusBarColor: Colors.transparent,
+        statusBarIconBrightness: Brightness.dark,
+        systemNavigationBarColor: Colors.white,
+        systemNavigationBarIconBrightness: Brightness.dark,
+      ),
+      child: Scaffold(
+        backgroundColor: Colors.white,
+        body: Container(
+          width: double.infinity,
+          height: double.infinity,
+          decoration: const BoxDecoration(
+            color: Color(0xFFFFFFFF),
+          ),
+          child: Stack(
+            children: [
+              // Background decoration
+              Positioned(
+                top: -96,
+                right: -96,
+                child: Container(
+                  width: 384,
+                  height: 384,
+                  decoration: BoxDecoration(
+                    color: AppColors.primary.withOpacity(0.12),
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: AppColors.primary.withOpacity(0.08),
+                        blurRadius: 96,
+                        spreadRadius: 24,
+                      ),
+                    ],
+                  ),
                 ),
               ),
-            ),
-            Positioned(
-              bottom: -96,
-              left: -96,
-              child: Container(
-                width: 384,
-                height: 384,
-                decoration: BoxDecoration(
-                  color: AppColors.brandRed.withOpacity(0.05),
-                  shape: BoxShape.circle,
-                  boxShadow: [
-                    BoxShadow(
-                      color: AppColors.brandRed.withOpacity(0.05),
-                      blurRadius: 96,
-                      spreadRadius: 24,
-                    ),
-                  ],
+              Positioned(
+                bottom: -96,
+                left: -96,
+                child: Container(
+                  width: 384,
+                  height: 384,
+                  decoration: BoxDecoration(
+                    color: AppColors.primary.withOpacity(0.06),
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: AppColors.primary.withOpacity(0.05),
+                        blurRadius: 96,
+                        spreadRadius: 24,
+                      ),
+                    ],
+                  ),
                 ),
               ),
-            ),
-            // Content
-            SafeArea(
-              child: Center(
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 400),
-                    child: Form(
-                      key: _formKey,
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          // Logo
-                          SizedBox(
-                            height: 130,
-                            child: Image.asset(
-                              'logoapp.png',
-                              fit: BoxFit.contain,
-                              width: 180,
-                              errorBuilder: (context, error, stackTrace) {
-                                debugPrint('Error loading logoapp.png: $error');
-                                return Icon(
-                                  Icons.image_not_supported_outlined,
-                                  size: 64,
-                                  color: Colors.white54,
-                                );
-                              },
+              // Content
+              SafeArea(
+                child: Center(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 400),
+                      child: Form(
+                        key: _formKey,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            // Logo in green outlined circle
+                            Container(
+                              width: 170,
+                              height: 170,
+                              padding: const EdgeInsets.all(16),
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: Colors.white,
+                                border: Border.all(
+                                  color: AppColors.primary,
+                                  width: 3,
+                                ),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: AppColors.primary.withOpacity(0.15),
+                                    blurRadius: 18,
+                                    spreadRadius: 2,
+                                  ),
+                                ],
+                              ),
+                              child: ClipOval(
+                                child: Image.asset(
+                                  'logoapp.png',
+                                  fit: BoxFit.contain,
+                                  errorBuilder: (context, error, stackTrace) {
+                                    debugPrint('Error loading logoapp.png: $error');
+                                    return Icon(
+                                      Icons.image_not_supported_outlined,
+                                      size: 64,
+                                      color: AppColors.primary.withOpacity(0.5),
+                                    );
+                                  },
+                                ),
+                              ),
                             ),
-                          ),
-                          const SizedBox(height: 40),
+                            const SizedBox(height: 40),
                           // Phone field
                           Align(
                             alignment: Alignment.centerLeft,
@@ -201,7 +229,7 @@ class _LoginScreenState extends State<LoginScreen> {
                               style: GoogleFonts.manrope(
                                 fontSize: 15,
                                 fontWeight: FontWeight.w700,
-                                color: Colors.white,
+                                color: AppColors.primary,
                                 letterSpacing: 0.3,
                               ),
                             ),
@@ -211,14 +239,14 @@ class _LoginScreenState extends State<LoginScreen> {
                             controller: _phoneController,
                             keyboardType: TextInputType.phone,
                             style: GoogleFonts.manrope(
-                              color: Colors.white,
+                              color: borderGreen,
                               fontSize: 16,
                               fontWeight: FontWeight.w500,
                             ),
                             decoration: InputDecoration(
                               hintText: '07xx xxx xxx',
                               hintStyle: GoogleFonts.manrope(
-                                color: Colors.white.withOpacity(0.4),
+                                color: borderGreen.withOpacity(0.45),
                                 fontSize: 16,
                               ),
                               prefixIcon: Container(
@@ -235,18 +263,18 @@ class _LoginScreenState extends State<LoginScreen> {
                                 ),
                               ),
                               filled: true,
-                              fillColor: AppColors.navyDeep.withOpacity(0.8),
+                              fillColor: const Color(0xFFF3FAF5),
                               border: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(14),
                                 borderSide: BorderSide(
-                                  color: Colors.white.withOpacity(0.15),
+                                  color: borderGreen.withOpacity(0.25),
                                   width: 1.5,
                                 ),
                               ),
                               enabledBorder: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(14),
                                 borderSide: BorderSide(
-                                  color: Colors.white.withOpacity(0.15),
+                                  color: borderGreen.withOpacity(0.25),
                                   width: 1.5,
                                 ),
                               ),
@@ -277,7 +305,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                 style: GoogleFonts.manrope(
                                   fontSize: 15,
                                   fontWeight: FontWeight.w700,
-                                  color: Colors.white,
+                                  color: AppColors.primary,
                                   letterSpacing: 0.3,
                                 ),
                               ),
@@ -304,14 +332,14 @@ class _LoginScreenState extends State<LoginScreen> {
                             controller: _passwordController,
                             obscureText: _obscurePassword,
                             style: GoogleFonts.manrope(
-                              color: Colors.white,
+                              color: borderGreen,
                               fontSize: 16,
                               fontWeight: FontWeight.w500,
                             ),
                             decoration: InputDecoration(
                               hintText: '••••••••',
                               hintStyle: GoogleFonts.manrope(
-                                color: Colors.white.withOpacity(0.4),
+                                color: borderGreen.withOpacity(0.45),
                                 fontSize: 16,
                               ),
                               prefixIcon: Container(
@@ -332,25 +360,25 @@ class _LoginScreenState extends State<LoginScreen> {
                                 child: IconButton(
                                   icon: Icon(
                                     _obscurePassword ? Icons.visibility_off : Icons.visibility,
-                                    color: Colors.white.withOpacity(0.6),
+                                    color: borderGreen.withOpacity(0.55),
                                     size: 22,
                                   ),
                                   onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
                                 ),
                               ),
                               filled: true,
-                              fillColor: AppColors.navyDeep.withOpacity(0.8),
+                              fillColor: const Color(0xFFF3FAF5),
                               border: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(14),
                                 borderSide: BorderSide(
-                                  color: Colors.white.withOpacity(0.15),
+                                  color: borderGreen.withOpacity(0.25),
                                   width: 1.5,
                                 ),
                               ),
                               enabledBorder: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(14),
                                 borderSide: BorderSide(
-                                  color: Colors.white.withOpacity(0.15),
+                                  color: borderGreen.withOpacity(0.25),
                                   width: 1.5,
                                 ),
                               ),
@@ -382,55 +410,56 @@ class _LoginScreenState extends State<LoginScreen> {
                               ),
                             ),
                           ],
-                          const SizedBox(height: 25),
-                          // Primary button
-                          SizedBox(
-                            width: double.infinity,
-                            height: 56,
-                            child: ElevatedButton(
-                              onPressed: _isLoading ? null : _submit,
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: AppColors.primary,
-                                foregroundColor: Colors.white,
-                                elevation: 8,
-                                shadowColor: AppColors.primary.withOpacity(0.3),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
+                            const SizedBox(height: 25),
+                            // Primary button
+                            SizedBox(
+                              width: double.infinity,
+                              height: 56,
+                              child: ElevatedButton(
+                                onPressed: _isLoading ? null : _submit,
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: AppColors.primary,
+                                  foregroundColor: Colors.white,
+                                  elevation: 8,
+                                  shadowColor: AppColors.primary.withOpacity(0.3),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
                                 ),
-                              ),
-                              child: _isLoading
-                                  ? const SizedBox(
-                                      width: 24,
-                                      height: 24,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                        color: Colors.white,
-                                      ),
-                                    )
-                                  : Row(
-                                      mainAxisAlignment: MainAxisAlignment.center,
-                                      children: [
-                                        Text(
-                                          'Ingia Sasa',
-                                          style: GoogleFonts.manrope(
-                                            fontSize: 16,
-                                            fontWeight: FontWeight.w700,
-                                          ),
+                                child: _isLoading
+                                    ? const SizedBox(
+                                        width: 24,
+                                        height: 24,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          color: Colors.white,
                                         ),
-                                        const SizedBox(width: 8),
-                                        const Icon(Icons.login, size: 22),
-                                      ],
-                                    ),
+                                      )
+                                    : Row(
+                                        mainAxisAlignment: MainAxisAlignment.center,
+                                        children: [
+                                          Text(
+                                            'Ingia Sasa',
+                                            style: GoogleFonts.manrope(
+                                              fontSize: 16,
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                          ),
+                                          const SizedBox(width: 8),
+                                          const Icon(Icons.login, size: 22),
+                                        ],
+                                      ),
+                              ),
                             ),
-                          ),
-                           ],
+                          ],
+                        ),
                       ),
                     ),
                   ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

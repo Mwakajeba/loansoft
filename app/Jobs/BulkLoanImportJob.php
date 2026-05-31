@@ -330,8 +330,9 @@ class BulkLoanImportJob implements ShouldQueue
         // Generate repayment schedule
         $loan->generateRepaymentSchedule($validated['interest']);
 
-        // Post matured interest for past loans
+        // Post matured interest and penalties for past loans
         $loan->postMaturedInterestForPastLoan();
+        $loan->accruePenaltiesForPastLoanWhenReady();
 
         // Record Payment
         $bankAccount = \App\Models\BankAccount::findOrFail($this->chartAccountId);

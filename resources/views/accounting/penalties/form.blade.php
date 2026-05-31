@@ -252,23 +252,32 @@
 
 @push('scripts')
 <script>
-    // Auto-update amount placeholder based on penalty type
-    $('select[name="penalty_type"]').on('change', function() {
-        const penaltyType = $(this).val();
+    function syncPenaltyFormFields() {
+        const penaltyType = $('select[name="penalty_type"]').val();
+        const chargeFrequency = $('select[name="charge_frequency"]').val();
         const amountInput = $('input[name="amount"]');
-        
+        const limitWrap = $('input[name="penalty_limit_days"]').closest('.col-md-6');
+        const cycleWrap = $('select[name="frequency_cycle"]').closest('.col-md-6');
+
         if (penaltyType === 'percentage') {
-            amountInput.attr('placeholder', 'Enter percentage (e.g., 5.5 for 5.5%)');
+            amountInput.attr('placeholder', 'Percentage per cycle (e.g. 1 = 1%)');
             amountInput.attr('max', '100');
         } else {
-            amountInput.attr('placeholder', 'Enter fixed amount');
+            amountInput.attr('placeholder', 'Fixed amount per cycle');
             amountInput.removeAttr('max');
         }
-    });
 
-    // Trigger change event on page load
-    $(document).ready(function() {
-        $('select[name="penalty_type"]').trigger('change');
-    });
+        if (chargeFrequency === 'daily') {
+            limitWrap.show();
+            cycleWrap.find('.form-text').text('Rate period for daily accrual (e.g. 5% per month = 5/30 % per day on base).');
+        } else {
+            limitWrap.hide();
+            $('input[name="penalty_limit_days"]').val('');
+            cycleWrap.find('.form-text').text('Reference period for the rate (one-time charge uses full % or fixed amount once).');
+        }
+    }
+
+    $('select[name="penalty_type"], select[name="charge_frequency"]').on('change', syncPenaltyFormFields);
+    $(document).ready(syncPenaltyFormFields);
 </script>
 @endpush

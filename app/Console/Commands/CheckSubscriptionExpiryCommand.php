@@ -7,31 +7,30 @@ use Illuminate\Console\Command;
 
 class CheckSubscriptionExpiryCommand extends Command
 {
-    /**
-     * The name and signature of the console command.
-     *
-     * @var string
-     */
-    protected $signature = 'subscription:check-expiry';
+    protected $signature = 'subscription:check-expiry
+                            {--async : Dispatch to queue instead of running immediately}';
 
-    /**
-     * The console command description.
-     *
-     * @var string
-     */
-    protected $description = 'Check for expiring and expired subscriptions, send reminders and lock users';
+    protected $description = 'Check expiring subscriptions, send reminders, and lock expired accounts';
 
-    /**
-     * Execute the console command.
-     */
-    public function handle()
+    public function handle(): int
     {
         $this->info('Starting subscription expiry check...');
 
-        CheckSubscriptionExpiryJob::dispatch();
+        try {
+            if ($this->option('async')) {
+                CheckSubscriptionExpiryJob::dispatch();
+                $this->warn('Job dispatched to queue.');
+            } else {
+                (new CheckSubscriptionExpiryJob())->handle();
+            }
 
-        $this->info('Subscription expiry check job dispatched successfully.');
+            $this->info('Subscription expiry check completed.');
 
-        return 0;
+            return self::SUCCESS;
+        } catch (\Exception $e) {
+            $this->error('Error: ' . $e->getMessage());
+
+            return self::FAILURE;
+        }
     }
 }
