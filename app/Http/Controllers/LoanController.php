@@ -2477,6 +2477,23 @@ class LoanController extends Controller
     }
 
 
+    /**
+     * Delete child rows that reference loans without ON DELETE CASCADE.
+     */
+    protected function deleteLoanDependentRecords(int $loanId): void
+    {
+        if (\Schema::hasTable('loan_topups')) {
+            \DB::table('loan_topups')
+                ->where('old_loan_id', $loanId)
+                ->orWhere('new_loan_id', $loanId)
+                ->delete();
+        }
+
+        if (\Schema::hasTable('loan_writeoffs')) {
+            \DB::table('loan_writeoffs')->where('loan_id', $loanId)->delete();
+        }
+    }
+
     public function destroy($encodedId)
     {
         try {
@@ -2570,6 +2587,8 @@ class LoanController extends Controller
                         }
                     }
 
+                    $this->deleteLoanDependentRecords($loanId);
+
                     // Finally delete the loan
                     $loan->delete();
                 });
@@ -2577,6 +2596,7 @@ class LoanController extends Controller
                 // Non-active loans: just delete the loan and its schedules, leave receipts/journals intact
                 \DB::transaction(function () use ($loan, $loanId) {
                     \DB::table('loan_schedules')->where('loan_id', $loanId)->delete();
+                    $this->deleteLoanDependentRecords($loanId);
                     $loan->delete();
                 });
             }
