@@ -188,7 +188,7 @@ use Vinkla\Hashids\Facades\Hashids;
                         <div class="d-flex align-items-center">
                             <div class="flex-grow-1">
                                 <p class="mb-0">Total Payments</p>
-                                <h4 class="font-weight-bold">TZS {{ number_format($recentPayments->sum('amount') ?? 0, 2) }}</h4>
+                                <h4 class="font-weight-bold">TZS {{ number_format($totalPaymentsThisMonth ?? 0, 2) }}</h4>
                                 <p class="text-secondary mb-0 font-13">This month</p>
                             </div>
                             <div class="widgets-icons bg-gradient-burning text-white"><i class='bx bx-money'></i></div>
@@ -204,7 +204,7 @@ use Vinkla\Hashids\Facades\Hashids;
                         <div class="d-flex align-items-center">
                             <div class="flex-grow-1">
                                 <p class="mb-0">Total Receipts</p>
-                                <h4 class="font-weight-bold">TZS {{ number_format($recentReceipts->sum('amount') ?? 0, 2) }}</h4>
+                                <h4 class="font-weight-bold">TZS {{ number_format($totalReceiptsThisMonth ?? 0, 2) }}</h4>
                                 <p class="text-secondary mb-0 font-13">This month</p>
                             </div>
                             <div class="widgets-icons bg-gradient-lush text-white"><i class='bx bx-receipt'></i></div>
@@ -433,10 +433,9 @@ use Vinkla\Hashids\Facades\Hashids;
                         }
                     });
                 });
-        });
 
            // Monthly Collections Grouped Bar Chart
-            fetch('/dashboard/monthly-collections')
+            fetch('/dashboard/monthly-collections' + (branchId ? '?branch_id=' + branchId : ''))
                 .then(response => response.json())
                 .then(data => {
                     console.log('Monthly Collections Chart Data:', data);
@@ -465,22 +464,16 @@ use Vinkla\Hashids\Facades\Hashids;
                                     label: 'Expected',
                                     data: data.expected,
                                     backgroundColor: '#f1c40f',
-                                    barPercentage: 0.3,
-                                    categoryPercentage: 0.6
                                 },
                                 {
                                     label: 'Collected',
                                     data: data.collected,
                                     backgroundColor: collectedColors,
-                                    barPercentage: 0.3,
-                                    categoryPercentage: 0.6
                                 },
                                 {
                                     label: 'Arrears',
                                     data: data.arrears,
                                     backgroundColor: '#e74c3c',
-                                    barPercentage: 0.3,
-                                    categoryPercentage: 0.6
                                 }
                             ]
                         },
@@ -495,31 +488,38 @@ use Vinkla\Hashids\Facades\Hashids;
                                 tooltip: {
                                     callbacks: {
                                         label: function(context) {
-                                            let label = context.dataset.label || '';
-                                            let value = context.parsed;
-                                            if (label === 'Collected' && value === 0) {
+                                            const datasetLabel = context.dataset.label || '';
+                                            const value = (context.parsed && typeof context.parsed === 'object')
+                                                ? (context.parsed.y ?? 0)
+                                                : (context.parsed ?? 0);
+
+                                            if (datasetLabel === 'Collected' && value === 0) {
                                                 return `${context.label}: No repayments`;
                                             }
-                                            return `${context.label}: ${value.toLocaleString()}`;
+
+                                            const formatted = (typeof value === 'number')
+                                                ? value.toLocaleString()
+                                                : String(value);
+                                            return `${context.label}: ${formatted}`;
                                         }
                                     }
                                 }
                             },
                             scales: {
                                 x: {
-                                    stacked: true,
+                                    stacked: false,
                                     title: { display: true, text: 'Month' }
                                 },
                                 y: {
-                                    stacked: false,
                                     beginAtZero: true,
                                     title: { display: true, text: 'Amount (TZS)' }
                                 }
                             },
-                            barThickness: 12
+                            maxBarThickness: 18
                         }
                     });
                 });
+        });
         </script>
         <!--end row-->
         @can('view graphs')
@@ -1113,8 +1113,8 @@ use Vinkla\Hashids\Facades\Hashids;
                         @csrf
                         <div class="modal-body">
                             <div class="mb-3">
-                                <label for="branch_id" class="form-label">Select Branch</label>
-                                <select class="form-select" id="branch_id" name="branch_id" required>
+                                <label for="bulk_branch_id" class="form-label">Select Branch</label>
+                                <select class="form-select" id="bulk_branch_id" name="branch_id" required>
                                     <option value="all">All Branches</option>
                                     @foreach(App\Models\Branch::all() as $branch)
                                         <option value="{{ $branch->id }}">{{ $branch->name }}</option>
@@ -1130,7 +1130,7 @@ use Vinkla\Hashids\Facades\Hashids;
                                     <option value="Loan Disbursed">Loan Disbursed</option>
                                     <option value="Custom">Custom Title</option>
                                 </select>
-                                <div class="form-text">Choose a title for this SMS batch or select Custom to enter your own.</div>
+                                <div class="form-text">Title is for your reference only — only the message content below is sent to customers.</div>
                             </div>
                             <div class="mb-3">
                                 <label for="bulk_message_content" class="form-label">Message Content</label>
@@ -1179,6 +1179,8 @@ use Vinkla\Hashids\Facades\Hashids;
             const modal = document.getElementById('bulkSmsModal');
             const formElements = modal.querySelectorAll('input, textarea, select, button');
             const closeBtn = modal.querySelector('.btn-close');
+            // Build payload before disabling fields (disabled inputs are excluded from FormData).
+            const formData = new FormData(this);
             // Show loading state and disable all form elements
             sendBtn.innerHTML = '<i class="bx bx-loader-alt bx-spin me-1"></i>Sending...';
             sendBtn.disabled = true;
@@ -1189,14 +1191,28 @@ use Vinkla\Hashids\Facades\Hashids;
             // Submit the form via AJAX
             fetch(this.action, {
                 method: 'POST',
-                body: new FormData(this),
+                body: formData,
                 headers: {
                     'X-Requested-With': 'XMLHttpRequest',
                     'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').getAttribute('content')
                 }
             })
-            .then(response => response.json())
-            .then(data => {
+            .then(response => response.json().then(data => ({ ok: response.ok, status: response.status, data })))
+            .then(({ ok, status, data }) => {
+                if (!ok) {
+                    let validationMessage = data.message || 'Unknown error occurred';
+                    if (status === 422 && data.errors) {
+                        validationMessage = Object.values(data.errors).flat().join(' ');
+                    }
+                    Swal.fire({
+                        icon: 'error',
+                        title: 'Failed to Send Bulk SMS',
+                        text: validationMessage,
+                        confirmButtonColor: '#dc3545',
+                        footer: 'Please review the form and try again.'
+                    });
+                    return;
+                }
                 let responseMsg = '';
                 if (typeof data.response === 'string') {
                     try {

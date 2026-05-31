@@ -222,6 +222,24 @@
                             </div>
                             @endcan
 
+                            <!-- Arrears Classifications / Aging Buckets -->
+                            @can('manage penalty setting')
+                            <div class="col-md-6 col-lg-4 mb-4">
+                                <div class="card border-info">
+                                    <div class="card-body text-center">
+                                        <div class="mb-3">
+                                            <i class="bx bx-category fs-1 text-info"></i>
+                                        </div>
+                                        <h5 class="card-title">Arrears Classifications</h5>
+                                        <p class="card-text">Configure loan aging buckets and provision rates (Tanzania defaults supported).</p>
+                                        <a href="{{ route('settings.arrears-classifications.index') }}" class="btn btn-info">
+                                            <i class="bx bx-category me-1"></i> Manage Classifications
+                                        </a>
+                                    </div>
+                                </div>
+                            </div>
+                            @endcan
+
                             <!-- Run Penalty Accrual -->
                             @can('manage penalty setting')
                             <div class="col-md-6 col-lg-4 mb-4">
@@ -254,6 +272,30 @@
                                             <i class="bx bx-play-circle me-1"></i> Run Daily Accrual Interest
                                         </button>
                                     </div>
+                                </div>
+                            </div>
+
+                            <div class="col-md-6 col-lg-4 mb-4">
+                                <div class="card border-success">
+                                    <div class="card-body text-center">
+                                        <div class="mb-3">
+                                            <i class="bx bx-time-five fs-1 text-success"></i>
+                                        </div>
+                                        <h5 class="card-title">Run Daily Batch (Cron)</h5>
+                                        <p class="card-text small">Runs all jobs: subscription, penalties, daily interest, mature interest.</p>
+                                        <button type="button" class="btn btn-success" onclick="runDailyBatch()">
+                                            <i class="bx bx-play-circle me-1"></i> Run Daily Batch Now
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="col-12 mb-4">
+                                <div class="alert alert-info mb-0">
+                                    <strong><i class="bx bx-info-circle me-1"></i> Automatic jobs (cron)</strong>
+                                    <p class="mb-1 small mt-2">Set Windows Task Scheduler to run <strong>every minute</strong>:</p>
+                                    <code class="d-block small mb-2">php artisan schedule:run</code>
+                                    <p class="mb-0 small">Or use <code>scripts/run-scheduler.bat</code>. Scheduled times: 00:00 subscription · 00:05 penalties · 00:10 daily interest · 00:15 mature interest · 08:00 SMS reminders.</p>
                                 </div>
                             </div>
                             @endcan
@@ -350,6 +392,26 @@
                             </div>
                             @endrole
 
+                            <!-- DCB Payment Gateway -->
+                            @role('super-admin')
+                            <div class="col-md-6 col-lg-4 mb-4">
+                                <div class="card border-info">
+                                    <div class="card-body text-center">
+                                        <div class="mb-3">
+                                            <i class="bx bx-transfer fs-1 text-info"></i>
+                                        </div>
+                                        <h5 class="card-title">DCB Payment Gateway</h5>
+                                        <p class="card-text">
+                                            Configure SmartSoft DCB Gateway for TIPS transfers, account lookup,
+                                            and mobile disbursements.
+                                        </p>
+                                        <a href="{{ route('settings.dcb') }}" class="btn btn-info text-white">
+                                            <i class="bx bx-transfer me-1"></i> Configure DCB
+                                        </a>
+                                    </div>
+                                </div>
+                            </div>
+                            @endrole
 
                             <!-- Manual Subscription Management (Super Admin) -->
                             @role('super-admin')
@@ -472,6 +534,55 @@
                 Swal.fire({
                     title: 'Success!',
                     text: result.value.message || 'Penalty accrual job has been started. Check Job Logs for progress.',
+                    icon: 'success',
+                    confirmButtonText: 'View Job Logs',
+                    showCancelButton: true,
+                    cancelButtonText: 'Close'
+                }).then((swalResult) => {
+                    if (swalResult.isConfirmed) {
+                        window.location.href = '{{ route("settings.job-logs.index") }}';
+                    }
+                });
+            }
+        });
+    }
+
+    function runDailyBatch() {
+        Swal.fire({
+            title: 'Run Daily Batch?',
+            text: 'Runs subscription check, penalties, daily interest, and mature interest (same as cron).',
+            icon: 'question',
+            showCancelButton: true,
+            confirmButtonColor: '#198754',
+            cancelButtonColor: '#6c757d',
+            confirmButtonText: 'Yes, Run All',
+            cancelButtonText: 'Cancel',
+            showLoaderOnConfirm: true,
+            preConfirm: () => {
+                return fetch('{{ route("settings.scheduled-jobs.run-daily-batch") }}', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRF-TOKEN': '{{ csrf_token() }}'
+                    }
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (!data.success) {
+                        throw new Error(data.message || 'Failed to run daily batch');
+                    }
+                    return data;
+                })
+                .catch(error => {
+                    Swal.showValidationMessage(error.message || 'Request failed');
+                });
+            },
+            allowOutsideClick: () => !Swal.isLoading()
+        }).then((result) => {
+            if (result.isConfirmed) {
+                Swal.fire({
+                    title: 'Success!',
+                    text: result.value.message,
                     icon: 'success',
                     confirmButtonText: 'View Job Logs',
                     showCancelButton: true,

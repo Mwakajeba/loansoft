@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Accounting\Reports;
 
 use App\Http\Controllers\Controller;
+use App\Support\Accounting\GlTransactionReportFilter;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -36,7 +37,7 @@ class BalanceSheetReportController extends Controller
             ->toArray();
 
         // Base transactions until as_of date (inclusive)
-        $base = DB::table('gl_transactions')
+        $base = GlTransactionReportFilter::apply(DB::table('gl_transactions'))
             ->join('chart_accounts', 'gl_transactions.chart_account_id', '=', 'chart_accounts.id')
             ->join('account_class_groups', 'chart_accounts.account_class_group_id', '=', 'account_class_groups.id')
             ->join('account_class', 'account_class_groups.class_id', '=', 'account_class.id')
@@ -218,7 +219,7 @@ class BalanceSheetReportController extends Controller
         $allComparativeDatesForGroups = array_values(array_unique($allComparativeDatesForGroups));
 
         foreach ($allComparativeDatesForGroups as $compDate) {
-            $cmpQuery = DB::table('gl_transactions')
+            $cmpQuery = GlTransactionReportFilter::apply(DB::table('gl_transactions'))
                 ->join('chart_accounts', 'gl_transactions.chart_account_id', '=', 'chart_accounts.id')
                 ->join('account_class_groups', 'chart_accounts.account_class_group_id', '=', 'account_class_groups.id')
                 ->join('account_class', 'account_class_groups.class_id', '=', 'account_class.id')
@@ -278,7 +279,7 @@ class BalanceSheetReportController extends Controller
             foreach ($allComparativeDates as $compDate) {
                 if (empty($compDate)) { continue; }
 
-                $baseCmp2 = DB::table('gl_transactions')
+                $baseCmp2 = GlTransactionReportFilter::apply(DB::table('gl_transactions'))
                     ->join('chart_accounts', 'gl_transactions.chart_account_id', '=', 'chart_accounts.id')
                     ->join('account_class_groups', 'chart_accounts.account_class_group_id', '=', 'account_class_groups.id')
                     ->join('account_class', 'account_class_groups.class_id', '=', 'account_class.id')
@@ -582,7 +583,7 @@ class BalanceSheetReportController extends Controller
             ->toArray();
 
         // Base transactions until as_of date (inclusive)
-        $base = DB::table('gl_transactions')
+        $base = GlTransactionReportFilter::apply(DB::table('gl_transactions'))
             ->join('chart_accounts', 'gl_transactions.chart_account_id', '=', 'chart_accounts.id')
             ->join('account_class_groups', 'chart_accounts.account_class_group_id', '=', 'account_class_groups.id')
             ->join('account_class', 'account_class_groups.class_id', '=', 'account_class.id')
@@ -752,7 +753,7 @@ class BalanceSheetReportController extends Controller
             foreach ($allComparativeDates as $compDate) {
                 if (empty($compDate)) { continue; }
 
-                $baseCmp2 = DB::table('gl_transactions')
+                $baseCmp2 = GlTransactionReportFilter::apply(DB::table('gl_transactions'))
                     ->join('chart_accounts', 'gl_transactions.chart_account_id', '=', 'chart_accounts.id')
                     ->join('account_class_groups', 'chart_accounts.account_class_group_id', '=', 'account_class_groups.id')
                     ->join('account_class', 'account_class_groups.class_id', '=', 'account_class.id')
@@ -823,7 +824,7 @@ class BalanceSheetReportController extends Controller
 
         // Build comparative group totals per date (class -> group -> total)
         foreach ($allComparativeDates as $compDate) {
-            $cmpQuery = DB::table('gl_transactions')
+            $cmpQuery = GlTransactionReportFilter::apply(DB::table('gl_transactions'))
                 ->join('chart_accounts', 'gl_transactions.chart_account_id', '=', 'chart_accounts.id')
                 ->join('account_class_groups', 'chart_accounts.account_class_group_id', '=', 'account_class_groups.id')
                 ->join('account_class', 'account_class_groups.class_id', '=', 'account_class.id')

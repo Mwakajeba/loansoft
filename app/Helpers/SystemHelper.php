@@ -97,6 +97,40 @@ if (!function_exists('format_datetime')) {
     }
 }
 
+if (!function_exists('dcb_gateway_configured')) {
+    /**
+     * DCB API credentials are present (settings saved).
+     */
+    function dcb_gateway_configured(): bool
+    {
+        return app(\App\Services\DcbGatewayService::class)->isConfigured();
+    }
+}
+
+if (!function_exists('dcb_payments_enabled')) {
+    /**
+     * DCB is turned on and ready to process payments.
+     */
+    function dcb_payments_enabled(): bool
+    {
+        return app(\App\Services\DcbPaymentService::class)->isEnabled();
+    }
+}
+
+if (!function_exists('dcb_show_on_loans_ui')) {
+    /**
+     * Show DCB options on loan screens (configured or explicitly enabled).
+     */
+    function dcb_show_on_loans_ui(): bool
+    {
+        if (dcb_payments_enabled()) {
+            return true;
+        }
+
+        return dcb_gateway_configured();
+    }
+}
+
 if (!function_exists('update_env_file')) {
     /**
      * Update or add environment variable in .env file
@@ -121,36 +155,139 @@ if (!function_exists('update_env_file')) {
             $escapedValue = $value;
         }
         
-        // Check if key exists (handle both with and without quotes)
-        $pattern = '/^' . preg_quote($key, '/') . '=(.*)$/m';
-        
-        if (preg_match($pattern, $envContent)) {
-            // Update existing key
-            $envContent = preg_replace($pattern, $key . '=' . $escapedValue, $envContent);
-        } else {
-            // Add new key at the end (before any comments at the end)
-            // Find the last non-empty, non-comment line
-            $lines = explode("\n", $envContent);
+        // Use a line-by-line approach (avoids preg_replace corrupting values that
+        // contain {placeholders} which PCRE interprets as named backreferences)
+        $lines = explode("\n", $envContent);
+        $found = false;
+        $keyPrefix = $key . '=';
+
+        foreach ($lines as &$line) {
+            // Match the key exactly (handle optional existing quotes on the value)
+            if (str_starts_with($line, $keyPrefix)) {
+                $line = $key . '=' . $escapedValue;
+                $found = true;
+                break;
+            }
+        }
+        unset($line);
+
+        if (!$found) {
+            // Add new key after the last non-empty, non-comment line
             $lastNonEmptyIndex = -1;
             for ($i = count($lines) - 1; $i >= 0; $i--) {
-                $line = trim($lines[$i]);
-                if (!empty($line) && !str_starts_with($line, '#')) {
+                $trimmed = trim($lines[$i]);
+                if (!empty($trimmed) && !str_starts_with($trimmed, '#')) {
                     $lastNonEmptyIndex = $i;
                     break;
                 }
             }
-            
+
             if ($lastNonEmptyIndex >= 0) {
-                // Insert after the last non-empty line
                 array_splice($lines, $lastNonEmptyIndex + 1, 0, $key . '=' . $escapedValue);
-                $envContent = implode("\n", $lines);
             } else {
-                // Just append
-                $envContent .= "\n" . $key . '=' . $escapedValue;
+                $lines[] = $key . '=' . $escapedValue;
             }
         }
+
+        $envContent = implode("\n", $lines);
         
         // Write back to file
         return file_put_contents($envFile, $envContent) !== false;
     }
-} 
+}
+
+if (!function_exists('is_loopback_ip')) {
+    function is_loopback_ip(?string $ip): bool
+    {
+        if ($ip === null || $ip === '') {
+            return true;
+        }
+
+        return in_array($ip, ['127.0.0.1', '::1', '0:0:0:0:0:0:0:1'], true)
+            || str_starts_with($ip, '127.');
+    }
+}
+
+if (!function_exists('get_server_network_ip')) {
+    /**
+     * Primary non-loopback IPv4 address of this server (LAN/network IP).
+     */
+    function get_server_network_ip(): ?string
+    {
+        static $cached;
+
+        if ($cached !== null) {
+            return $cached !== '' ? $cached : null;
+        }
+
+        if (PHP_OS_FAMILY === 'Linux') {
+            $output = @shell_exec('hostname -I 2>/dev/null');
+            if ($output) {
+                foreach (preg_split('/\s+/', trim($output)) as $candidate) {
+                    if (filter_var($candidate, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)
+                        && !is_loopback_ip($candidate)) {
+                        return $cached = $candidate;
+                    }
+                }
+            }
+        }
+
+        $hostname = gethostname();
+        if ($hostname) {
+            $resolved = gethostbyname($hostname);
+            if ($resolved && $resolved !== $hostname && !is_loopback_ip($resolved)) {
+                return $cached = $resolved;
+            }
+        }
+
+        if (function_exists('socket_create')) {
+            $socket = @socket_create(AF_INET, SOCK_DGRAM, SOL_UDP);
+            if ($socket) {
+                @socket_connect($socket, '8.8.8.8', 53);
+                @socket_getsockname($socket, $addr);
+                socket_close($socket);
+                if (!empty($addr) && !is_loopback_ip($addr)) {
+                    return $cached = $addr;
+                }
+            }
+        }
+
+        return $cached = '';
+    }
+}
+
+if (!function_exists('resolve_client_ip')) {
+    /**
+     * Resolve the client IP for auditing. Uses proxy headers when present;
+     * when the request is local (127.0.0.1), returns the server network IP instead.
+     */
+    function resolve_client_ip(): ?string
+    {
+        $request = request();
+        if (!$request) {
+            return get_server_network_ip();
+        }
+
+        $ip = $request->ip();
+
+        $forwarded = $request->header('X-Forwarded-For');
+        if ($forwarded) {
+            $parts = array_map('trim', explode(',', $forwarded));
+            $candidate = $parts[0] ?? null;
+            if ($candidate && filter_var($candidate, FILTER_VALIDATE_IP)) {
+                $ip = $candidate;
+            }
+        } elseif ($realIp = $request->header('X-Real-IP')) {
+            $realIp = trim($realIp);
+            if (filter_var($realIp, FILTER_VALIDATE_IP)) {
+                $ip = $realIp;
+            }
+        }
+
+        if (is_loopback_ip($ip)) {
+            return get_server_network_ip() ?? $ip;
+        }
+
+        return $ip;
+    }
+}

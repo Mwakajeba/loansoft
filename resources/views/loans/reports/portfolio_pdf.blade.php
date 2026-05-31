@@ -64,62 +64,65 @@
         <div class="report-info"><strong>Report Date:</strong> {{ \Carbon\Carbon::now()->format('d/m/Y H:i:s') }}</div>
     </div>
 
+    <!-- Summary -->
+    @if(isset($portfolioData['summary']))
+    <table style="margin-bottom:10px;">
+        <tr><th colspan="8" style="background:#D9D9D9;">PORTFOLIO SUMMARY</th></tr>
+        <tr>
+            <th>Total Loans</th><th>Active</th><th>Completed</th><th>Total Outstanding</th>
+            <th>Total Paid</th><th>Repayment Rate</th><th>Portfolio at Risk</th><th>PAR Ratio</th>
+        </tr>
+        <tr>
+            <td class="text-center">{{ number_format($portfolioData['summary']['total_loans']) }}</td>
+            <td class="text-center">{{ number_format($portfolioData['summary']['active_loans']) }}</td>
+            <td class="text-center">{{ number_format($portfolioData['summary']['completed_loans']) }}</td>
+            <td class="text-right">{{ number_format($portfolioData['summary']['total_outstanding'], 2) }}</td>
+            <td class="text-right">{{ number_format($portfolioData['summary']['total_paid'], 2) }}</td>
+            <td class="text-center">{{ number_format($portfolioData['summary']['overall_repayment_rate'], 2) }}%</td>
+            <td class="text-right">{{ number_format($portfolioData['summary']['portfolio_at_risk'], 2) }}</td>
+            <td class="text-center">{{ number_format($portfolioData['summary']['par_ratio'], 2) }}%</td>
+        </tr>
+    </table>
+    @endif
+
     <!-- Data Table -->
     <table>
         <thead>
             <tr>
-                <th style="width: 3%;">S/N</th>
-                <th style="width: 10%;">Customer</th>
-                <th style="width: 6%;">Customer No</th>
-                <th style="width: 8%;">Branch</th>
-                <th style="width: 8%;">Group</th>
-                <th style="width: 8%;">Loan Officer</th>
-                <th style="width: 6%;">Status</th>
-                <th style="width: 10%;">Disbursed Amount</th>
-                <th style="width: 10%;">Outstanding</th>
-                <th style="width: 7%;">Repayment Rate</th>
-                <th style="width: 5%;">Arrears</th>
-                <th style="width: 7%;">Disbursed Date</th>
+                <th>Customer Name</th><th>Customer No</th><th>Phone</th><th>Gender</th><th>Tenure</th><th>Subsector</th>
+                <th>Loan Officer</th><th>Status</th><th>Disbursed Date</th><th>Disbursed Amount</th>
+                <th>Mgmt Fees Bal</th><th>Outstanding Principal</th><th>Outstanding Interest</th>
+                <th>Days in Arrears</th><th>Accrued Penalties</th><th>Outstanding Balance</th>
+                <th>Repayment Rate</th><th>Maturity Date</th>
             </tr>
         </thead>
         <tbody>
-            @php
-                $totalDisbursed = 0;
-                $totalOutstanding = 0;
-                $count = 0;
-            @endphp
+            @php $count = 0; @endphp
             @forelse($portfolioData['loans'] as $index => $loan)
-                @php
-                    $count++;
-                    $totalDisbursed += $loan['disbursed_amount'] ?? 0;
-                    $totalOutstanding += $loan['outstanding_amount'] ?? 0;
-                @endphp
+                @php $count++; @endphp
                 <tr>
-                    <td class="text-center">{{ $index + 1 }}</td>
                     <td>{{ $loan['customer'] }}</td>
                     <td class="text-center">{{ $loan['customer_no'] }}</td>
-                    <td>{{ $loan['branch'] }}</td>
-                    <td>{{ $loan['group'] }}</td>
+                    <td class="text-center">{{ $loan['phone'] }}</td>
+                    <td>{{ $loan['gender'] ?? '' }}</td>
+                    <td>{{ $loan['tenure'] ?? '' }}</td>
+                    <td>{{ $loan['subsector'] ?? '' }}</td>
                     <td>{{ $loan['loan_officer'] }}</td>
                     <td class="text-center">{{ ucfirst($loan['status']) }}</td>
-                    <td class="text-right">{{ number_format($loan['disbursed_amount'], 0) }}</td>
-                    <td class="text-right">{{ number_format($loan['outstanding_amount'], 0) }}</td>
-                    <td class="text-center">{{ number_format($loan['repayment_rate'], 1) }}%</td>
-                    <td class="text-center">{{ $loan['days_in_arrears'] }}d</td>
-                    <td class="text-center">{{ $loan['disbursed_date'] }}</td>
+                    <td class="text-center">{{ $loan['disbursed_date_iso'] ?? $loan['disbursed_date'] }}</td>
+                    <td class="text-right">{{ number_format($loan['disbursed_amount'], 2) }}</td>
+                    <td class="text-right">{{ number_format($loan['management_fees_balance'] ?? 0, 2) }}</td>
+                    <td class="text-right">{{ number_format($loan['outstanding_principal'] ?? 0, 2) }}</td>
+                    <td class="text-right">{{ number_format($loan['outstanding_interest'] ?? 0, 2) }}</td>
+                    <td class="text-center">{{ $loan['days_in_arrears'] ?? 0 }}</td>
+                    <td class="text-right">{{ number_format($loan['accrued_penalties'] ?? 0, 2) }}</td>
+                    <td class="text-right">{{ number_format($loan['outstanding_balance'] ?? 0, 2) }}</td>
+                    <td class="text-center">{{ number_format($loan['repayment_rate'], 2) }}%</td>
+                    <td class="text-center">{{ $loan['maturity_date'] }}</td>
                 </tr>
             @empty
-                <tr><td colspan="12" class="text-center">No records found</td></tr>
+                <tr><td colspan="18" class="text-center">No records found</td></tr>
             @endforelse
-            <!-- Total Row -->
-            <tr class="total-row">
-                <td class="text-center" colspan="2"><strong>TOTAL</strong></td>
-                <td colspan="5" class="text-right"><strong>{{ number_format($count) }} Records</strong></td>
-                <td class="text-right"><strong>{{ number_format($totalDisbursed, 0) }}</strong></td>
-                <td class="text-right"><strong>{{ number_format($totalOutstanding, 0) }}</strong></td>
-                <td class="text-center"><strong>{{ $totalDisbursed > 0 ? number_format((($totalDisbursed - $totalOutstanding) / $totalDisbursed) * 100, 1) : 0 }}%</strong></td>
-                <td colspan="2"></td>
-            </tr>
         </tbody>
     </table>
 

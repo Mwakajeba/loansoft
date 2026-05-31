@@ -60,7 +60,7 @@ class AuthController extends Controller
                 'model' => 'Auth',
                 'action' => 'login_failed',
                 'description' => "Login blocked - too many attempts for {$request->phone}",
-                'ip_address' => $request->ip(),
+                'ip_address' => resolve_client_ip(),
                 'device' => $deviceString,
                 'activity_time' => now(),
             ]);
@@ -80,7 +80,7 @@ class AuthController extends Controller
                 'model' => 'Auth',
                 'action' => 'login_failed',
                 'description' => "Login failed - phone not found ({$request->phone})",
-                'ip_address' => $request->ip(),
+                'ip_address' => resolve_client_ip(),
                 'device' => $deviceString,
                 'activity_time' => now(),
             ]);
@@ -140,7 +140,7 @@ class AuthController extends Controller
                         'model' => 'Auth',
                         'action' => 'login_failed',
                         'description' => "Login blocked - subscription expired (end_date: {$subscription->end_date})",
-                        'ip_address' => $request->ip(),
+                        'ip_address' => resolve_client_ip(),
                         'device' => $deviceString,
                         'activity_time' => now(),
                     ]);
@@ -164,7 +164,7 @@ class AuthController extends Controller
                         'model' => 'Auth',
                         'action' => 'login_failed',
                         'description' => "Login blocked - subscription payment not completed (payment_status: {$subscription->payment_status})",
-                        'ip_address' => $request->ip(),
+                        'ip_address' => resolve_client_ip(),
                         'device' => $deviceString,
                         'activity_time' => now(),
                     ]);
@@ -210,7 +210,7 @@ class AuthController extends Controller
                         'model' => 'Auth',
                         'action' => 'login_failed',
                         'description' => "Login blocked - no subscription found and user account is {$user->status}",
-                        'ip_address' => $request->ip(),
+                        'ip_address' => resolve_client_ip(),
                         'device' => $deviceString,
                         'activity_time' => now(),
                     ]);
@@ -228,7 +228,7 @@ class AuthController extends Controller
                     'model' => 'Auth',
                     'action' => 'login_failed',
                     'description' => "Login blocked - user account is {$user->status} and has no company",
-                    'ip_address' => $request->ip(),
+                    'ip_address' => resolve_client_ip(),
                     'device' => $deviceString,
                     'activity_time' => now(),
                 ]);
@@ -246,7 +246,7 @@ class AuthController extends Controller
                 'model' => 'Auth',
                 'action' => 'login_failed',
                 'description' => "Login failed - user account is {$user->status} (is_active: {$user->is_active})",
-                'ip_address' => $request->ip(),
+                'ip_address' => resolve_client_ip(),
                 'device' => $deviceString,
                 'activity_time' => now(),
             ]);
@@ -313,7 +313,7 @@ class AuthController extends Controller
                             'model' => 'Auth',
                             'action' => 'login_blocked',
                             'description' => "Login blocked after authentication - subscription expired (end_date: {$subscription->end_date})",
-                            'ip_address' => $request->ip(),
+                            'ip_address' => resolve_client_ip(),
                             'device' => $deviceString,
                             'activity_time' => now(),
                         ]);
@@ -344,7 +344,7 @@ class AuthController extends Controller
                             'model' => 'Auth',
                             'action' => 'login_blocked',
                             'description' => "Login blocked after authentication - subscription payment not completed (payment_status: {$subscription->payment_status})",
-                            'ip_address' => $request->ip(),
+                            'ip_address' => resolve_client_ip(),
                             'device' => $deviceString,
                             'activity_time' => now(),
                         ]);
@@ -373,7 +373,7 @@ class AuthController extends Controller
                 'model' => 'Auth',
                 'action' => 'login_success',
                 'description' => 'User logged in successfully',
-                'ip_address' => $request->ip(),
+                'ip_address' => resolve_client_ip(),
                 'device' => $deviceString,
                 'activity_time' => now(),
             ]);
@@ -388,7 +388,7 @@ class AuthController extends Controller
             'model' => 'Auth',
             'action' => 'login_failed',
             'description' => 'Login failed - wrong password',
-            'ip_address' => $request->ip(),
+            'ip_address' => resolve_client_ip(),
             'device' => $deviceString,
             'activity_time' => now(),
         ]);

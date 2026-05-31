@@ -139,7 +139,7 @@
                 <!-- Approval Status -->
                 @if($paymentVoucher->requiresApproval())
                 <div class="card radius-10 mb-4">
-                    <div class="card-header bg-warning text-white">
+                    <div class="card-header bg-secondary text-white">
                         <h5 class="mb-0"><i class="bx bx-check-shield me-2"></i>Approval Status</h5>
                     </div>
                     <div class="card-body">
@@ -379,17 +379,28 @@
 
                 <!-- Quick Actions -->
                 <div class="card radius-10">
-                    <div class="card-header bg-light text-white">
+                    <div class="card-header bg-secondary text-white">
                         <h5 class="mb-0"><i class="bx bx-cog me-2"></i>Quick Actions</h5>
                     </div>
                     <div class="card-body">
                         <div class="d-flex gap-2 flex-wrap">
+                            @php
+                                $pvSettings = \App\Models\PaymentVoucherApprovalSetting::where('company_id', auth()->user()->company_id)->first();
+                                $pvApprovalsEnabled = (bool) ($pvSettings && $pvSettings->require_approval_for_all);
+                                $pvLocked = $pvApprovalsEnabled && $paymentVoucher->isFullyApproved();
+                            @endphp
                             @if($paymentVoucher->reference_type === 'manual')
                             @can('edit payment voucher')
-                            <a href="{{ route('accounting.payment-vouchers.edit', $paymentVoucher->hash_id) }}"
-                                class="btn btn-primary">
-                                <i class="bx bx-edit me-1"></i>Edit
-                            </a>
+                                @if(!$pvLocked)
+                                    <a href="{{ route('accounting.payment-vouchers.edit', $paymentVoucher->hash_id) }}"
+                                        class="btn btn-primary">
+                                        <i class="bx bx-edit me-1"></i>Edit
+                                    </a>
+                                @else
+                                    <button type="button" class="btn btn-outline-secondary" disabled title="Cannot edit: Payment voucher is fully approved">
+                                        <i class="bx bx-lock"></i> Locked
+                                    </button>
+                                @endif
                             @endcan
                             @can('view payment vouchers')
                             <a href="{{ route('accounting.payment-vouchers.index') }}" class="btn btn-secondary">
@@ -417,9 +428,15 @@
                             @endif
 
                             @can('delete payment voucher')
-                            <button type="button" class="btn btn-outline-danger" onclick="deletePaymentVoucher()">
-                                <i class="bx bx-trash me-1"></i>Delete
-                            </button>
+                                @if(!$pvLocked)
+                                    <button type="button" class="btn btn-outline-danger" onclick="deletePaymentVoucher()">
+                                        <i class="bx bx-trash me-1"></i>Delete
+                                    </button>
+                                @else
+                                    <button type="button" class="btn btn-outline-secondary" disabled title="Cannot delete: Payment voucher is fully approved">
+                                        <i class="bx bx-lock"></i> Locked
+                                    </button>
+                                @endif
                             @endcan
                             <a href="{{ route('accounting.payment-vouchers.export-pdf', $paymentVoucher->hash_id) }}" class="btn btn-outline-danger">
                                 <i class="bx bx-file me-1"></i>Export PDF
@@ -445,7 +462,7 @@
                 <!-- Attachment Section -->
                 @if($paymentVoucher->attachment)
                 <div class="card radius-10 mt-4">
-                    <div class="card-header bg-info text-white">
+                    <div class="card-header bg-secondary text-white">
                         <h5 class="mb-0"><i class="bx bx-paperclip me-2"></i>Attachment</h5>
                     </div>
                     <div class="card-body">
@@ -471,7 +488,7 @@
                 </div>
                 @else
                 <div class="card radius-10 mt-4">
-                    <div class="card-header bg-light text-white">
+                    <div class="card-header bg-secondary text-white">
                         <h5 class="mb-0"><i class="bx bx-paperclip me-2"></i>Attachment</h5>
                     </div>
                     <div class="card-body text-center">
@@ -566,7 +583,7 @@ $settings = \App\Models\PaymentVoucherApprovalSetting::where('company_id', auth(
                     <div class="col-md-6">
                         <!-- Approve Form -->
                         <div class="card border-success">
-                            <div class="card-header bg-success text-white">
+                            <div class="card-header bg-secondary text-white">
                                 <h6 class="mb-0"><i class="bx bx-check-circle me-2"></i>Approve</h6>
                             </div>
                             <div class="card-body">
@@ -583,7 +600,7 @@ $settings = \App\Models\PaymentVoucherApprovalSetting::where('company_id', auth(
                     <div class="col-md-6">
                         <!-- Reject Form -->
                         <div class="card border-danger">
-                            <div class="card-header bg-danger text-white">
+                            <div class="card-header bg-secondary text-white">
                                 <h6 class="mb-0"><i class="bx bx-x-circle me-2"></i>Reject</h6>
                             </div>
                             <div class="card-body">

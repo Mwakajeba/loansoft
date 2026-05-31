@@ -120,7 +120,8 @@
                 <th>Account Code</th>
                 <th>Account Name</th>
                 <th>Customer</th>
-                <th>Transaction ID</th>
+                <th>Voucher</th>
+                <th>Reference</th>
                 <th>Description</th>
                 <th class="text-end">Debit</th>
                 <th class="text-end">Credit</th>
@@ -137,9 +138,12 @@
             @foreach($generalLedgerData['transactions'] as $transaction)
             @if($currentAccount !== $transaction->chart_account_id)
             @if($currentAccount !== null)
+            @php
+            $previousTransaction = $generalLedgerData['transactions'][$loop->index - 1] ?? null;
+            @endphp
             <!-- Account Total Row -->
             <tr class="account-total">
-                <td colspan="6"><strong>Total for {{ $transaction->account_code }}</strong></td>
+                <td colspan="7"><strong>Total for {{ $previousTransaction->account_code ?? '' }} - {{ $previousTransaction->account_name ?? '' }}</strong></td>
                 <td class="text-end"><strong>{{ number_format($accountTotalDebit, 2) }}</strong></td>
                 <td class="text-end"><strong>{{ number_format($accountTotalCredit, 2) }}</strong></td>
                 <td class="text-end"><strong>{{ number_format($accountTotalDebit - $accountTotalCredit, 2) }}</strong></td>
@@ -156,8 +160,9 @@
                 <td>{{ $transaction->account_code }}</td>
                 <td>{{ $transaction->account_name }}</td>
                 <td>N/A</td>
-                <td>OPENING BALANCE</td>
-                <td>Balance brought forward</td>
+                <td>—</td>
+                <td>—</td>
+                <td>Opening balance brought forward</td>
                 <td class="text-end">{{ $openingAmount >= 0 ? number_format($openingAmount, 2) : '' }}</td>
                 <td class="text-end">{{ $openingAmount < 0 ? number_format(abs($openingAmount), 2) : '' }}</td>
                 <td class="text-end">{{ number_format($openingAmount, 2) }}</td>
@@ -176,7 +181,8 @@
                 <td>{{ $transaction->account_code }}</td>
                 <td>{{ $transaction->account_name }}</td>
                 <td>{{ $transaction->customer_name ?? 'N/A' }}</td>
-                <td>{{ $transaction->transaction_id }}</td>
+                <td>{{ $transaction->voucher_no ?? ($transaction->transaction_type . '-' . $transaction->transaction_id) }}</td>
+                <td>{{ $transaction->reference_no ?? '' }}</td>
                 <td>{{ $transaction->description }}</td>
                 <td class="text-end">{{ $transaction->nature === 'debit' ? number_format($transaction->amount, 2) : '' }}</td>
                 <td class="text-end">{{ $transaction->nature === 'credit' ? number_format($transaction->amount, 2) : '' }}</td>
@@ -198,7 +204,7 @@
             $lastTransaction = end($generalLedgerData['transactions']);
             @endphp
             <tr class="account-total">
-                <td colspan="6"><strong>Total for {{ $lastTransaction->account_code }} - {{ $lastTransaction->account_name }}</strong></td>
+                <td colspan="7"><strong>Total for {{ $lastTransaction->account_code }} - {{ $lastTransaction->account_name }}</strong></td>
                 <td class="text-end"><strong>{{ number_format($accountTotalDebit, 2) }}</strong></td>
                 <td class="text-end"><strong>{{ number_format($accountTotalCredit, 2) }}</strong></td>
                 <td class="text-end"><strong>{{ number_format($accountTotalDebit - $accountTotalCredit, 2) }}</strong></td>

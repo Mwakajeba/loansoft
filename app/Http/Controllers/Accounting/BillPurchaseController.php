@@ -407,13 +407,8 @@ class BillPurchaseController extends Controller
             // Create GL transactions
             $bankAccount = BankAccount::find($request->bank_account_id);
             
-            // Validate bank account is accessible by user's branches
-            if ($bankAccount) {
-                $user = Auth::user();
-                $userBranchIds = $user->branches()->pluck('branches.id')->toArray();
-                if (!empty($userBranchIds) && !$bankAccount->branches()->whereIn('branches.id', $userBranchIds)->exists()) {
-                    return redirect()->back()->withErrors(['bank_account_id' => 'You do not have access to this bank account.'])->withInput();
-                }
+            if ($bankAccount && !$bankAccount->isAccessibleByUser(Auth::user())) {
+                return redirect()->back()->withErrors(['bank_account_id' => 'You do not have access to this bank account.'])->withInput();
             }
 
             // Credit bank account
@@ -524,13 +519,8 @@ class BillPurchaseController extends Controller
             // Create new GL transactions
             $bankAccount = BankAccount::find($request->bank_account_id);
             
-            // Validate bank account is accessible by user's branches
-            if ($bankAccount) {
-                $user = Auth::user();
-                $userBranchIds = $user->branches()->pluck('branches.id')->toArray();
-                if (!empty($userBranchIds) && !$bankAccount->branches()->whereIn('branches.id', $userBranchIds)->exists()) {
-                    return redirect()->back()->withErrors(['bank_account_id' => 'You do not have access to this bank account.'])->withInput();
-                }
+            if ($bankAccount && !$bankAccount->isAccessibleByUser(Auth::user())) {
+                return redirect()->back()->withErrors(['bank_account_id' => 'You do not have access to this bank account.'])->withInput();
             }
 
             // Credit bank account

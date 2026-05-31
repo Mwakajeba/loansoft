@@ -40,8 +40,14 @@
     </div>
     <div class="row">
         <span class="label">Date:</span>
-        <span>{{ \Carbon\Carbon::parse($receiptData['date'])->format('d/m/Y') }}</span>
+        <span>{{ $receiptData['date'] }}</span>
     </div>
+    @if(!empty($receiptData['shared_receipt_installments']))
+    <div class="row">
+        <span class="label">Receipt total:</span>
+        <span>{{ number_format($receiptData['receipt_total_amount'] ?? 0, 2) }} ({{ $receiptData['shared_receipt_installments'] }} installments)</span>
+    </div>
+    @endif
     <div class="row">
         <span class="label">Customer:</span>
         <span>{{ $receiptData['customer_name'] ?? '' }}</span>
@@ -74,7 +80,7 @@
     <div class="divider"></div>
 
     <div class="row">
-        <span class="label">Total Paid</span>
+        <span class="label">Installment Paid</span>
         <span class="label">{{ number_format($receiptData['amount_paid'] ?? 0, 2) }}</span>
     </div>
 
@@ -87,7 +93,7 @@
     </div>
     <div class="row">
         <span>Due Date:</span>
-        <span>{{ \Carbon\Carbon::parse($receiptData['due_date'])->format('d/m/Y') }}</span>
+        <span>{{ $receiptData['due_date'] ?? 'N/A' }}</span>
     </div>
     <div class="row">
         <span>Remaining Schedules:</span>

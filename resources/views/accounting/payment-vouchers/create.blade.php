@@ -91,7 +91,7 @@
                                 <div class="row mb-4">
                                     <div class="col-lg-12">
                                         <div class="card border-danger">
-                                            <div class="card-header bg-light">
+                                            <div class="card-header bg-secondary text-white">
                                                 <h6 class="mb-0 fw-bold">
                                                     <i class="bx bx-user me-2"></i>Payee Information
                                                 </h6>
@@ -215,7 +215,7 @@
                                 <div class="row mb-4">
                                     <div class="col-12">
                                         <div class="card border-danger">
-                                            <div class="card-header bg-light">
+                                            <div class="card-header bg-secondary text-white">
                                                 <h6 class="mb-0 fw-bold">
                                                     <i class="bx bx-list-ul me-2"></i>Line Items
                                                 </h6>

@@ -12,8 +12,17 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('penalties', function (Blueprint $table) {
-            $table->enum('frequency_cycle', ['daily', 'weekly', 'monthly', 'quarterly', 'yearly'])->nullable()->after('charge_frequency');
-            $table->integer('penalty_limit_days')->nullable()->after('frequency_cycle');
+            if (!Schema::hasColumn('penalties', 'charge_frequency')) {
+                $table->enum('charge_frequency', ['daily', 'one_time'])->default('one_time');
+            }
+
+            if (!Schema::hasColumn('penalties', 'frequency_cycle')) {
+                $table->enum('frequency_cycle', ['daily', 'weekly', 'monthly', 'quarterly', 'yearly'])->nullable();
+            }
+
+            if (!Schema::hasColumn('penalties', 'penalty_limit_days')) {
+                $table->integer('penalty_limit_days')->nullable();
+            }
         });
     }
 
@@ -23,7 +32,19 @@ return new class extends Migration
     public function down(): void
     {
         Schema::table('penalties', function (Blueprint $table) {
-            $table->dropColumn(['frequency_cycle', 'penalty_limit_days']);
+            $columns = [];
+
+            if (Schema::hasColumn('penalties', 'frequency_cycle')) {
+                $columns[] = 'frequency_cycle';
+            }
+
+            if (Schema::hasColumn('penalties', 'penalty_limit_days')) {
+                $columns[] = 'penalty_limit_days';
+            }
+
+            if (!empty($columns)) {
+                $table->dropColumn($columns);
+            }
         });
     }
 };

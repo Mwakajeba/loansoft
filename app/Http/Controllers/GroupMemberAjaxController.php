@@ -35,7 +35,6 @@ class GroupMemberAjaxController extends Controller
                 ];
             });
 
-            // Return or use $data as needed, for example:
-            return response()->json(['data' => $data]);
-            }
-        }
+        return response()->json(['data' => $data]);
+    }
+}

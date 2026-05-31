@@ -46,6 +46,14 @@ class ChartAccount extends Model
     ];
 
     /**
+     * Alias for account_name (used in views and activity logs).
+     */
+    public function getNameAttribute(): ?string
+    {
+        return $this->account_name;
+    }
+
+    /**
      * Get the account class group that owns the chart account.
      */
     public function accountClassGroup(): BelongsTo

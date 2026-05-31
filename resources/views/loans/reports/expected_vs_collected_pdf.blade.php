@@ -63,64 +63,55 @@
     <table>
         <thead>
             <tr>
-                <th style="width: 3%;">S/N</th>
-                <th style="width: 10%;">Customer</th>
-                <th style="width: 6%;">Customer No</th>
-                <th style="width: 6%;">Phone</th>
-                <th style="width: 6%;">Loan No</th>
-                <th style="width: 7%;">Loan Amount</th>
-                <th style="width: 6%;">Branch</th>
-                <th style="width: 6%;">Group</th>
-                <th style="width: 8%;">Officer</th>
-                <th style="width: 9%;">Expected</th>
-                <th style="width: 9%;">Collected</th>
-                <th style="width: 8%;">Variance</th>
-                <th style="width: 5%;">Rate %</th>
-                <th style="width: 6%;">Status</th>
+                <th>S/N</th>
+                <th>Customer</th>
+                <th>Customer No</th>
+                <th>Phone</th>
+                <th>Loan Amount</th>
+                <th>Disbursed Date</th>
+                <th>Loan Officer</th>
+                <th>Instalment due date(s)</th>
+                <th>Outstanding Fees</th>
+                <th>Arrears (before period)</th>
+                <th>Due Instalment</th>
+                <th>Accrued Penalties</th>
+                <th>Total Instalment due</th>
+                <th>Amount paid</th>
+                <th>Balance Due</th>
             </tr>
         </thead>
         <tbody>
-            @php
-                $totalExpected = 0;
-                $totalCollected = 0;
-                $totalVariance = 0;
-                $count = 0;
-            @endphp
+            @php $count = 0; $totals = array_fill_keys(['outstanding_fees','arrears_before_period','due_instalment','accrued_penalties','total_instalment_due','amount_paid','balance_due'], 0); @endphp
             @forelse($report_data as $index => $row)
                 @php
                     $count++;
-                    $totalExpected += $row['expected_total'] ?? 0;
-                    $totalCollected += $row['collected_total'] ?? 0;
-                    $totalVariance += $row['variance'] ?? 0;
+                    foreach ($totals as $k => $v) { $totals[$k] += (float)($row[$k] ?? 0); }
                 @endphp
                 <tr>
                     <td class="text-center">{{ $index + 1 }}</td>
                     <td>{{ $row['customer'] }}</td>
                     <td class="text-center">{{ $row['customer_no'] }}</td>
                     <td class="text-center">{{ $row['phone'] }}</td>
-                    <td class="text-center">{{ $row['loan_no'] }}</td>
-                    <td class="text-right">{{ number_format($row['loan_amount'], 0) }}</td>
-                    <td>{{ $row['branch'] }}</td>
-                    <td>{{ $row['group'] }}</td>
+                    <td class="text-right">{{ number_format($row['loan_amount'], 2) }}</td>
+                    <td class="text-center">{{ $row['disbursed_date'] }}</td>
                     <td>{{ $row['loan_officer'] }}</td>
-                    <td class="text-right">{{ number_format($row['expected_total'], 2) }}</td>
-                    <td class="text-right">{{ number_format($row['collected_total'], 2) }}</td>
-                    <td class="text-right">{{ number_format($row['variance'], 2) }}</td>
-                    <td class="text-center">{{ $row['collection_rate'] }}%</td>
-                    <td class="text-center">{{ $row['collection_status'] }}</td>
+                    <td class="text-center" style="font-size: 7px;">{{ $row['instalment_due_dates'] ?? '—' }}</td>
+                    <td class="text-right">{{ number_format($row['outstanding_fees'] ?? 0, 2) }}</td>
+                    <td class="text-right">{{ number_format($row['arrears_before_period'] ?? 0, 2) }}</td>
+                    <td class="text-right">{{ number_format($row['due_instalment'] ?? 0, 2) }}</td>
+                    <td class="text-right">{{ number_format($row['accrued_penalties'] ?? 0, 2) }}</td>
+                    <td class="text-right">{{ number_format($row['total_instalment_due'] ?? 0, 2) }}</td>
+                    <td class="text-right">{{ number_format($row['amount_paid'] ?? 0, 2) }}</td>
+                    <td class="text-right">{{ number_format($row['balance_due'] ?? 0, 2) }}</td>
                 </tr>
             @empty
-                <tr><td colspan="14" class="text-center">No records found</td></tr>
+                <tr><td colspan="15" class="text-center">No records found</td></tr>
             @endforelse
-            <!-- Total Row -->
             <tr class="total-row">
-                <td class="text-center" colspan="2"><strong>TOTAL</strong></td>
-                <td colspan="7" class="text-right"><strong>{{ number_format($count) }} Records</strong></td>
-                <td class="text-right"><strong>{{ number_format($totalExpected, 2) }}</strong></td>
-                <td class="text-right"><strong>{{ number_format($totalCollected, 2) }}</strong></td>
-                <td class="text-right"><strong>{{ number_format($totalVariance, 2) }}</strong></td>
-                <td class="text-center"><strong>{{ $totalExpected > 0 ? number_format(($totalCollected / $totalExpected) * 100, 1) : 0 }}%</strong></td>
-                <td></td>
+                <td colspan="8" class="text-center"><strong>TOTAL ({{ $count }} records)</strong></td>
+                @foreach($totals as $val)
+                    <td class="text-right"><strong>{{ number_format($val, 2) }}</strong></td>
+                @endforeach
             </tr>
         </tbody>
     </table>

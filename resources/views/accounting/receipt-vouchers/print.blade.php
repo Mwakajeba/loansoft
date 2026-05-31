@@ -38,7 +38,7 @@
 
     <div class="row">
         <span class="label">Receipt #:</span>
-        <span>{{ $receipt->reference ?? $receipt->id }}</span>
+        <span>{{ $receipt->display_number }}</span>
     </div>
     <div class="row">
         <span class="label">Date:</span>

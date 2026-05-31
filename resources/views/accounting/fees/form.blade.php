@@ -228,6 +228,7 @@
                                     Yes
                                 </label>
                             </div>
+                            <div class="form-text">You may enable this on several fees; each is applied on the loan schedule when included on the product.</div>
                         </div>
                     </div>
                 </div>
@@ -293,6 +294,10 @@
                 if (feeType === 'range') {
                     amountContainer.hide();
                     rangeContainer.show();
+                    amountInput.removeAttr('required');
+                } else if (feeType === 'custom') {
+                    amountContainer.hide();
+                    rangeContainer.hide();
                     amountInput.removeAttr('required');
                 } else {
                     amountContainer.show();

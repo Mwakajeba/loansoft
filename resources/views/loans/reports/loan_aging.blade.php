@@ -80,55 +80,99 @@
                 </div>
             </div>
             <div class="card-body">
+                <style>
+                    .loan-aging-report-table thead th { background-color: #999 !important; color: #fff !important; border-color: #888 !important; font-weight: 600; }
+                    .loan-aging-report-table tfoot th,
+                    .loan-aging-report-table tfoot td { background-color: #999 !important; color: #fff !important; border-color: #888 !important; font-weight: 600; }
+                </style>
                 <div class="table-responsive">
-                    <table class="table table-bordered table-striped">
-                        <thead class="table-light">
-                             <tr>
-                                <th>Customer</th>
-                                <th>Customer No</th>
-                                <th>Phone</th>
-                                <th>Loan No</th>
-                                <th>Amount</th>
-                                <th>Outstanding Balance</th>
-                                <th>Disbursed Date</th>
-                                <th>Expiry</th>
-                                <th>Branch</th>
-                                <th>Loan Officer</th>
-                                <th>Current</th>
-                                <th>1-30 Days</th>
-                                <th>31-60 Days</th>
-                                <th>61-90 Days</th>
-                                <th>91+ Days</th>
-                                <th>Total Overdue</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            @forelse($agingData as $row)
-                                <tr>
-                                    <td>{{ $row['customer'] }}</td>
-                                    <td>{{ $row['customer_no'] }}</td>
-                                    <td>{{ $row['phone'] }}</td>
-                                    <td>{{ $row['loan_no'] }}</td>
-                                    <td class="text-end">{{ number_format($row['amount'], 2) }}</td>
-                                    <td class="text-end">{{ number_format($row['outstanding_balance'], 2) }}</td>
-                                    <td>{{ $row['disbursed_no'] }}</td>
-                                    <td>{{ $row['expiry'] }}</td>
-                                    <td>{{ $row['branch'] }}</td>
-                                    <td>{{ $row['loan_officer'] }}</td>
-                                    <td class="text-end">{{ number_format($row['current'], 2) }}</td>
-                                    <td class="text-end">{{ number_format($row['bucket_1_30'], 2) }}</td>
-                                    <td class="text-end">{{ number_format($row['bucket_31_60'], 2) }}</td>
-                                    <td class="text-end">{{ number_format($row['bucket_61_90'], 2) }}</td>
-                                    <td class="text-end">{{ number_format($row['bucket_91_plus'], 2) }}</td>
-                                    <td class="text-end text-danger">{{ number_format($row['total_overdue'], 2) }}</td>
+                    @if(count($agingData))
+                        @php
+                            $sumAmount = collect($agingData)->sum(fn ($r) => (float) ($r['loan_amount'] ?? 0));
+                            $sumOut = collect($agingData)->sum(fn ($r) => (float) ($r['outstanding_principal'] ?? 0));
+                            $sumCurrent = collect($agingData)->sum(fn ($r) => (float) ($r['bucket_current'] ?? 0));
+                            $sumEsm = collect($agingData)->sum(fn ($r) => (float) ($r['bucket_esm'] ?? 0));
+                            $sumSub = collect($agingData)->sum(fn ($r) => (float) ($r['bucket_substandard'] ?? 0));
+                            $sumDoubt = collect($agingData)->sum(fn ($r) => (float) ($r['bucket_doubtful'] ?? 0));
+                            $sumLoss = collect($agingData)->sum(fn ($r) => (float) ($r['bucket_loss'] ?? 0));
+                            $sumProvision = collect($agingData)->sum(fn ($r) => (float) ($r['provision_amount'] ?? 0));
+                            $rowCount = count($agingData);
+                        @endphp
+                        <table class="table table-bordered table-striped loan-aging-report-table">
+                            <thead>
+                                <tr class="text-white" style="background:#1f4e79;">
+                                    <th class="text-center">#</th>
+                                    <th>Customer</th>
+                                    <th>Customer No</th>
+                                    <th>Phone</th>
+                                    <th>Loan No</th>
+                                    <th>Disbursed Date</th>
+                                    <th>Loan Amount</th>
+                                    <th>Gender</th>
+                                    <th>Age</th>
+                                    <th>Subsector</th>
+                                    <th>Outstanding principal</th>
+                                    <th class="text-center">Days In Arrears</th>
+                                    <th style="background:#70ad47;">0-5 CURRENT (1%)</th>
+                                    <th style="background:#ffc000;">6-30 ESPECIALLY MENTIONED (5%)</th>
+                                    <th style="background:#bf9000;">31-60 SUBSTANDARD (25%)</th>
+                                    <th style="background:#ed7d31;">61-90 DOUBTFUL (50%)</th>
+                                    <th style="background:#ff0000;">MORE 91 LOSS (100%)</th>
+                                    <th>PROVISION RATE %</th>
+                                    <th>PROVISION AMOUNT</th>
                                 </tr>
-                            @empty
+                            </thead>
+                            <tbody>
+                                @foreach($agingData as $row)
+                                    <tr>
+                                        <td class="text-center">{{ $loop->iteration }}</td>
+                                        <td>{{ $row['customer'] }}</td>
+                                        <td>{{ $row['customer_no'] }}</td>
+                                        <td>{{ $row['phone'] }}</td>
+                                        <td>{{ $row['loan_no'] }}</td>
+                                        <td>{{ $row['disbursed_date'] }}</td>
+                                        <td class="text-end">{{ number_format($row['loan_amount'], 2) }}</td>
+                                        <td>{{ $row['gender'] ?? '' }}</td>
+                                        <td>{{ $row['age_category'] ?? '' }}</td>
+                                        <td>{{ $row['subsector'] ?? '' }}</td>
+                                        <td class="text-end">{{ number_format($row['outstanding_principal'], 2) }}</td>
+                                        <td class="text-center">{{ $row['days_in_arrears'] ?? 0 }}</td>
+                                        <td class="text-end">{{ number_format($row['bucket_current'], 2) }}</td>
+                                        <td class="text-end">{{ number_format($row['bucket_esm'], 2) }}</td>
+                                        <td class="text-end">{{ number_format($row['bucket_substandard'], 2) }}</td>
+                                        <td class="text-end">{{ number_format($row['bucket_doubtful'], 2) }}</td>
+                                        <td class="text-end">{{ number_format($row['bucket_loss'], 2) }}</td>
+                                        <td class="text-center">{{ $row['provision_rate'] ?? 0 }}%</td>
+                                        <td class="text-end">{{ number_format($row['provision_amount'] ?? 0, 2) }}</td>
+                                    </tr>
+                                @endforeach
+                            </tbody>
+                            <tfoot>
                                 <tr>
-                                    <td colspan="16" class="text-center text-muted">No aging data found for the selected criteria.</td>
+                                    <th colspan="6" class="text-start">Total ({{ $rowCount }} records)</th>
+                                    <th class="text-end">{{ number_format($sumAmount, 2) }}</th>
+                                    <th colspan="3"></th>
+                                    <th class="text-end">{{ number_format($sumOut, 2) }}</th>
+                                    <th></th>
+                                    <th class="text-end">{{ number_format($sumCurrent, 2) }}</th>
+                                    <th class="text-end">{{ number_format($sumEsm, 2) }}</th>
+                                    <th class="text-end">{{ number_format($sumSub, 2) }}</th>
+                                    <th class="text-end">{{ number_format($sumDoubt, 2) }}</th>
+                                    <th class="text-end">{{ number_format($sumLoss, 2) }}</th>
+                                    <th></th>
+                                    <th class="text-end">{{ number_format($sumProvision, 2) }}</th>
                                 </tr>
-                            @endforelse
-                        </tbody>
-                    </table>
+                            </tfoot>
+                        </table>
+                    @else
+                        <table class="table table-bordered">
+                            <tbody>
+                                <tr>
+                                    <td class="text-center text-muted py-4">No aging data found for the selected criteria.</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    @endif
                 </div>
             </div>
         </div>

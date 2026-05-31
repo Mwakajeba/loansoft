@@ -67,7 +67,7 @@ class RepaymentReminderJob implements ShouldQueue
             return;
         }
 
-        $schedules = LoanSchedule::with(['loan.product', 'loan.customer', 'repayments'])
+        $schedules = LoanSchedule::with(['loan.product', 'loan.customer', 'loan.branch.company', 'repayments'])
             ->whereIn('due_date', $targetDates)
             ->get();
 
@@ -116,35 +116,57 @@ class RepaymentReminderJob implements ShouldQueue
             $amount = number_format($unpaid, 2);
             $due = Carbon::parse($schedule->due_date);
             $dueDate = $due->format('d/m/Y');
-            $daysUntil = Carbon::today()->diffInDays($due, false);
-            
-            // Determine reminder type and message
+            $daysUntil = (int) Carbon::today()->diffInDays($due, false);
+
+            // Reminder labels + phrasing for SMS
             if ($daysUntil === 3) {
-                $reminderType = "Kumbusho la kwanza";
-                $daysText = "siku 3 zijazo";
+                $reminderType = 'Kumbusho la kwanza';
             } elseif ($daysUntil === 2) {
-                $reminderType = "Kumbusho la pili";
-                $daysText = "siku 2 zijazo";
+                $reminderType = 'Kumbusho la pili';
+            } elseif ($daysUntil === 1) {
+                $reminderType = 'Kumbusho';
             } elseif ($daysUntil <= 0) {
-                $reminderType = "Kumbusho la mwisho";
-                $daysText = "leo";
+                $reminderType = 'Kumbusho la mwisho';
             } else {
-                $reminderType = "Kumbusho";
-                $daysText = "siku {$daysUntil} zijazo";
+                $reminderType = 'Kumbusho';
             }
 
+            // Full phrase for built-in fallback: (siku 2 zijazo) or (leo)
+            $daysPhraseForSms = $daysUntil <= 0
+                ? 'leo'
+                : 'siku ' . $daysUntil . ' zijazo';
+
+            // Template {days_overdue}: omit trailing "zijazo" so custom templates like
+            // "... ({days_overdue} zijazo)" do not become "siku 2 zijazo zijazo".
+            $daysOverdueForTemplate = $daysUntil <= 0 ? 'leo' : 'siku ' . $daysUntil;
+
+            // Resolve company name and phone: branch → company, then customer company, then current_company()
+            $company = $loan->branch && $loan->branch->company ? $loan->branch->company : null;
+            if (!$company && $customer->company_id) {
+                $company = \App\Models\Company::find($customer->company_id);
+            }
+            if (!$company && function_exists('current_company')) {
+                $company = current_company();
+            }
+            $companyName = $company ? $company->name : 'SMARTFINANCE';
+            $companyPhone = $company ? ($company->phone ?? '') : '';
+
+            // Ensure placeholders always get a string (SmsHelper uses str_replace; empty or non-string can break)
             $templateVars = [
-                'customer_name' => $customer->name,
-                'amount'        => $amount,
-                'days_overdue'  => '',
-                'loan_no'       => $loan->loanNo,
-                'due_date'      => $dueDate,
-                'reminder_type' => $reminderType,
-                'company_name'  => '',
-                'company_phone' => '',
+                'customer_name' => (string) ($customer->name ?? ''),
+                'amount'        => (string) $amount,
+                'days_overdue'  => (string) $daysOverdueForTemplate,
+                'loan_no'       => (string) ($loan->loanNo ?? ''),
+                'due_date'      => (string) $dueDate,
+                'reminder_type' => (string) $reminderType,
+                'company_name'  => (string) $companyName,
+                'company_phone' => (string) $companyPhone,
             ];
             $message = SmsHelper::resolveTemplate('loan_arrears_reminder', $templateVars)
-                ?? "Habari {$customer->name}. {$reminderType} la malipo ya mkopo namba {$loan->loanNo}. Kiasi kinachodaiwa ni TZS {$amount}, tarehe ya mwisho ya malipo ni {$dueDate} ({$daysText}). Tafadhali lipa kwa wakati ili kuepuka faini.";
+                ?? "Habari {$customer->name}. {$reminderType} la malipo ya mkopo namba {$loan->loanNo}. Kiasi kinachodaiwa ni TZS {$amount}, tarehe ya mwisho ya malipo ni {$dueDate} ({$daysPhraseForSms}). Tafadhali lipa kwa wakati ili kuepuka faini.";
+
+            // Templates often use "({days_overdue} zijazo)"; when due is today, {days_overdue} is "leo" — drop the stray " zijazo".
+            $message = preg_replace('/\(leo\s+zijazo\)/u', '(leo)', $message);
 
             $phone = normalize_phone_number($customer->phone1);
             SmsHelper::send($phone, $message, 'loan_arrears_reminder');

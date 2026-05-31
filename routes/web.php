@@ -59,7 +59,11 @@ use App\Http\Controllers\Reports\BotLoansDisbursedController;
 use App\Http\Controllers\Reports\BotGeographicalDistributionController;
 use App\Http\Controllers\SubscriptionController;
 use App\Http\Controllers\LaravelLogsController;
+use App\Http\Controllers\DcbGatewayController;
 // Add other main app routes here
+
+// DCB Gateway callback (public — configured on SmartSoft gateway server)
+Route::post('/dcb/callback', [DcbGatewayController::class, 'callback'])->name('dcb.callback');
 Route::get('/dashboard/loan-product-disbursement', [DashboardController::class, 'loanProductDisbursement'])->middleware('auth');
 Route::get('/dashboard/delinquency-loan-buckets', [DashboardController::class, 'delinquencyLoanBuckets'])->middleware('auth');
 Route::get('/dashboard/monthly-collections', [DashboardController::class, 'monthlyCollections'])->middleware('auth');
@@ -156,6 +160,9 @@ Route::post('/send-email-otp', [OtpEmailController::class, 'sendOtpEmail'])->nam
 // Reports Route
 Route::get('/reports', [App\Http\Controllers\ReportsController::class, 'index'])->middleware('auth')->name('reports.index');
 Route::get('/reports/loans', [App\Http\Controllers\ReportsController::class, 'loans'])->middleware('auth')->name('reports.loans');
+Route::get('/reports/loans/portfolio-classification', [App\Http\Controllers\LoanReportController::class, 'portfolioClassificationReport'])->middleware('auth')->name('reports.loans.portfolio_classification');
+Route::get('/reports/loans/portfolio-classification/export-excel', [App\Http\Controllers\LoanReportController::class, 'exportPortfolioClassificationToExcel'])->middleware('auth')->name('reports.loans.portfolio_classification.export_excel');
+Route::get('/reports/loans/portfolio-classification/export-pdf', [App\Http\Controllers\LoanReportController::class, 'exportPortfolioClassificationToPdf'])->middleware('auth')->name('reports.loans.portfolio_classification.export_pdf');
 Route::get('/reports/customers', [App\Http\Controllers\ReportsController::class, 'customers'])->middleware('auth')->name('reports.customers');
 Route::get("/reports/customers/list", [App\Http\Controllers\Reports\CustomerListReportController::class, "index"])->middleware("auth")->name("reports.customers.list");
 Route::get("/reports/customers/list/export", [App\Http\Controllers\Reports\CustomerListReportController::class, "export"])->middleware("auth")->name("reports.customers.list.export");
@@ -338,9 +345,32 @@ Route::prefix('settings')->name('settings.')->middleware(['auth', 'company.scope
     Route::put('/sms', [SettingsController::class, 'updateSmsSettings'])->name('sms.update');
     Route::post('/sms/test', [SettingsController::class, 'testSmsSettings'])->name('sms.test');
 
+    // DCB Payment Gateway Settings
+    Route::get('/dcb', [SettingsController::class, 'dcbSettings'])->name('dcb');
+    Route::put('/dcb', [SettingsController::class, 'updateDcbSettings'])->name('dcb.update');
+    Route::post('/dcb/test', [SettingsController::class, 'testDcbSettings'])->name('dcb.test');
+
+    // DCB Payment API (authenticated)
+    Route::prefix('dcb')->name('dcb.')->group(function () {
+        Route::get('/financial-institutions', [DcbGatewayController::class, 'financialInstitutions'])->name('financial-institutions');
+        Route::post('/account-lookup', [DcbGatewayController::class, 'accountLookup'])->name('account-lookup');
+        Route::post('/transfer', [DcbGatewayController::class, 'transfer'])->name('transfer');
+        Route::get('/transactions', [DcbGatewayController::class, 'transactions'])->name('transactions');
+        Route::post('/loans/{loan}/disburse', [DcbGatewayController::class, 'disburseLoan'])->name('loans.disburse');
+    });
+
     // Payment Voucher Approval Settings
     Route::get('/payment-voucher-approval', [SettingsController::class, 'paymentVoucherApprovalSettings'])->name('payment-voucher-approval');
     Route::put('/payment-voucher-approval', [SettingsController::class, 'updatePaymentVoucherApprovalSettings'])->name('payment-voucher-approval.update');
+
+    // Arrears classifications (loan aging buckets)
+    Route::get('/arrears-classifications', [SettingsController::class, 'arrearsClassificationsIndex'])->name('arrears-classifications.index');
+    Route::get('/arrears-classifications/data', [SettingsController::class, 'arrearsClassificationsData'])->name('arrears-classifications.data');
+    Route::post('/arrears-classifications', [SettingsController::class, 'arrearsClassificationsStore'])->name('arrears-classifications.store');
+    Route::put('/arrears-classifications/{arrearsClassification}', [SettingsController::class, 'arrearsClassificationsUpdate'])->name('arrears-classifications.update');
+    Route::delete('/arrears-classifications/{arrearsClassification}', [SettingsController::class, 'arrearsClassificationsDestroy'])->name('arrears-classifications.destroy');
+    Route::post('/arrears-classifications/clear-all', [SettingsController::class, 'arrearsClassificationsClearAll'])->name('arrears-classifications.clear-all');
+    Route::post('/arrears-classifications/seed-defaults', [SettingsController::class, 'arrearsClassificationsSeedDefaults'])->name('arrears-classifications.seed-defaults');
 
     // Bulk Email Settings (Super Admin only)
     Route::middleware(['role:super-admin'])->group(function () {
@@ -360,6 +390,7 @@ Route::prefix('settings')->name('settings.')->middleware(['auth', 'company.scope
     
     // Run Daily Accrual Interest
     Route::post('/daily-accrual-interest/run', [SettingsController::class, 'runDailyAccrualInterest'])->name('daily-accrual-interest.run');
+    Route::post('/scheduled-jobs/run-daily-batch', [SettingsController::class, 'runDailyBatch'])->name('scheduled-jobs.run-daily-batch');
 });
 
 ////////////////////////////////////////////// END SETTINGS ROUTES /////////////////////////////////////////////
@@ -756,6 +787,11 @@ Route::name('loans.reports.')->group(function () {
     Route::get('/portfolio/export-excel', [LoanReportController::class, 'exportPortfolioToExcel'])->name('portfolio.export_excel');
     Route::get('/portfolio/export-pdf', [LoanReportController::class, 'exportPortfolioToPdf'])->name('portfolio.export_pdf');
 
+    // Loan Portfolio Classification Report
+    Route::get('/portfolio-classification', [LoanReportController::class, 'portfolioClassificationReport'])->name('portfolio_classification');
+    Route::get('/portfolio-classification/export-excel', [LoanReportController::class, 'exportPortfolioClassificationToExcel'])->name('portfolio_classification.export_excel');
+    Route::get('/portfolio-classification/export-pdf', [LoanReportController::class, 'exportPortfolioClassificationToPdf'])->name('portfolio_classification.export_pdf');
+
     // Loan Performance Report
     Route::get('/performance', [LoanReportController::class, 'performanceReport'])->name('performance');
     Route::get('/performance/export-excel', [LoanReportController::class, 'exportPerformanceToExcel'])->name('performance.export_excel');
@@ -773,14 +809,22 @@ Route::name('loans.reports.')->group(function () {
     Route::get('/npl', [LoanReportController::class, 'nonPerformingLoanReport'])->name('npl');
     Route::get('/npl/export-excel', [LoanReportController::class, 'exportNPLToExcel'])->name('npl.export_excel');
     Route::get('/npl/export-pdf', [LoanReportController::class, 'exportNPLToPdf'])->name('npl.export_pdf');
+
+    // CRB Report
+    Route::get('/crb', [LoanReportController::class, 'crbReport'])->name('crb');
 });
 
-// Loan Reports Routes (accounting.loans.reports.*)
-Route::prefix('accounting/loans/reports')->name('accounting.loans.reports.')->group(function () {
+// Loan Reports Routes (accounting.loans.reports.*) — auth required (exports use auth()->user())
+Route::prefix('accounting/loans/reports')->name('accounting.loans.reports.')->middleware('auth')->group(function () {
     // Loan Portfolio Report
     Route::get('/portfolio', [LoanReportController::class, 'portfolioReport'])->name('portfolio');
     Route::get('/portfolio/export-excel', [LoanReportController::class, 'exportPortfolioToExcel'])->name('portfolio.export_excel');
     Route::get('/portfolio/export-pdf', [LoanReportController::class, 'exportPortfolioToPdf'])->name('portfolio.export_pdf');
+
+    // Loan Portfolio Classification Report
+    Route::get('/portfolio-classification', [LoanReportController::class, 'portfolioClassificationReport'])->name('portfolio_classification');
+    Route::get('/portfolio-classification/export-excel', [LoanReportController::class, 'exportPortfolioClassificationToExcel'])->name('portfolio_classification.export_excel');
+    Route::get('/portfolio-classification/export-pdf', [LoanReportController::class, 'exportPortfolioClassificationToPdf'])->name('portfolio_classification.export_pdf');
 
     // Loan Performance Report
     Route::get('/performance', [LoanReportController::class, 'performanceReport'])->name('performance');
@@ -837,6 +881,9 @@ Route::prefix('accounting/loans/reports')->name('accounting.loans.reports.')->gr
     Route::get('/npl', [LoanReportController::class, 'nonPerformingLoanReport'])->name('npl');
     Route::get('/npl/export-excel', [LoanReportController::class, 'exportNPLToExcel'])->name('npl.export_excel');
     Route::get('/npl/export-pdf', [LoanReportController::class, 'exportNPLToPdf'])->name('npl.export_pdf');
+
+    // CRB Report
+    Route::get('/crb', [LoanReportController::class, 'crbReport'])->name('crb');
 });
 
 ////////////////////////////////////////////// END ACCOUNTING MANAGEMENT ///////////////////////////////////////////
@@ -954,8 +1001,7 @@ Route::middleware(['auth'])->group(function () {
     // Group repayment route - catch-all, must come AFTER specific routes
     Route::post('repayments/{encodedId}', [GroupController::class, 'groupStore'])->name('groups.groupStore');
 
-    // Group member management routes
-    Route::delete('groups/{encodedId}/members/{memberId}', [GroupController::class, 'removeMember'])->name('groups.members.remove');
+    // Group member management routes (remove member: see group-members.destroy below)
     Route::post('groups/{encodedId}/transfer-member', [GroupController::class, 'transferMember'])->name('groups.members.transfer');
     Route::get('groups/{encodedId}/members-for-transfer', [GroupController::class, 'getMembersForTransfer'])->name('groups.members.for-transfer');
 });
@@ -965,6 +1011,10 @@ Route::middleware(['auth'])->group(function () {
     Route::get('groups/{encodedId}/members/create', [GroupMemberController::class, 'create'])->name('group-members.create');
     Route::post('groups/{encodedId}/members', [GroupMemberController::class, 'store'])->name('group-members.store');
     Route::delete('groups/{encodedId}/members/{member}', [GroupMemberController::class, 'destroy'])->name('group-members.destroy');
+    // Browsers may open member URLs directly; there is no member detail page — send back to the group
+    Route::get('groups/{encodedId}/members/{member}', function (string $encodedId) {
+        return redirect()->route('groups.show', $encodedId);
+    })->where('member', '[0-9]+')->name('group-members.show.redirect');
 });
 
 ////////////////////////////////////////////// END GROUP MANAGEMENT ///////////////////////////////////////////
@@ -1045,6 +1095,7 @@ Route::middleware(['auth'])->group(function () {
     Route::post('/repayments', [LoanRepaymentController::class, 'store'])->name('repayments.store');
     // Note: /repayments/settle-loan route is defined in GROUP MANAGEMENT section to avoid route conflicts
     Route::get('/repayments/history/{loanId}', [LoanRepaymentController::class, 'getRepaymentHistory'])->name('repayments.history');
+    Route::get('/repayments/context/{loanId}', [LoanRepaymentController::class, 'repaymentContext'])->name('repayments.context');
     Route::get('/repayments/schedule/{scheduleId}', [LoanRepaymentController::class, 'getScheduleDetails'])->name('repayments.schedule-details');
     Route::post('/repayments/remove-penalty/{scheduleId}', [LoanRepaymentController::class, 'removePenalty'])->name('repayments.remove-penalty');
     Route::post('/repayments/calculate-schedule/{loanId}', [LoanRepaymentController::class, 'calculateSchedule'])->name('repayments.calculate-schedule');

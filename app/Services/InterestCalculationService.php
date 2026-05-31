@@ -43,10 +43,12 @@ class InterestCalculationService
             }
         }
 
-        // Treat interest as ANNUAL percentage from loan product if available, otherwise fall back to loan's own interest
-        // Rule: Daily = annual_interest / 365
+        // Annual rate from loan record (set at approval); fallback to product max rate.
         $product = $loan->product;
-        $annualInterestRate = $product && $product->interest ? $product->interest : $loan->interest; // e.g. 12 for 12% per year
+        $annualInterestRate = (float) ($loan->interest ?? 0);
+        if ($annualInterestRate <= 0 && $product) {
+            $annualInterestRate = (float) ($product->maximum_interest_rate ?? $product->minimum_interest_rate ?? 0);
+        }
         $dailyInterestRate = ($annualInterestRate / 365) / 100; // decimal per day
 
         // Calculate daily interest amount
@@ -109,7 +111,8 @@ class InterestCalculationService
             // If the due date has passed as of the accrual date and there's a remaining amount
             if ($dueDate->lt($asOfDate)) {
                 // Calculate remaining amount: total due - paid
-                $interestAmount = $scheduleItem->accrued_interest ?? $scheduleItem->interest ?? 0;
+                $scheduleItem->setRelation('loan', $loan);
+                $interestAmount = $scheduleItem->balance_interest_component;
                 $totalDue = $scheduleItem->principal + $interestAmount + $scheduleItem->fee_amount + $scheduleItem->penalty_amount;
                 $paidAmount = $scheduleItem->repayments ? $scheduleItem->repayments->sum(function ($rep) {
                     return $rep->principal + $rep->interest + $rep->fee_amount + $rep->penalt_amount;

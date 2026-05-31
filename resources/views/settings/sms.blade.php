@@ -110,7 +110,8 @@
                             <div class="mt-4">
                                 <h5 class="mb-2">When do you want to send SMS?</h5>
                                 <p class="text-muted mb-2">
-                                    Enable events below. Optionally type a custom message — if left blank, the system default message is used.
+                                    Enable events below to send SMS to the <strong>customer</strong>. For loan disbursement and loan repayment, choose customer only or customer and company phone (Settings → Company).
+                                    Optionally type a custom message — if left blank, the system default is used.
                                 </p>
                                 <div class="row g-3">
                                     @foreach(($smsEvents ?? []) as $key => $label)
@@ -177,6 +178,158 @@
                                                                 {{ strlen($customTemplates[$key] ?? '') }}/500
                                                             </small>
                                                         </div>
+
+                                                        @if($key === 'loan_disbursement')
+                                                            @php
+                                                                $disbursementRecipients = old('loan_disbursement_recipients', $loanDisbursementRecipients ?? 'customer');
+                                                            @endphp
+                                                            <div class="mt-3 pt-3 border-top">
+                                                                <label class="form-label fw-semibold mb-2">Send disbursement SMS to</label>
+                                                                <div class="form-check">
+                                                                    <input
+                                                                        class="form-check-input loan-disbursement-recipient"
+                                                                        type="radio"
+                                                                        name="loan_disbursement_recipients"
+                                                                        id="loan_disbursement_recipients_customer"
+                                                                        value="customer"
+                                                                        @checked($disbursementRecipients === 'customer')
+                                                                    >
+                                                                    <label class="form-check-label" for="loan_disbursement_recipients_customer">
+                                                                        Customer only
+                                                                    </label>
+                                                                </div>
+                                                                <div class="form-check">
+                                                                    <input
+                                                                        class="form-check-input loan-disbursement-recipient"
+                                                                        type="radio"
+                                                                        name="loan_disbursement_recipients"
+                                                                        id="loan_disbursement_recipients_both"
+                                                                        value="customer_and_company"
+                                                                        @checked($disbursementRecipients === 'customer_and_company')
+                                                                    >
+                                                                    <label class="form-check-label" for="loan_disbursement_recipients_both">
+                                                                        Customer and company phone
+                                                                    </label>
+                                                                </div>
+                                                                <small class="text-muted d-block mt-1">
+                                                                    Company phone is configured under Settings → Company.
+                                                                </small>
+                                                            </div>
+
+                                                            <div id="loan_disbursement_company_template_box"
+                                                                 class="mt-3"
+                                                                 style="{{ $disbursementRecipients === 'customer_and_company' ? '' : 'display:none;' }}">
+                                                                <label class="form-label fw-semibold mb-1" for="sms_template_loan_disbursement_company">
+                                                                    Company phone message (optional)
+                                                                </label>
+                                                                @if(!empty($eventVariables['loan_disbursement'] ?? []))
+                                                                    <div class="mb-2">
+                                                                        <small class="text-muted d-block mb-1">
+                                                                            <i class="bx bx-info-circle me-1"></i>
+                                                                            Available variables — click to insert:
+                                                                        </small>
+                                                                        @foreach($eventVariables['loan_disbursement'] as $var)
+                                                                            <span class="badge bg-secondary me-1 mb-1 sms-var-badge"
+                                                                                  style="cursor:pointer; font-size:0.8rem;"
+                                                                                  data-target="sms_template_loan_disbursement_company"
+                                                                                  data-var="{{ $var }}"
+                                                                                  title="Click to insert {{ $var }}">{{ $var }}</span>
+                                                                        @endforeach
+                                                                    </div>
+                                                                @endif
+                                                                <textarea
+                                                                    class="form-control form-control-sm"
+                                                                    id="sms_template_loan_disbursement_company"
+                                                                    name="sms_templates[loan_disbursement_company]"
+                                                                    rows="3"
+                                                                    maxlength="500"
+                                                                    placeholder="Taarifa: Mkopo {loan_no} wa Tsh {amount} umetolewa kwa {customer_name} tarehe {loan_date}. {company_name}"
+                                                                >{{ old('sms_templates.loan_disbursement_company', $customTemplates['loan_disbursement_company'] ?? '') }}</textarea>
+                                                                <div class="d-flex justify-content-between mt-1">
+                                                                    <small class="text-muted">
+                                                                        Sent to the company phone when customer and company is selected.
+                                                                    </small>
+                                                                    <small class="text-muted sms-char-count" data-target="sms_template_loan_disbursement_company">
+                                                                        {{ strlen($customTemplates['loan_disbursement_company'] ?? '') }}/500
+                                                                    </small>
+                                                                </div>
+                                                            </div>
+                                                        @elseif($key === 'loan_repayment')
+                                                            @php
+                                                                $repaymentRecipients = old('loan_repayment_recipients', $loanRepaymentRecipients ?? 'customer');
+                                                            @endphp
+                                                            <div class="mt-3 pt-3 border-top">
+                                                                <label class="form-label fw-semibold mb-2">Send repayment SMS to</label>
+                                                                <div class="form-check">
+                                                                    <input
+                                                                        class="form-check-input loan-repayment-recipient"
+                                                                        type="radio"
+                                                                        name="loan_repayment_recipients"
+                                                                        id="loan_repayment_recipients_customer"
+                                                                        value="customer"
+                                                                        @checked($repaymentRecipients === 'customer')
+                                                                    >
+                                                                    <label class="form-check-label" for="loan_repayment_recipients_customer">
+                                                                        Customer only
+                                                                    </label>
+                                                                </div>
+                                                                <div class="form-check">
+                                                                    <input
+                                                                        class="form-check-input loan-repayment-recipient"
+                                                                        type="radio"
+                                                                        name="loan_repayment_recipients"
+                                                                        id="loan_repayment_recipients_both"
+                                                                        value="customer_and_company"
+                                                                        @checked($repaymentRecipients === 'customer_and_company')
+                                                                    >
+                                                                    <label class="form-check-label" for="loan_repayment_recipients_both">
+                                                                        Customer and company phone
+                                                                    </label>
+                                                                </div>
+                                                                <small class="text-muted d-block mt-1">
+                                                                    Company phone is configured under Settings → Company.
+                                                                </small>
+                                                            </div>
+
+                                                            <div id="loan_repayment_company_template_box"
+                                                                 class="mt-3"
+                                                                 style="{{ $repaymentRecipients === 'customer_and_company' ? '' : 'display:none;' }}">
+                                                                <label class="form-label fw-semibold mb-1" for="sms_template_loan_repayment_company">
+                                                                    Company phone message (optional)
+                                                                </label>
+                                                                @if(!empty($eventVariables['loan_repayment'] ?? []))
+                                                                    <div class="mb-2">
+                                                                        <small class="text-muted d-block mb-1">
+                                                                            <i class="bx bx-info-circle me-1"></i>
+                                                                            Available variables — click to insert:
+                                                                        </small>
+                                                                        @foreach($eventVariables['loan_repayment'] as $var)
+                                                                            <span class="badge bg-secondary me-1 mb-1 sms-var-badge"
+                                                                                  style="cursor:pointer; font-size:0.8rem;"
+                                                                                  data-target="sms_template_loan_repayment_company"
+                                                                                  data-var="{{ $var }}"
+                                                                                  title="Click to insert {{ $var }}">{{ $var }}</span>
+                                                                        @endforeach
+                                                                    </div>
+                                                                @endif
+                                                                <textarea
+                                                                    class="form-control form-control-sm"
+                                                                    id="sms_template_loan_repayment_company"
+                                                                    name="sms_templates[loan_repayment_company]"
+                                                                    rows="3"
+                                                                    maxlength="500"
+                                                                    placeholder="Taarifa: {customer_name} amelipa Tsh {amount} kwa mkopo {loan_no} tarehe {payment_date}. {company_name}"
+                                                                >{{ old('sms_templates.loan_repayment_company', $customTemplates['loan_repayment_company'] ?? '') }}</textarea>
+                                                                <div class="d-flex justify-content-between mt-1">
+                                                                    <small class="text-muted">
+                                                                        Sent to the company phone when customer and company is selected.
+                                                                    </small>
+                                                                    <small class="text-muted sms-char-count" data-target="sms_template_loan_repayment_company">
+                                                                        {{ strlen($customTemplates['loan_repayment_company'] ?? '') }}/500
+                                                                    </small>
+                                                                </div>
+                                                            </div>
+                                                        @endif
                                                     </div>
                                                 </div>
                                             </div>
@@ -239,7 +392,47 @@
             if (box) {
                 box.style.display = this.checked ? '' : 'none';
             }
+            if (this.id === 'sms_event_loan_repayment') {
+                toggleLoanRepaymentCompanyTemplate();
+            }
+            if (this.id === 'sms_event_loan_disbursement') {
+                toggleLoanDisbursementCompanyTemplate();
+            }
         });
+    });
+
+    function toggleLoanDisbursementCompanyTemplate() {
+        var companyBox = document.getElementById('loan_disbursement_company_template_box');
+        var bothRadio = document.getElementById('loan_disbursement_recipients_both');
+        var disbursementCheckbox = document.getElementById('sms_event_loan_disbursement');
+        if (!companyBox || !bothRadio) {
+            return;
+        }
+        var showCompany = bothRadio.checked
+            && disbursementCheckbox
+            && disbursementCheckbox.checked;
+        companyBox.style.display = showCompany ? '' : 'none';
+    }
+
+    document.querySelectorAll('.loan-disbursement-recipient').forEach(function (radio) {
+        radio.addEventListener('change', toggleLoanDisbursementCompanyTemplate);
+    });
+
+    function toggleLoanRepaymentCompanyTemplate() {
+        var companyBox = document.getElementById('loan_repayment_company_template_box');
+        var bothRadio = document.getElementById('loan_repayment_recipients_both');
+        var repaymentCheckbox = document.getElementById('sms_event_loan_repayment');
+        if (!companyBox || !bothRadio) {
+            return;
+        }
+        var showCompany = bothRadio.checked
+            && repaymentCheckbox
+            && repaymentCheckbox.checked;
+        companyBox.style.display = showCompany ? '' : 'none';
+    }
+
+    document.querySelectorAll('.loan-repayment-recipient').forEach(function (radio) {
+        radio.addEventListener('change', toggleLoanRepaymentCompanyTemplate);
     });
 
     // Insert variable badge into linked textarea at cursor position

@@ -265,7 +265,7 @@
                                         <i class="bx bx-download me-1"></i> Download Template
                                     </button>
                                 </div>
-                                <small class="text-muted">Download the CSV template and fill in your loan data</small>
+                                <small class="text-muted">Download the Excel template (dropdowns for interest cycle &amp; sector) and fill in your loan data</small>
                             </div>
 
                             <!-- Product Selection -->
@@ -313,13 +313,13 @@
                                 @error('chart_account_id') <div class="invalid-feedback">{{ $message }}</div> @enderror
                             </div>
 
-                            <!-- CSV File Upload -->
+                            <!-- File Upload -->
                             <div class="col-md-6 mb-3">
-                                <label class="form-label">CSV File <span class="text-danger">*</span></label>
+                                <label class="form-label">Excel / CSV file <span class="text-danger">*</span></label>
                                 <input type="file" name="csv_file"
-                                    class="form-control @error('csv_file') is-invalid @enderror" accept=".csv" required>
+                                    class="form-control @error('csv_file') is-invalid @enderror" accept=".csv,.xlsx,.xls" required>
                                 @error('csv_file') <div class="invalid-feedback">{{ $message }}</div> @enderror
-                                <small class="text-muted">Upload the filled CSV template</small>
+                                <small class="text-muted">Upload the filled template (.xlsx recommended for dropdowns)</small>
                             </div>
                         </div>
 
@@ -327,19 +327,20 @@
                         <div class="alert alert-info">
                             <h6 class="alert-heading">Instructions:</h6>
                             <ul class="mb-0">
-                                <li>Select a loan product first, then download the template</li>
-                                <li>Interest cycle will be automatically taken from the selected product</li>
-                                <li>Fill in the loan data in the CSV template</li>
+                                <li>Select a loan product first, then download the Excel template</li>
+                                <li>Use the <strong>interest_cycle</strong> dropdown (column J) — same options as Create Loan (daily, weekly, monthly, etc.)</li>
+                                <li>Optional <strong>first_repayment_date</strong>: leave blank to use the default schedule from the interest cycle</li>
+                                <li>Delete template rows you do not need; only rows with amount, interest, and period are imported</li>
                                 <li>Ensure customer numbers exist in the system</li>
                                 <li>Loans will be created with 'active' status</li>
                                 <li>Repayments will be processed automatically if amount_paid > 0</li>
-                                <li>Process runs in background - you'll be notified when complete</li>
+                                <li>Upload starts processing automatically; progress is shown while loans are created in chunks of 50</li>
                             </ul>
                         </div>
                     </div>
                     <div class="modal-footer">
                         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                        <button type="submit" class="btn btn-warning">
+                        <button type="submit" id="openingBalanceSubmitBtn" class="btn btn-warning">
                             <i class="bx bx-upload me-1"></i> Process Opening Balance
                         </button>
                     </div>
@@ -447,7 +448,10 @@
     <script>
         document.addEventListener('DOMContentLoaded', function () {
             const downloadTemplateBtn = document.getElementById('downloadTemplateBtn');
-            const productSelect = document.querySelector('select[name="product_id"]');
+            const productSelect = document.querySelector('#openingBalanceForm select[name="product_id"]');
+            const openingBalanceForm = document.getElementById('openingBalanceForm');
+            const submitBtn = document.getElementById('openingBalanceSubmitBtn');
+            const progressUrl = '{{ route("loans.import-progress") }}';
 
             downloadTemplateBtn.addEventListener('click', function () {
                 const productId = productSelect.value;
@@ -458,17 +462,194 @@
                     return;
                 }
 
-                // Create download URL with product_id parameter
                 const downloadUrl = '{{ route("loans.opening-balance.template") }}?product_id=' + productId;
-
-                // Create a temporary link and trigger download
                 const link = document.createElement('a');
                 link.href = downloadUrl;
-                link.download = 'opening_balance_template_{{ date("Y-m-d") }}.csv';
+                link.download = 'opening_balance_template_{{ date("Y-m-d") }}.xlsx';
                 document.body.appendChild(link);
                 link.click();
                 document.body.removeChild(link);
             });
+
+            function showOpeningBalanceProgressModal() {
+                const html = `
+                    <div class="modal fade" id="obProgressModal" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
+                        <div class="modal-dialog modal-dialog-centered modal-lg">
+                            <div class="modal-content">
+                                <div class="modal-header">
+                                    <h5 class="modal-title">Processing Opening Balance...</h5>
+                                </div>
+                                <div class="modal-body">
+                                    <div class="mb-3">
+                                        <div class="d-flex justify-content-between mb-2">
+                                            <span>Progress</span>
+                                            <span id="obProgressText">0%</span>
+                                        </div>
+                                        <div class="progress" style="height: 25px;">
+                                            <div class="progress-bar progress-bar-striped progress-bar-animated bg-warning"
+                                                 role="progressbar" id="obProgressBar" style="width: 0%">0%</div>
+                                        </div>
+                                    </div>
+                                    <div class="text-center">
+                                        <p class="mb-1"><strong>Processed:</strong> <span id="obCurrentRow">0</span> / <span id="obTotalRows">0</span></p>
+                                        <p class="mb-1 text-success"><strong>Created:</strong> <span id="obSuccessCount">0</span></p>
+                                        <p class="mb-0 text-danger"><strong>Failed:</strong> <span id="obFailedCount">0</span></p>
+                                    </div>
+                                    <div id="obErrorsBox" class="mt-3 d-none">
+                                        <h6 class="text-danger">Sample errors</h6>
+                                        <ul id="obErrorsList" class="small mb-0"></ul>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>`;
+                const existing = document.getElementById('obProgressModal');
+                if (existing) existing.remove();
+                document.body.insertAdjacentHTML('beforeend', html);
+                return new bootstrap.Modal(document.getElementById('obProgressModal'));
+            }
+
+            function updateObProgress(progress) {
+                const pct = progress.percentage || 0;
+                const bar = document.getElementById('obProgressBar');
+                const text = document.getElementById('obProgressText');
+                if (bar) {
+                    bar.style.width = pct + '%';
+                    bar.textContent = pct + '%';
+                }
+                if (text) text.textContent = pct + '%';
+                const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+                set('obCurrentRow', progress.current || 0);
+                set('obTotalRows', progress.total || 0);
+                set('obSuccessCount', progress.success || 0);
+                set('obFailedCount', progress.failed || 0);
+
+                if (Array.isArray(progress.errors) && progress.errors.length > 0) {
+                    const box = document.getElementById('obErrorsBox');
+                    const list = document.getElementById('obErrorsList');
+                    if (box && list) {
+                        box.classList.remove('d-none');
+                        list.innerHTML = progress.errors.slice(0, 10).map(function (e) {
+                            return '<li>Row ' + (e.row || '?') + ' (' + (e.customer_no || '') + '): ' + (e.message || '') + '</li>';
+                        }).join('');
+                    }
+                }
+            }
+
+            function pollOpeningBalanceProgress(importId, onComplete) {
+                fetch(progressUrl + '?import_id=' + encodeURIComponent(importId), {
+                    headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' }
+                })
+                    .then(r => r.json())
+                    .then(function (progress) {
+                        if (progress.status === 'not_found') return;
+                        updateObProgress(progress);
+                        if (progress.status === 'completed' || progress.status === 'error') {
+                            onComplete(progress);
+                        }
+                    })
+                    .catch(function () {});
+            }
+
+            function finishOpeningBalance(progress) {
+                const modalEl = document.getElementById('obProgressModal');
+                if (modalEl) {
+                    const inst = bootstrap.Modal.getInstance(modalEl);
+                    if (inst) inst.hide();
+                }
+                const success = progress.success || 0;
+                const failed = progress.failed || 0;
+                let msg = 'Opening balance complete. Created: ' + success + ' loan(s).';
+                if (failed > 0) msg += ' Failed: ' + failed + '.';
+                if (typeof Swal !== 'undefined') {
+                    Swal.fire({
+                        title: failed > 0 ? 'Completed with errors' : 'Success',
+                        text: msg,
+                        icon: failed > 0 ? 'warning' : 'success'
+                    }).then(function () { window.location.reload(); });
+                } else {
+                    alert(msg);
+                    window.location.reload();
+                }
+            }
+
+            if (openingBalanceForm) {
+                openingBalanceForm.addEventListener('submit', function (e) {
+                    e.preventDefault();
+
+                    const productId = openingBalanceForm.querySelector('[name="product_id"]').value;
+                    const branchId = openingBalanceForm.querySelector('[name="branch_id"]').value;
+                    const chartAccountId = openingBalanceForm.querySelector('[name="chart_account_id"]').value;
+                    const fileInput = openingBalanceForm.querySelector('[name="csv_file"]');
+
+                    if (!productId || !branchId || !chartAccountId || !fileInput.files.length) {
+                        alert('Please fill in all required fields and select a file.');
+                        return;
+                    }
+
+                    const formData = new FormData(openingBalanceForm);
+                    const originalHtml = submitBtn.innerHTML;
+                    submitBtn.disabled = true;
+                    submitBtn.innerHTML = '<i class="bx bx-loader-alt bx-spin me-1"></i> Uploading...';
+
+                    const progressModal = showOpeningBalanceProgressModal();
+                    progressModal.show();
+
+                    fetch(openingBalanceForm.action, {
+                        method: 'POST',
+                        body: formData,
+                        headers: {
+                            'X-Requested-With': 'XMLHttpRequest',
+                            'Accept': 'application/json'
+                        }
+                    })
+                        .then(function (response) {
+                            return response.json().then(function (data) {
+                                return { ok: response.ok, data: data };
+                            });
+                        })
+                        .then(function (result) {
+                            submitBtn.disabled = false;
+                            submitBtn.innerHTML = originalHtml;
+
+                            if (!result.ok || !result.data.success) {
+                                progressModal.hide();
+                                const msg = result.data.message || result.data.error || 'Upload failed.';
+                                if (typeof Swal !== 'undefined') {
+                                    Swal.fire({ title: 'Error', text: msg, icon: 'error' });
+                                } else {
+                                    alert(msg);
+                                }
+                                return;
+                            }
+
+                            const importId = result.data.import_id;
+                            if (result.data.total) {
+                                document.getElementById('obTotalRows').textContent = result.data.total;
+                            }
+
+                            if (result.data.status === 'completed') {
+                                pollOpeningBalanceProgress(importId, function (progress) {
+                                    finishOpeningBalance(progress);
+                                });
+                                return;
+                            }
+
+                            let interval = setInterval(function () {
+                                pollOpeningBalanceProgress(importId, function (progress) {
+                                    clearInterval(interval);
+                                    finishOpeningBalance(progress);
+                                });
+                            }, 800);
+                        })
+                        .catch(function () {
+                            submitBtn.disabled = false;
+                            submitBtn.innerHTML = originalHtml;
+                            progressModal.hide();
+                            alert('Upload failed. Please try again.');
+                        });
+                });
+            }
         });
     </script>
 @endpush

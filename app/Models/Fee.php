@@ -106,6 +106,7 @@ class Fee extends Model
             'fixed' => '<span class="badge bg-primary">Fixed</span>',
             'percentage' => '<span class="badge bg-info">Percentage</span>',
             'range' => '<span class="badge bg-warning">Range</span>',
+            'custom' => '<span class="badge bg-dark">Custom</span>',
             default => '<span class="badge bg-secondary">Unknown</span>',
         };
     }
@@ -139,6 +140,9 @@ class Fee extends Model
             $rangeCount = $ranges->count();
             return "{$rangeCount} range(s) defined";
         }
+        if ($this->fee_type === 'custom') {
+            return 'Set per loan';
+        }
         return number_format($this->amount, 2);
     }
 
@@ -167,6 +171,40 @@ class Fee extends Model
     public function isRange()
     {
         return $this->fee_type === 'range';
+    }
+
+    public function isCustom()
+    {
+        return $this->fee_type === 'custom';
+    }
+
+    /**
+     * Resolved monetary fee for a principal amount.
+     *
+     * @param  array<int|string, float|int|string>|null  $customFeeAmountsByFeeId  fee_id => amount when fee_type is custom
+     */
+    public function monetaryAmountForPrincipal(float $principal, ?array $customFeeAmountsByFeeId = null): float
+    {
+        return match ($this->fee_type) {
+            'percentage' => round(($principal * (float) $this->amount) / 100, 2),
+            'range' => round((float) $this->calculateRangeFee($principal), 2),
+            'custom' => round((float) ($this->resolveCustomAmountFromMap($customFeeAmountsByFeeId)), 2),
+            default => round((float) $this->amount, 2),
+        };
+    }
+
+    /**
+     * @param  array<int|string, float|int|string>|null  $customFeeAmountsByFeeId
+     */
+    public function resolveCustomAmountFromMap(?array $customFeeAmountsByFeeId): float
+    {
+        if (!$this->isCustom()) {
+            return 0;
+        }
+        $map = $customFeeAmountsByFeeId ?? [];
+        $id = (int) $this->id;
+
+        return (float) ($map[$id] ?? $map[(string) $id] ?? 0);
     }
 
     /**
@@ -217,6 +255,26 @@ class Fee extends Model
         $this->update(['status' => 'inactive']);
     }
 
+    /**
+     * @param  array<int|string, mixed>|null  $raw
+     * @return array<int, float>
+     */
+    public static function normalizeCustomFeeAmountsMap(?array $raw): array
+    {
+        if (!$raw) {
+            return [];
+        }
+        $out = [];
+        foreach ($raw as $key => $value) {
+            if ($value === null || $value === '') {
+                continue;
+            }
+            $out[(int) $key] = max(0, (float) $value);
+        }
+
+        return $out;
+    }
+
     // Static methods
     public static function getStatusOptions()
     {
@@ -232,6 +290,7 @@ class Fee extends Model
             'fixed' => 'Fixed Amount',
             'percentage' => 'Percentage',
             'range' => 'Range',
+            'custom' => 'Custom (amount set on each loan)',
         ];
     }
 

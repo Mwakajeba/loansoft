@@ -7,39 +7,30 @@ use Illuminate\Console\Command;
 
 class CollectMatureInterestCommand extends Command
 {
-    /**
-     * The name and signature of the console command.
-     *
-     * @var string
-     */
-    protected $signature = 'loans:collect-mature-interest {--force : Force run even if already processed today}';
+    protected $signature = 'loans:collect-mature-interest
+                            {--async : Dispatch to queue instead of running immediately}';
 
-    /**
-     * The console command description.
-     *
-     * @var string
-     */
-    protected $description = 'Collect mature interest from active loans and post to GL';
+    protected $description = 'Post mature interest to GL for schedules due today (As Expected products)';
 
-    /**
-     * Execute the console command.
-     */
-    public function handle()
+    public function handle(): int
     {
         $this->info('Starting mature interest collection...');
 
         try {
-            // Dispatch the job
-            CollectMatureInterestJob::dispatch();
+            if ($this->option('async')) {
+                CollectMatureInterestJob::dispatch();
+                $this->warn('Job dispatched to queue.');
+            } else {
+                (new CollectMatureInterestJob())->handle();
+            }
 
-            $this->info('Mature interest collection job has been dispatched successfully.');
-            $this->info('Check the logs for detailed information about the process.');
+            $this->info('Mature interest collection completed.');
 
+            return self::SUCCESS;
         } catch (\Exception $e) {
-            $this->error('Error dispatching mature interest collection job: ' . $e->getMessage());
-            return 1;
-        }
+            $this->error('Error: ' . $e->getMessage());
 
-        return 0;
+            return self::FAILURE;
+        }
     }
 }

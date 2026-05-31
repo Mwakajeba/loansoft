@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\AccruedPenalty;
 use App\Models\Journal;
 use App\Models\JournalItem;
 use App\Models\Loan;
@@ -12,7 +13,6 @@ use App\Models\ReceiptItem;
 use App\Models\GlTransaction;
 use App\Models\ChartAccount;
 use App\Models\BankAccount;
-use App\Helpers\SmsHelper;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Carbon\Carbon;
@@ -21,8 +21,10 @@ class LoanRepaymentService
 {
     /**
      * Process loan repayment with different calculation methods
+     *
+     * @param  int|string|null  $targetScheduleId  When set (e.g. from "Repay Schedule Item"), must match the earliest unpaid schedule for this loan.
      */
-    public function processRepayment($loanId, $amount, $paymentData, $calculationMethod = 'flat_rate')
+    public function processRepayment($loanId, $amount, $paymentData, $calculationMethod = 'flat_rate', $targetScheduleId = null)
     {
         // Store payment date for SMS
         $paymentDateForSms = $paymentData['payment_date'] ?? now();
@@ -40,6 +42,14 @@ class LoanRepaymentService
 
         if ($unpaidSchedules->count() === 0) {
             throw new \Exception('No unpaid schedules found for this loan.');
+        }
+
+        if ($targetScheduleId !== null && $targetScheduleId !== '') {
+            $targetScheduleId = (int) $targetScheduleId;
+            if (!$loan->schedule()->whereKey($targetScheduleId)->exists()) {
+                throw new \Exception('The selected schedule does not belong to this loan.');
+            }
+            $this->assertSchedulePayableInOrder($loan, $targetScheduleId);
         }
 
         // Step 1: Calculate all schedule payments first to determine total amount
@@ -89,28 +99,28 @@ class LoanRepaymentService
             ]);
         }
 
-        // Step 3: Create repayment records for each schedule, all linked to the same receipt
+        // Step 3: Create repayment records for each schedule (detail per installment in repayments table)
         foreach ($allSchedulePayments as $item) {
             $schedule = $item['schedule'];
             $schedulePayment = $item['payment'];
 
-            // Create repayment record with receipt_id
             $repayment = $this->createRepaymentRecord($loan, $schedule, $schedulePayment, $paymentData, $receipt);
             if (!$repayment) {
                 Log::error('Failed to create repayment', ['loanId' => $loanId, 'schedule_id' => $schedule->id]);
                 throw new \Exception('Repayment not saved');
             }
 
-            // Create GL transactions (for bank/cash) or journal entries (for cash deposit)
-            if (isset($paymentData['bank_account_id']) && $paymentData['bank_account_id']) {
-                Log::info('Processing bank/cash repayment', ['bank_account_id' => $paymentData['bank_account_id']]);
-                $this->createGLTransactions($loan, $repayment, $schedulePayment, $paymentData, $receipt);
-            } elseif (isset($paymentData['cash_deposit_id']) && $paymentData['cash_deposit_id']) {
+            if (isset($paymentData['cash_deposit_id']) && $paymentData['cash_deposit_id']) {
                 Log::info('Processing cash deposit repayment', ['cash_deposit_id' => $paymentData['cash_deposit_id']]);
                 $this->createJournalEntry($loan, $repayment, $schedulePayment, $paymentData);
-            } else {
+            } elseif (!isset($paymentData['bank_account_id']) || !$paymentData['bank_account_id']) {
                 Log::warning('No payment method provided', ['loanId' => $loanId]);
             }
+        }
+
+        // Step 4: One bank debit (on receipt) + aggregated credits in GL (books stay balanced, not split per schedule line)
+        if ($receipt && $allSchedulePayments) {
+            $this->createAggregatedReceiptCredits($loan, $receipt, $allSchedulePayments);
         }
 
         // Check if loan is fully paid and close it automatically
@@ -163,6 +173,7 @@ class LoanRepaymentService
     {
         $loan->load(['product', 'customer', 'schedule']);
         $totalPaid = 0;
+        $allSchedulePayments = [];
 
         foreach ($scheduleAmounts as $line) {
             $scheduleId = (int) ($line['schedule_id'] ?? 0);
@@ -177,6 +188,8 @@ class LoanRepaymentService
                 continue;
             }
 
+            $this->assertSchedulePayableInOrder($loan, $scheduleId);
+
             $schedulePayment = $this->processSchedulePayment($loan, $schedule, $amount, $paymentData);
             if (empty($schedulePayment['amount']) || $schedulePayment['amount'] <= 0) {
                 continue;
@@ -184,9 +197,13 @@ class LoanRepaymentService
 
             $repayment = $this->createRepaymentRecord($loan, $schedule, $schedulePayment, $paymentData, $receipt);
             if ($repayment) {
-                $this->createGLTransactions($loan, $repayment, $schedulePayment, $paymentData, $receipt);
+                $allSchedulePayments[] = ['schedule' => $schedule, 'payment' => $schedulePayment];
                 $totalPaid += $schedulePayment['amount'];
             }
+        }
+
+        if ($totalPaid > 0 && $allSchedulePayments) {
+            $this->createAggregatedReceiptCredits($loan, $receipt, $allSchedulePayments);
         }
 
         if ($totalPaid > 0 && $this->isLoanFullyPaid($loan)) {
@@ -200,177 +217,33 @@ class LoanRepaymentService
     }
 
     /**
-     * Send SMS notification to customer after repayment
+     * Send SMS notification to customer and company after repayment.
      */
-    private function sendRepaymentSms($loan, $amount, $paymentDate = null)
+    private function sendRepaymentSms($loan, $amount, $paymentDate = null): void
     {
-        try {
-            // Ensure customer relationship is loaded
-            if (!$loan->relationLoaded('customer')) {
-                $loan->load('customer');
-            }
-            
-            // Get customer and company information
-            $customer = $loan->customer;
-            
-            Log::info('Attempting to send repayment SMS', [
-                'loan_id' => $loan->id,
-                'loan_no' => $loan->loanNo ?? null,
-                'customer_id' => $customer->id ?? null,
-                'customer_name' => $customer->name ?? null,
-                'phone1' => $customer->phone1 ?? null,
-                'phone1_empty' => empty($customer->phone1 ?? null),
-                'amount' => $amount,
-                'payment_date' => $paymentDate
-            ]);
-            
-            if (!$customer || empty($customer->phone1)) {
-                Log::warning('Skipping SMS - customer phone not available', [
-                    'loan_id' => $loan->id,
-                    'loan_no' => $loan->loanNo ?? null,
-                    'customer_id' => $customer->id ?? null,
-                    'customer_exists' => $customer ? 'yes' : 'no',
-                    'phone1' => $customer->phone1 ?? 'not set',
-                    'phone1_empty' => empty($customer->phone1 ?? null)
-                ]);
-                return;
-            }
-
-            // Get company name - try multiple sources for reliability
-            $company = null;
-            $source = 'none';
-            
-            // First try: Get company from loan's company relationship
-            if ($loan->relationLoaded('company') && $loan->company) {
-                $company = $loan->company;
-                $source = 'loan_relationship';
-            } elseif (isset($loan->company_id) && $loan->company_id) {
-                $company = \App\Models\Company::find($loan->company_id);
-                $source = 'loan_id';
-            }
-            
-            // Second try: Get company from customer
-            if (!$company && $customer) {
-                if ($customer->relationLoaded('company') && $customer->company) {
-                    $company = $customer->company;
-                    $source = 'customer_relationship';
-                } elseif (isset($customer->company_id) && $customer->company_id) {
-                    $company = \App\Models\Company::find($customer->company_id);
-                    $source = 'customer_id';
-                }
-            }
-            
-            // Third try: Get company from branch
-            if (!$company && $loan->branch_id) {
-                if ($loan->relationLoaded('branch') && $loan->branch) {
-                    $branch = $loan->branch;
-                    if ($branch->relationLoaded('company') && $branch->company) {
-                        $company = $branch->company;
-                        $source = 'branch_relationship';
-                    } elseif (isset($branch->company_id) && $branch->company_id) {
-                        $company = \App\Models\Company::find($branch->company_id);
-                        $source = 'branch_id';
-                    }
-                } else {
-                    $branch = \App\Models\Branch::find($loan->branch_id);
-                    if ($branch && isset($branch->company_id) && $branch->company_id) {
-                        $company = \App\Models\Company::find($branch->company_id);
-                        $source = 'branch_lookup';
-                    }
-                }
-            }
-            
-            // Fourth try: Use current_company() as fallback
-            if (!$company) {
-                $company = current_company();
-                $source = 'current_company';
-            }
-            
-            $companyName = $company ? $company->name : 'SMARTFINANCE';
-            $companyPhone = $company ? ($company->phone ?? '') : '';
-            
-            Log::info('Company name resolved for SMS', [
-                'loan_id' => $loan->id,
-                'company_id' => $company->id ?? null,
-                'company_name' => $companyName,
-                'company_phone' => $companyPhone,
-                'source' => $source,
-                'loan_company_id' => $loan->company_id ?? null,
-                'customer_company_id' => $customer->company_id ?? null,
-                'branch_company_id' => ($loan->branch && isset($loan->branch->company_id)) ? $loan->branch->company_id : null
-            ]);
-
-            // Get customer name
-            $customerName = $customer->name ?? 'Mteja';
-
-            // Format phone number (remove any non-numeric characters except +)
-            $phone = preg_replace('/[^0-9+]/', '', $customer->phone1);
-
-            // Format payment date (DD/MM/YYYY)
-            $paymentDateFormatted = $paymentDate ? \Carbon\Carbon::parse($paymentDate)->format('d/m/Y') : now()->format('d/m/Y');
-
-            // Format amount with commas
-            $formattedAmount = number_format($amount, 0);
-
-            // Get loan number
-            $loanNo = $loan->loanNo ?? 'N/A';
-
-            // Build SMS message — use custom template if set, otherwise use default
-            $templateVars = [
-                'customer_name' => $customerName,
-                'amount'        => $formattedAmount,
-                'payment_date'  => $paymentDateFormatted,
-                'loan_no'       => $loanNo,
-                'company_name'  => $companyName,
-                'company_phone' => $companyPhone ?? '',
-            ];
-            $smsMessage = SmsHelper::resolveTemplate('loan_repayment', $templateVars);
-            if ($smsMessage === null) {
-                $smsMessage = "Habari! {$customerName}, Tumepokea marejesho ya Tsh {$formattedAmount} tarehe {$paymentDateFormatted} kutoka kwenye mkopo namba {$loanNo}. Asante. Ujumbe umetoka {$companyName}";
-                if (!empty($companyPhone)) {
-                    $smsMessage .= " kwa mawasiliano tupigie {$companyPhone}";
-                }
-            }
-
-            // Send SMS
-            $smsResult = SmsHelper::send($phone, $smsMessage, 'loan_repayment');
-
-            if (is_array($smsResult) && ($smsResult['success'] ?? false)) {
-                Log::info('Repayment SMS sent successfully', [
-                    'loan_id' => $loan->id,
-                    'loan_no' => $loanNo,
-                    'customer_id' => $customer->id,
-                    'phone' => $phone,
-                    'amount' => $amount,
-                    'payment_date' => $paymentDateFormatted,
-                    'message' => $smsMessage
-                ]);
-            } else {
-                Log::warning('Repayment SMS failed', [
-                    'loan_id' => $loan->id,
-                    'customer_id' => $customer->id,
-                    'phone' => $phone,
-                    'error' => is_array($smsResult) ? ($smsResult['error'] ?? 'Unknown error') : $smsResult
-                ]);
-            }
-        } catch (\Exception $e) {
-            // Log error but don't throw - SMS failure shouldn't break repayment process
-            Log::error('Failed to send repayment SMS', [
-                'loan_id' => $loan->id ?? null,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
-            ]);
-        }
+        app(LoanSmsNotificationService::class)->sendRepaymentNotification($loan, (float) $amount, $paymentDate);
     }
     private function getUnpaidSchedules($loan)
     {
+        // Must match LoanSchedule accessors (paid_amount, remaining_amount, total_due):
+        // - Repayment uses SoftDeletes: raw SQL must ignore deleted rows (otherwise "paid" sums are inflated and unpaid lists go empty while the UI still shows due amounts).
+        // - Daily accrual products use accrued_interest as the interest component; schedules display matches that, not the flat interest column.
+        $interestExpr = $loan->usesDailyInterestAccrual()
+            ? 'COALESCE(loan_schedules.accrued_interest, 0)'
+            : 'COALESCE(loan_schedules.interest, 0)';
+
         return $loan->schedule()
             ->where('status', '!=', 'restructured') // Exclude restructured schedules
-            ->whereRaw('(
+            ->whereRaw(
+                "(
                 SELECT COALESCE(SUM(principal), 0) + COALESCE(SUM(interest), 0) + COALESCE(SUM(fee_amount), 0) + COALESCE(SUM(penalt_amount), 0)
                 FROM repayments
                 WHERE repayments.loan_schedule_id = loan_schedules.id
-            ) < (loan_schedules.principal + loan_schedules.interest + loan_schedules.fee_amount + loan_schedules.penalty_amount)')
+                AND repayments.deleted_at IS NULL
+            ) < (
+                loan_schedules.principal + {$interestExpr} + COALESCE(loan_schedules.fee_amount, 0) + COALESCE(loan_schedules.penalty_amount, 0)
+            )"
+            )
             ->orderBy('due_date')
             ->get();
     }
@@ -386,12 +259,18 @@ class LoanRepaymentService
         // Get already paid amounts for this schedule
         $paidAmounts = $this->getPaidAmountsForSchedule($schedule);
 
-        // Calculate remaining amounts
+        if (!$schedule->relationLoaded('loan')) {
+            $schedule->setRelation('loan', $loan);
+        }
+
+        $interestDue = (float) $schedule->balance_interest_component;
+
+        // Calculate remaining amounts (aligned with getUnpaidSchedules / schedule UI)
         $remainingAmounts = [
             'principal' => $schedule->principal - $paidAmounts['principal'],
-            'interest' => $schedule->interest - $paidAmounts['interest'],
+            'interest' => $interestDue - $paidAmounts['interest'],
             'fee_amount' => $schedule->fee_amount - $paidAmounts['fee_amount'],
-            'penalty_amount' => $schedule->penalty_amount - $paidAmounts['penalty_amount']
+            'penalty_amount' => $schedule->penalty_amount - $paidAmounts['penalty_amount'],
         ];
 
         // Get repayment order from loan product
@@ -552,6 +431,296 @@ class LoanRepaymentService
         }
 
         return $receipt;
+    }
+
+    /**
+     * Block paying a later installment while an earlier one still has a balance.
+     */
+    public function assertSchedulePayableInOrder(Loan $loan, int $scheduleId): void
+    {
+        $firstUnpaid = $this->getUnpaidSchedules($loan)->first();
+        if (!$firstUnpaid) {
+            throw new \Exception('No unpaid schedules found for this loan.');
+        }
+        if ((int) $firstUnpaid->id !== (int) $scheduleId) {
+            $due = Carbon::parse($firstUnpaid->due_date)->format('M d, Y');
+            throw new \Exception(
+                "You must pay the earliest unpaid installment first (due {$due}). Cannot pay a later schedule while earlier ones are outstanding."
+            );
+        }
+    }
+
+    /**
+     * Block deleting an earlier repayment when a later installment was already paid.
+     */
+    public function assertCanDeleteRepayment(Repayment $repayment): void
+    {
+        $dueDate = $repayment->due_date;
+        if (!$dueDate && $repayment->schedule) {
+            $dueDate = $repayment->schedule->due_date;
+        }
+
+        if (!$dueDate) {
+            return;
+        }
+
+        $laterPaidExists = Repayment::where('loan_id', $repayment->loan_id)
+            ->where('id', '!=', $repayment->id)
+            ->where(function ($query) use ($dueDate, $repayment) {
+                $query->where('due_date', '>', $dueDate)
+                    ->orWhereHas('schedule', function ($q) use ($dueDate) {
+                        $q->where('due_date', '>', $dueDate);
+                    });
+            })
+            ->exists();
+
+        if ($laterPaidExists) {
+            throw new \Exception(
+                'Cannot delete this repayment because a later installment has already been paid. Delete or reverse later repayments first, starting from the most recent.'
+            );
+        }
+    }
+
+    /**
+     * Post one bank debit (already on receipt) and aggregated credit lines by GL account.
+     * Repayments table still stores per-schedule breakdown; GL shows consolidated credits.
+     */
+    private function createAggregatedReceiptCredits(Loan $loan, Receipt $receipt, array $allSchedulePayments): void
+    {
+        $creditsByAccount = [];
+        $scheduleIds = [];
+        $missingAccounts = [];
+
+        foreach ($allSchedulePayments as $item) {
+            $schedule = $item['schedule'];
+            $schedulePayment = $item['payment'];
+            $scheduleIds[] = $schedule->id;
+
+            $accounts = $this->resolveComponentChartAccounts($loan, $schedule, $schedulePayment);
+
+            foreach (['principal', 'interest', 'fee_amount', 'penalty_amount'] as $component) {
+                $amount = (float) ($schedulePayment[$component] ?? 0);
+                if ($amount <= 0) {
+                    continue;
+                }
+                $accountId = $accounts[$component] ?? null;
+                if (!$accountId) {
+                    $missingAccounts[] = [
+                        'component' => $component,
+                        'amount' => $amount,
+                        'schedule_id' => $schedule->id,
+                    ];
+                    continue;
+                }
+                $creditsByAccount[$accountId] = ($creditsByAccount[$accountId] ?? 0) + $amount;
+            }
+        }
+
+        if (!empty($missingAccounts)) {
+            throw new \Exception(
+                'Cannot post repayment: loan product is missing chart account(s) for '
+                . collect($missingAccounts)->pluck('component')->unique()->implode(', ')
+                . '. Configure accounts on the loan product before recording payment.'
+            );
+        }
+
+        $scheduleLabel = count($scheduleIds) === 1
+            ? 'Schedule #' . $scheduleIds[0]
+            : 'Schedules #' . implode(', #', $scheduleIds);
+
+        $totalCredits = 0.0;
+        foreach ($creditsByAccount as $accountId => $amount) {
+            $amount = round($amount, 2);
+            if ($amount <= 0) {
+                continue;
+            }
+
+            $totalCredits += $amount;
+            $description = "Loan repayment ({$scheduleLabel}) - Loan #{$loan->id}";
+
+            ReceiptItem::create([
+                'receipt_id' => $receipt->id,
+                'chart_account_id' => $accountId,
+                'amount' => $amount,
+                'description' => $description,
+            ]);
+
+            GlTransaction::create([
+                'chart_account_id' => $accountId,
+                'customer_id' => $loan->customer_id,
+                'amount' => $amount,
+                'nature' => 'credit',
+                'transaction_id' => $receipt->id,
+                'transaction_type' => 'receipt',
+                'date' => $receipt->date,
+                'description' => $description,
+                'branch_id' => $receipt->branch_id,
+                'user_id' => auth()->id(),
+            ]);
+        }
+
+        $this->assertReceiptGlBalanced($receipt->id, (float) $receipt->amount);
+
+        Log::info('Aggregated receipt credits posted', [
+            'receipt_id' => $receipt->id,
+            'credit_lines' => count($creditsByAccount),
+            'total_credits' => round($totalCredits, 2),
+            'schedules' => $scheduleIds,
+        ]);
+    }
+
+    /**
+     * Ensure receipt debit equals sum of receipt credits (double-entry integrity).
+     */
+    private function assertReceiptGlBalanced(int $receiptId, ?float $expectedTotal = null): void
+    {
+        $debitTotal = (float) GlTransaction::where('transaction_id', $receiptId)
+            ->where('transaction_type', 'receipt')
+            ->where('nature', 'debit')
+            ->sum('amount');
+
+        $creditTotal = (float) GlTransaction::where('transaction_id', $receiptId)
+            ->where('transaction_type', 'receipt')
+            ->where('nature', 'credit')
+            ->sum('amount');
+
+        if (abs($debitTotal - $creditTotal) > 0.02) {
+            throw new \Exception(
+                "Receipt GL is out of balance (debit {$debitTotal} vs credit {$creditTotal}). Transaction rolled back."
+            );
+        }
+
+        if ($expectedTotal !== null && $debitTotal > 0 && abs($debitTotal - $expectedTotal) > 0.02) {
+            throw new \Exception(
+                "Receipt amount ({$expectedTotal}) does not match bank GL debit ({$debitTotal}). Transaction rolled back."
+            );
+        }
+    }
+
+    /**
+     * Resolve GL accounts for each repayment component (same rules as per-schedule posting).
+     */
+    private function resolveComponentChartAccounts(Loan $loan, LoanSchedule $schedule, array $schedulePayment): array
+    {
+        $feeAccountId = null;
+        if (isset($loan->product->fees_ids)) {
+            $feeIds = is_array($loan->product->fees_ids) ? $loan->product->fees_ids : json_decode($loan->product->fees_ids, true);
+            if (is_array($feeIds)) {
+                foreach ($feeIds as $feeId) {
+                    $fee = \DB::table('fees')->where('id', $feeId)->first();
+                    if ($fee && $fee->include_in_schedule == 1 && $fee->chart_account_id) {
+                        $feeAccountId = $fee->chart_account_id;
+                        break;
+                    }
+                }
+            }
+        }
+
+        $penaltyAccountId = null;
+        if (isset($loan->product->penalty_ids)) {
+            $penaltyIds = is_array($loan->product->penalty_ids) ? $loan->product->penalty_ids : json_decode($loan->product->penalty_ids, true);
+            if (is_array($penaltyIds)) {
+                foreach ($penaltyIds as $penaltyId) {
+                    $penalty = \DB::table('penalties')->where('id', $penaltyId)->first();
+                    if ($penalty && $penalty->penalty_receivables_account_id) {
+                        $penaltyAccountId = $penalty->penalty_receivables_account_id;
+                        break;
+                    }
+                }
+            }
+        }
+
+        $interestAccountId = $loan->product->interest_revenue_account_id ?? null;
+        $receivableId = $loan->product->interest_receivable_account_id;
+        $incomeId = $loan->product->interest_revenue_account_id;
+
+        if ($receivableId && $incomeId && ($schedulePayment['interest'] ?? 0) > 0) {
+            $exists = GlTransaction::where('chart_account_id', $receivableId)
+                ->where('customer_id', $loan->customer_id)
+                ->where('date', $schedule->due_date)
+                ->where('amount', $schedulePayment['interest'])
+                ->where('transaction_type', 'Mature Interest')
+                ->exists();
+
+            $incomeExists = GlTransaction::where('chart_account_id', $incomeId)
+                ->where('customer_id', $loan->customer_id)
+                ->where('date', $schedule->due_date)
+                ->where('amount', $schedulePayment['interest'])
+                ->where('transaction_type', 'Mature Interest')
+                ->exists();
+
+            if ($exists && $incomeExists) {
+                $interestAccountId = $receivableId;
+            }
+        }
+
+        return [
+            'principal' => $loan->product->principal_receivable_account_id ?? null,
+            'interest' => $interestAccountId,
+            'fee_amount' => $feeAccountId,
+            'penalty_amount' => $penaltyAccountId,
+        ];
+    }
+
+    /**
+     * Rebuild aggregated GL credits after a partial repayment delete on a shared receipt.
+     */
+    private function rebuildReceiptGlFromRepayments(Receipt $receipt, Loan $loan): void
+    {
+        GlTransaction::where('transaction_id', $receipt->id)
+            ->where('transaction_type', 'receipt')
+            ->where('nature', 'credit')
+            ->delete();
+
+        ReceiptItem::where('receipt_id', $receipt->id)->delete();
+
+        $repayments = Repayment::where('receipt_id', $receipt->id)->get();
+        $allSchedulePayments = [];
+
+        foreach ($repayments as $repayment) {
+            $schedule = LoanSchedule::with('loan')->find($repayment->loan_schedule_id);
+            if (!$schedule) {
+                continue;
+            }
+            if (!$schedule->relationLoaded('loan')) {
+                $schedule->setRelation('loan', $loan);
+            }
+            $allSchedulePayments[] = [
+                'schedule' => $schedule,
+                'payment' => [
+                    'principal' => (float) $repayment->principal,
+                    'interest' => (float) $repayment->interest,
+                    'fee_amount' => (float) $repayment->fee_amount,
+                    'penalty_amount' => (float) $repayment->penalt_amount,
+                ],
+            ];
+        }
+
+        $total = round($repayments->sum(fn ($r) => $this->repaymentTotal($r)), 2);
+        $receipt->update(['amount' => $total]);
+
+        $bankDebit = GlTransaction::where('transaction_id', $receipt->id)
+            ->where('transaction_type', 'receipt')
+            ->where('nature', 'debit')
+            ->first();
+
+        if ($bankDebit) {
+            if ($total <= 0) {
+                $bankDebit->delete();
+            } else {
+                $bankDebit->update(['amount' => $total]);
+            }
+        }
+
+        if ($total > 0 && $allSchedulePayments) {
+            $this->createAggregatedReceiptCredits($loan, $receipt, $allSchedulePayments);
+        } elseif ($total <= 0) {
+            $this->purgeReceiptCompletely($receipt);
+        } else {
+            throw new \Exception(
+                "Receipt #{$receipt->id} still has amount {$total} but no repayments are linked. Clean up manually or contact support."
+            );
+        }
     }
 
     /**
@@ -904,50 +1073,53 @@ class LoanRepaymentService
         DB::beginTransaction();
 
         try {
-            $schedule = LoanSchedule::findOrFail($scheduleId);
+            $schedule = LoanSchedule::with(['repayments', 'loan.product'])->findOrFail($scheduleId);
+            $loan = $schedule->loan ?? ($loanId ? Loan::with('product')->find($loanId) : null);
 
-            // Get the current penalty amount before removing it
-            $currentPenaltyAmount = $schedule->penalty_amount;
+            $currentPenaltyAmount = (float) $schedule->penalty_amount;
+            $removeAmount = round((float) $amount, 2);
 
-            // Get the total penalty paid amount
-            $penaltyPaidAmount = $schedule->repayments ? $schedule->repayments->sum('penalt_amount') : 0;
-
-            // Check if penalty removal is allowed (only if paid amount is less than penalty amount)
-            if ($penaltyPaidAmount >= $currentPenaltyAmount) {
-                throw new \Exception("Penalty removal not allowed. Penalty amount ({$currentPenaltyAmount}) has been fully or partially paid ({$penaltyPaidAmount}).");
+            if ($removeAmount <= 0) {
+                throw new \Exception('Removal amount must be greater than zero.');
+            }
+            if ($removeAmount > $currentPenaltyAmount + 0.01) {
+                throw new \Exception('Removal amount cannot exceed the current penalty on this schedule.');
             }
 
-            Log::info("Reducing penalty for schedule ID: {$scheduleId}, current penalty amount: {$currentPenaltyAmount}, penalty paid: {$penaltyPaidAmount}", [
-                'schedule_id' => $scheduleId,
-                'customer_id' => $schedule->customer_id,
-                'penalty_amount' => $currentPenaltyAmount,
-                'penalty_paid' => $penaltyPaidAmount,
-                'reason' => $reason,
-                'remove_amount' => $amount,
-                'loan_id' => $loanId
-            ]);
+            $penaltyPaidAmount = $schedule->repayments
+                ? (float) $schedule->repayments->sum('penalt_amount')
+                : 0;
 
-            // Subtract the penalty amount from GL transactions for this loan
-            $updatedCount = GlTransaction::where('transaction_id', $loanId)
-                ->whereIn('transaction_type', ['Penalty', 'penalty', 'Loan Penalty'])
-                ->where('amount', '>', 0)
-                ->update([
-                    'amount' => DB::raw('amount - ' . floatval($amount))
-                ]);
+            if ($penaltyPaidAmount > 0) {
+                throw new \Exception(
+                    "Penalty removal not allowed. TZS " . number_format($penaltyPaidAmount, 2) . ' of penalty on this installment has already been paid.'
+                );
+            }
 
-            Log::info("Subtracted penalty amount ({$amount}) from {$updatedCount} GL transactions for loan ID: {$loanId}");
+            $reversedAccrued = $this->reverseAccruedPenaltiesForSchedule($schedule, $removeAmount, $reason);
+            $remainingToReverse = max(0, $removeAmount - $reversedAccrued);
+            $reversedLegacy = $this->reverseLegacyPenaltyGlForSchedule($schedule, $remainingToReverse);
+            $totalGlReversed = round($reversedAccrued + $reversedLegacy, 2);
 
-            // Reduce the schedule penalty by the entered amount (not below zero)
-            $newPenaltyAmount = max($currentPenaltyAmount - floatval($amount), 0);
-            $schedule->update([
-                'penalty_amount' => $newPenaltyAmount,
-            ]);
+            if ($totalGlReversed > 0 && $totalGlReversed + 0.02 < $removeAmount) {
+                throw new \Exception(
+                    'Penalty could not be fully reversed in GL (reversed '
+                    . number_format($totalGlReversed, 2) . ' of ' . number_format($removeAmount, 2)
+                    . '). Schedule was not changed to avoid mismatched data.'
+                );
+            }
+
+            $newPenaltyAmount = max(0, round($currentPenaltyAmount - $removeAmount, 2));
+            $schedule->update(['penalty_amount' => $newPenaltyAmount]);
 
             DB::commit();
 
             return [
                 'success' => true,
-                'message' => "Penalty removed successfully from schedule and subtracted amount from {$updatedCount} GL transactions"
+                'message' => 'Penalty removed successfully. Schedule, accrued penalty records, and GL have been updated.',
+                'reversed_accrued' => $reversedAccrued,
+                'reversed_legacy_gl' => $reversedLegacy,
+                'new_penalty_amount' => $newPenaltyAmount,
             ];
         } catch (\Exception $e) {
             DB::rollBack();
@@ -957,6 +1129,185 @@ class LoanRepaymentService
             ]);
             throw $e;
         }
+    }
+
+    /**
+     * Reverse Accrued Penalty rows (and their GL) for a schedule, newest first.
+     */
+    private function reverseAccruedPenaltiesForSchedule(LoanSchedule $schedule, float $amountToReverse, ?string $reason): float
+    {
+        $remaining = $amountToReverse;
+        $reversedTotal = 0.0;
+
+        $accruedRows = AccruedPenalty::where('loan_schedule_id', $schedule->id)
+            ->whereNull('reversed_at')
+            ->orderByDesc('accrual_date')
+            ->orderByDesc('id')
+            ->get();
+
+        foreach ($accruedRows as $accrued) {
+            if ($remaining <= 0) {
+                break;
+            }
+
+            $rowAmount = (float) $accrued->penalty_amount;
+            if ($rowAmount <= 0) {
+                continue;
+            }
+
+            if ($rowAmount > $remaining + 0.01) {
+                Log::warning('Partial accrued penalty reversal skipped — reverse full accrual rows only', [
+                    'accrued_penalty_id' => $accrued->id,
+                    'row_amount' => $rowAmount,
+                    'remaining' => $remaining,
+                ]);
+                break;
+            }
+
+            $this->reverseSingleAccruedPenalty($accrued, $reason);
+            $remaining -= $rowAmount;
+            $reversedTotal += $rowAmount;
+        }
+
+        return $reversedTotal;
+    }
+
+    private function reverseSingleAccruedPenalty(AccruedPenalty $accruedPenalty, ?string $reason): void
+    {
+        $originals = GlTransaction::where('transaction_id', $accruedPenalty->id)
+            ->where('transaction_type', 'Accrued Penalty')
+            ->get();
+
+        foreach ($originals as $gl) {
+            GlTransaction::create([
+                'chart_account_id' => $gl->chart_account_id,
+                'customer_id' => $gl->customer_id,
+                'supplier_id' => $gl->supplier_id,
+                'amount' => $gl->amount,
+                'nature' => $gl->nature === 'debit' ? 'credit' : 'debit',
+                'transaction_id' => $accruedPenalty->id,
+                'transaction_type' => 'Accrued Penalty Reversal',
+                'date' => now(),
+                'description' => trim(($gl->description ?? '') . ' (Reversal' . ($reason ? ": {$reason}" : '') . ')'),
+                'branch_id' => $gl->branch_id,
+                'user_id' => auth()->id() ?? 1,
+            ]);
+        }
+
+        if ($accruedPenalty->journal_id) {
+            $this->reversePenaltyAccrualJournal($accruedPenalty, $reason);
+        }
+
+        $accruedPenalty->update(['reversed_at' => now()]);
+    }
+
+    /**
+     * Mirror reversal in journal for an accrued penalty row.
+     */
+    private function reversePenaltyAccrualJournal(AccruedPenalty $accruedPenalty, ?string $reason): void
+    {
+        $items = JournalItem::where('journal_id', $accruedPenalty->journal_id)->get();
+        if ($items->isEmpty()) {
+            return;
+        }
+
+        $reversalJournal = Journal::create([
+            'date' => now(),
+            'reference' => 'PEN-REV-' . $accruedPenalty->id,
+            'reference_type' => 'Penalty Accrual Reversal',
+            'customer_id' => $accruedPenalty->customer_id,
+            'description' => 'Penalty accrual reversal' . ($reason ? ": {$reason}" : ''),
+            'branch_id' => $accruedPenalty->branch_id,
+            'user_id' => auth()->id() ?? 1,
+            'approved' => true,
+            'approved_by' => auth()->id() ?? 1,
+            'approved_at' => now(),
+        ]);
+
+        foreach ($items as $item) {
+            JournalItem::create([
+                'journal_id' => $reversalJournal->id,
+                'chart_account_id' => $item->chart_account_id,
+                'amount' => $item->amount,
+                'description' => ($item->description ?? 'Penalty reversal') . ' (Reversal)',
+                'nature' => $item->nature === 'debit' ? 'credit' : 'debit',
+            ]);
+        }
+
+        $accruedPenalty->update(['reversal_journal_id' => $reversalJournal->id]);
+    }
+
+    /**
+     * Reverse legacy penalty GL posted with transaction_id = schedule_id (CollectMatureInterestJob).
+     */
+    private function reverseLegacyPenaltyGlForSchedule(LoanSchedule $schedule, float $amountToReverse): float
+    {
+        if ($amountToReverse <= 0) {
+            return 0.0;
+        }
+
+        $remaining = $amountToReverse;
+        $reversedTotal = 0.0;
+
+        $debits = GlTransaction::where('transaction_id', $schedule->id)
+            ->where('transaction_type', 'Penalty')
+            ->where('nature', 'debit')
+            ->orderByDesc('id')
+            ->get();
+
+        foreach ($debits as $debit) {
+            if ($remaining <= 0) {
+                break;
+            }
+
+            $rowAmount = (float) $debit->amount;
+            if ($rowAmount <= 0) {
+                continue;
+            }
+
+            if ($rowAmount > $remaining + 0.01) {
+                break;
+            }
+
+            $credits = GlTransaction::where('transaction_id', $schedule->id)
+                ->where('transaction_type', 'Penalty')
+                ->where('nature', 'credit')
+                ->where('amount', $rowAmount)
+                ->get();
+
+            foreach ($credits as $credit) {
+                GlTransaction::create([
+                    'chart_account_id' => $credit->chart_account_id,
+                    'customer_id' => $credit->customer_id,
+                    'amount' => $credit->amount,
+                    'nature' => 'debit',
+                    'transaction_id' => $schedule->id,
+                    'transaction_type' => 'Penalty Reversal',
+                    'date' => now(),
+                    'description' => ($credit->description ?? 'Penalty reversal') . ' (Reversal)',
+                    'branch_id' => $credit->branch_id,
+                    'user_id' => auth()->id() ?? 1,
+                ]);
+            }
+
+            GlTransaction::create([
+                'chart_account_id' => $debit->chart_account_id,
+                'customer_id' => $debit->customer_id,
+                'amount' => $debit->amount,
+                'nature' => 'credit',
+                'transaction_id' => $schedule->id,
+                'transaction_type' => 'Penalty Reversal',
+                'date' => now(),
+                'description' => ($debit->description ?? 'Penalty reversal') . ' (Reversal)',
+                'branch_id' => $debit->branch_id,
+                'user_id' => auth()->id() ?? 1,
+            ]);
+
+            $remaining -= $rowAmount;
+            $reversedTotal += $rowAmount;
+        }
+
+        return $reversedTotal;
     }
 
     /**
@@ -1420,6 +1771,17 @@ class LoanRepaymentService
                 'amount' => $amount
             ]);
 
+            $settlementPlan = $loan->buildSettlementPlan($paymentData['payment_date'] ?? null);
+            $expectedSettleAmount = round((float) ($settlementPlan['settle_amount'] ?? 0), 2);
+
+            if ($expectedSettleAmount <= Loan::OUTSTANDING_CLOSURE_THRESHOLD) {
+                throw new \Exception('Loan has no outstanding settlement balance.');
+            }
+
+            if (abs($amount - $expectedSettleAmount) > 0.01) {
+                throw new \Exception("Settle amount mismatch. Expected: {$expectedSettleAmount}, Provided: {$amount}");
+            }
+
             // Handle cash deposit balance reduction if using cash deposit
             if (isset($paymentData['payment_source']) && $paymentData['payment_source'] === 'cash_deposit') {
                 $cashDeposit = \App\Models\CashCollateral::findOrFail($paymentData['cash_deposit_id']);
@@ -1431,122 +1793,57 @@ class LoanRepaymentService
                 ]);
             }
 
-            // Get current unpaid/partially paid schedule
-            // Ensure schedule is loaded as a collection
-            $schedules = $loan->schedule;
-            // If schedule relationship returns null or is not a collection, try to load it
-            if (!$schedules) {
-                $schedules = $loan->schedule()->get();
-            }
-            // Ensure it's a collection and not empty
-            if (!$schedules || !($schedules instanceof \Illuminate\Database\Eloquent\Collection) || $schedules->isEmpty()) {
-                throw new \Exception('No loan schedules found for settlement');
-            }
-
-            // Use filter() instead of where() for accessor-based filtering
-            $currentSchedule = $schedules->filter(function ($schedule) {
-                return !$schedule->is_fully_paid;
-            })->first();
-
-            if (!$currentSchedule) {
-                throw new \Exception('No unpaid schedule found for settlement');
-            }
-
-            // Calculate current interest (remaining interest from current schedule)
-            // Ensure repayments relationship is loaded
-            $repayments = $currentSchedule->repayments ?? collect();
-            $interestPaid = $repayments->sum('interest');
-            $currentInterest = max(0, $currentSchedule->interest - $interestPaid);
-
-            // Calculate total outstanding principal from all schedules
-            $totalPrincipal = $schedules->sum('principal');
-            $totalPaidPrincipal = $schedules->sum(function ($schedule) {
-                $scheduleRepayments = $schedule->repayments ?? collect();
-                return $scheduleRepayments->sum('principal');
-            });
-            $outstandingPrincipal = $totalPrincipal - $totalPaidPrincipal;
-
-            // Validate settle amount (rounded to 2 decimals to avoid float precision issues)
-            $expectedSettleAmount = round($currentInterest + $outstandingPrincipal, 2);
-            if (abs($amount - $expectedSettleAmount) > 0.01) {
-                throw new \Exception("Settle amount mismatch. Expected: {$expectedSettleAmount}, Provided: {$amount}");
-            }
-
-            // Create repayment record for current schedule (interest only)
-            if ($currentInterest > 0) {
-                $currentRepayment = Repayment::create([
-                    'customer_id' => $loan->customer_id,
-                    'loan_id' => $loan->id,
-                    'loan_schedule_id' => $currentSchedule->id,
-                    'bank_account_id' => $paymentData['bank_chart_account_id'] ?? null,
-                    'payment_date' => $paymentData['payment_date'] ?? now(),
-                    'due_date' => $currentSchedule->due_date,
-                    'principal' => 0,
-                    'interest' => $currentInterest,
-                    'fee_amount' => 0,
-                    'penalt_amount' => 0,
-                    'cash_deposit' => $currentInterest,
-                ]);
-
-                // Create GL transactions for current interest based on payment source
-                if (isset($paymentData['payment_source']) && $paymentData['payment_source'] === 'cash_deposit') {
-                    $this->createSettleInterestGLFromCashDeposit($loan, $currentRepayment, $currentInterest, $paymentData);
-                } else {
-                    $this->createSettleInterestGL($loan, $currentRepayment, $currentInterest, $paymentData);
-                }
-            }
-
-            // Create repayment records for all remaining principal across all schedules
-            $remainingAmount = $amount - $currentInterest;
             $processedSchedules = [];
+            $totalInterestPaid = 0.0;
+            $totalPrincipalPaid = 0.0;
+            $totalFeesPaid = 0.0;
+            $totalPenaltyPaid = 0.0;
 
-            // Ensure we're iterating over a valid collection
-            if (!$schedules || !($schedules instanceof \Illuminate\Database\Eloquent\Collection)) {
-                throw new \Exception('Invalid schedule collection for settlement');
-            }
+            $plannedPayments = array_merge(
+                $settlementPlan['due_schedule_payments'] ?? [],
+                $settlementPlan['future_principal_payments'] ?? []
+            );
 
-            foreach ($schedules as $schedule) {
-                if ($remainingAmount <= 0)
-                    break;
-
-                $scheduleRepayments = $schedule->repayments ?? collect();
-                $principalPaid = $scheduleRepayments->sum('principal');
-                $remainingPrincipal = $schedule->principal - $principalPaid;
-
-                if ($remainingPrincipal > 0) {
-                    $principalToPay = min($remainingAmount, $remainingPrincipal);
-
-                    $principalRepayment = Repayment::create([
-                        'customer_id' => $loan->customer_id,
-                        'loan_id' => $loan->id,
-                        'loan_schedule_id' => $schedule->id,
-                        'bank_account_id' => $paymentData['bank_chart_account_id'] ?? null,
-                        'payment_date' => $paymentData['payment_date'] ?? now(),
-                        'due_date' => $schedule->due_date,
-                        'principal' => $principalToPay,
-                        'interest' => 0,
-                        'fee_amount' => 0,
-                        'penalt_amount' => 0,
-                        'cash_deposit' => $principalToPay,
-                    ]);
-
-                    // Create GL transactions for principal based on payment source
-                    if (isset($paymentData['payment_source']) && $paymentData['payment_source'] === 'cash_deposit') {
-                        $this->createSettlePrincipalGLFromCashDeposit($loan, $principalRepayment, $principalToPay, $paymentData);
-                    } else {
-                        $this->createSettlePrincipalGL($loan, $principalRepayment, $principalToPay, $paymentData);
-                    }
-
-                    $remainingAmount -= $principalToPay;
-                    $processedSchedules[] = [
-                        'schedule_id' => $schedule->id,
-                        'principal_paid' => $principalToPay
-                    ];
+            foreach ($plannedPayments as $plannedPayment) {
+                if (($plannedPayment['amount'] ?? 0) <= 0) {
+                    continue;
                 }
+
+                /** @var LoanSchedule $schedule */
+                $schedule = $plannedPayment['schedule'];
+                if (!$schedule->relationLoaded('loan')) {
+                    $schedule->setRelation('loan', $loan);
+                }
+
+                $repayment = $this->createRepaymentRecord($loan, $schedule, $plannedPayment, $paymentData);
+                $this->createSettleRepaymentGL($loan, $repayment, $plannedPayment, $paymentData);
+
+                if ($schedule->relationLoaded('repayments')) {
+                    $schedule->setRelation('repayments', $schedule->repayments->push($repayment));
+                }
+
+                if ($schedule->remaining_amount <= Loan::OUTSTANDING_CLOSURE_THRESHOLD && $schedule->status !== 'restructured') {
+                    $schedule->update(['status' => 'paid']);
+                }
+
+                $totalPrincipalPaid += (float) ($plannedPayment['principal'] ?? 0);
+                $totalInterestPaid += (float) ($plannedPayment['interest'] ?? 0);
+                $totalFeesPaid += (float) ($plannedPayment['fee_amount'] ?? 0);
+                $totalPenaltyPaid += (float) ($plannedPayment['penalty_amount'] ?? 0);
+                $processedSchedules[] = [
+                    'schedule_id' => $schedule->id,
+                    'principal_paid' => (float) ($plannedPayment['principal'] ?? 0),
+                    'interest_paid' => (float) ($plannedPayment['interest'] ?? 0),
+                    'fee_paid' => (float) ($plannedPayment['fee_amount'] ?? 0),
+                    'penalty_paid' => (float) ($plannedPayment['penalty_amount'] ?? 0),
+                ];
             }
+
+            $loan->refresh();
+            $loan->load(['product', 'customer', 'schedule.repayments']);
 
             // Check if loan should be closed
-            $shouldClose = $loan->isLoanFullyPaidForSettlement();
+            $shouldClose = $loan->isEligibleForClosing();
             if ($shouldClose) {
                 $loan->status = Loan::STATUS_COMPLETE;
                 $loan->save();
@@ -1564,8 +1861,10 @@ class LoanRepaymentService
             return [
                 'success' => true,
                 'message' => 'Loan settled successfully',
-                'current_interest_paid' => $currentInterest,
-                'total_principal_paid' => $amount - $currentInterest,
+                'current_interest_paid' => round($totalInterestPaid, 2),
+                'total_principal_paid' => round($totalPrincipalPaid, 2),
+                'total_fees_paid' => round($totalFeesPaid, 2),
+                'total_penalties_paid' => round($totalPenaltyPaid, 2),
                 'processed_schedules' => $processedSchedules,
                 'loan_closed' => $shouldClose
             ];
@@ -1578,6 +1877,102 @@ class LoanRepaymentService
             ]);
             throw $e;
         }
+    }
+
+    private function createSettleRepaymentGL(Loan $loan, Repayment $repayment, array $schedulePayment, array $paymentData): void
+    {
+        $totalAmount = round((float) ($schedulePayment['amount'] ?? 0), 2);
+        if ($totalAmount <= 0) {
+            return;
+        }
+
+        $debitAccountId = $paymentData['bank_chart_account_id'] ?? null;
+        if (($paymentData['payment_source'] ?? null) === 'cash_deposit') {
+            $cashDeposit = \App\Models\CashCollateral::findOrFail($paymentData['cash_deposit_id']);
+            $debitAccountId = $cashDeposit->type->chart_account_id ?? null;
+        }
+
+        if ($debitAccountId) {
+            GlTransaction::create([
+                'chart_account_id' => $debitAccountId,
+                'customer_id' => $loan->customer_id,
+                'amount' => $totalAmount,
+                'nature' => 'debit',
+                'transaction_id' => $repayment->id,
+                'transaction_type' => 'Settle Repayment',
+                'date' => $repayment->payment_date,
+                'description' => "Settle repayment for loan {$loan->loanNo} - schedule {$repayment->loan_schedule_id}",
+                'branch_id' => $loan->branch_id,
+                'user_id' => auth()->id(),
+            ]);
+        }
+
+        $creditAccounts = $this->resolveSettleCreditAccounts($loan);
+        foreach (['principal', 'interest', 'fee_amount', 'penalty_amount'] as $component) {
+            $componentAmount = round((float) ($schedulePayment[$component] ?? 0), 2);
+            $accountId = $creditAccounts[$component] ?? null;
+
+            if ($componentAmount <= 0 || !$accountId) {
+                continue;
+            }
+
+            GlTransaction::create([
+                'chart_account_id' => $accountId,
+                'customer_id' => $loan->customer_id,
+                'amount' => $componentAmount,
+                'nature' => 'credit',
+                'transaction_id' => $repayment->id,
+                'transaction_type' => 'Settle Repayment',
+                'date' => $repayment->payment_date,
+                'description' => ucfirst(str_replace('_', ' ', $component)) . " settled for loan {$loan->loanNo} - schedule {$repayment->loan_schedule_id}",
+                'branch_id' => $loan->branch_id,
+                'user_id' => auth()->id(),
+            ]);
+        }
+    }
+
+    private function resolveSettleCreditAccounts(Loan $loan): array
+    {
+        $feeAccountId = null;
+        if (isset($loan->product->fees_ids)) {
+            $feeIds = is_array($loan->product->fees_ids)
+                ? $loan->product->fees_ids
+                : json_decode($loan->product->fees_ids, true);
+
+            if (is_array($feeIds)) {
+                foreach ($feeIds as $feeId) {
+                    $fee = \DB::table('fees')->where('id', $feeId)->first();
+                    if ($fee && $fee->include_in_schedule == 1 && $fee->chart_account_id) {
+                        $feeAccountId = $fee->chart_account_id;
+                        break;
+                    }
+                }
+            }
+        }
+
+        $penaltyAccountId = null;
+        if (isset($loan->product->penalty_ids)) {
+            $penaltyIds = is_array($loan->product->penalty_ids)
+                ? $loan->product->penalty_ids
+                : json_decode($loan->product->penalty_ids, true);
+
+            if (is_array($penaltyIds)) {
+                foreach ($penaltyIds as $penaltyId) {
+                    $penalty = \DB::table('penalties')->where('id', $penaltyId)->first();
+                    if ($penalty && $penalty->penalty_receivables_account_id) {
+                        $penaltyAccountId = $penalty->penalty_receivables_account_id;
+                        break;
+                    }
+                }
+            }
+        }
+
+        return [
+            'principal' => $loan->product->principal_receivable_account_id ?? null,
+            'interest' => $loan->product->interest_receivable_account_id ?? $loan->product->interest_revenue_account_id ?? null,
+            'fee_amount' => $feeAccountId,
+            'penalty_amount' => $penaltyAccountId,
+        ];
     }
 
     /**
@@ -1747,6 +2142,14 @@ class LoanRepaymentService
             $loan = $repayment->loan;
             $originalLoanStatus = $loan->status;
 
+            $this->assertCanDeleteRepayment($repayment);
+
+            $receiptIdForRebuild = $repayment->receipt_id;
+            $hasSharedReceipt = $receiptIdForRebuild
+                && Repayment::where('receipt_id', $receiptIdForRebuild)
+                    ->where('id', '!=', $repayment->id)
+                    ->exists();
+
             Log::info('Starting comprehensive repayment deletion', [
                 'repayment_id' => $repayment->id,
                 'loan_id' => $loan->id,
@@ -1771,6 +2174,13 @@ class LoanRepaymentService
             // 6. Delete the repayment record
             $repayment->delete();
 
+            if ($hasSharedReceipt && $receiptIdForRebuild) {
+                $receipt = Receipt::find($receiptIdForRebuild);
+                if ($receipt) {
+                    $this->rebuildReceiptGlFromRepayments($receipt, $loan);
+                }
+            }
+
             DB::commit();
 
             Log::info('Repayment deletion completed successfully', [
@@ -1794,108 +2204,43 @@ class LoanRepaymentService
     }
 
     /**
-     * Remove all repayments for a loan (including soft-deleted) with receipts, journals, and GL entries.
-     * Used when deleting or fully resetting a loan — does not restore cash deposits.
+     * Total amount recorded on a single repayment row.
      */
-    public function deleteAllRepaymentsForLoan(int $loanId): void
+    private function repaymentTotal(Repayment $repayment): float
     {
-        DB::transaction(function () use ($loanId) {
-            $repaymentIds = Repayment::withTrashed()
-                ->where('loan_id', $loanId)
-                ->pluck('id')
-                ->all();
+        return round(
+            (float) $repayment->principal
+            + (float) $repayment->interest
+            + (float) $repayment->fee_amount
+            + (float) $repayment->penalt_amount,
+            2
+        );
+    }
 
-            $receiptIds = Repayment::withTrashed()
-                ->where('loan_id', $loanId)
-                ->whereNotNull('receipt_id')
-                ->pluck('receipt_id')
-                ->unique()
-                ->values()
-                ->all();
+    private function isLoanFeeReceipt(Receipt $receipt): bool
+    {
+        return $receipt->reference_type === 'loan' && !empty($receipt->reference);
+    }
 
-            $loanReceiptIds = Receipt::withTrashed()
-                ->where('reference', $loanId)
-                ->whereIn('reference_type', ['loan_repayment', 'Repayment'])
-                ->pluck('id')
-                ->all();
-
-            if (!empty($repaymentIds)) {
-                $repaymentReceiptIds = Receipt::withTrashed()
-                    ->whereIn('reference', $repaymentIds)
-                    ->where('reference_type', 'loan_repayment')
-                    ->pluck('id')
-                    ->all();
-                $receiptIds = array_values(array_unique(array_merge($receiptIds, $loanReceiptIds, $repaymentReceiptIds)));
-            } else {
-                $receiptIds = array_values(array_unique(array_merge($receiptIds, $loanReceiptIds)));
-            }
-
-            foreach ($receiptIds as $receiptId) {
-                $receipt = Receipt::withTrashed()->find($receiptId);
-                if ($receipt) {
-                    $this->permanentlyDeleteReceipt($receipt);
-                }
-            }
-
-            if (!empty($repaymentIds)) {
-                $journalIds = Journal::whereIn('reference', $repaymentIds)
-                    ->where('reference_type', 'Withdrawal')
-                    ->pluck('id')
-                    ->all();
-
-                if (!empty($journalIds)) {
-                    JournalItem::whereIn('journal_id', $journalIds)->delete();
-                    GlTransaction::whereIn('transaction_id', $journalIds)
-                        ->where('transaction_type', 'journal repayment')
-                        ->delete();
-                    Journal::whereIn('id', $journalIds)->delete();
-                }
-
-                GlTransaction::whereIn('transaction_id', $repaymentIds)
-                    ->whereIn('transaction_type', ['receipt', 'journal repayment', 'Settle Interest', 'Settle Principal'])
-                    ->delete();
-
-                Repayment::withTrashed()->where('loan_id', $loanId)->forceDelete();
-            }
-
-            Log::info('All repayments removed for loan', [
-                'loan_id' => $loanId,
-                'repayment_count' => count($repaymentIds),
-                'receipt_count' => count($receiptIds),
-            ]);
-        });
+    private function isLoanRepaymentReceipt(Receipt $receipt): bool
+    {
+        return in_array($receipt->reference_type, ['loan_repayment', 'Repayment'], true);
     }
 
     /**
-     * Delete receipt and all associated records for a repayment
+     * Delete receipt and all associated records for a repayment.
+     * Handles shared receipts (one receipt, multiple schedule repayments).
      */
     private function deleteRepaymentReceipt($repayment)
     {
         $receipt = null;
-
         if ($repayment->receipt_id) {
             $receipt = Receipt::find($repayment->receipt_id);
         }
-
         if (!$receipt) {
             $receipt = Receipt::where('reference', $repayment->id)
-                ->where('reference_type', 'loan_repayment')
+                ->whereIn('reference_type', ['loan_repayment', 'Repayment'])
                 ->first();
-        }
-
-        if (!$receipt && $repayment->loan_id) {
-            $receipt = Receipt::where('reference', $repayment->loan_id)
-                ->where('reference_type', 'loan_repayment')
-                ->first();
-
-            if ($receipt) {
-                $othersOnReceipt = Repayment::where('receipt_id', $receipt->id)
-                    ->where('id', '!=', $repayment->id)
-                    ->exists();
-                if ($othersOnReceipt) {
-                    $receipt = null;
-                }
-            }
         }
 
         if (!$receipt) {
@@ -1903,35 +2248,65 @@ class LoanRepaymentService
             return;
         }
 
-        Log::info('Deleting receipt and associated data', [
-            'receipt_id' => $receipt->id,
-            'repayment_id' => $repayment->id
-        ]);
+        $siblingCount = Repayment::where('receipt_id', $receipt->id)
+            ->where('id', '!=', $repayment->id)
+            ->count();
 
-        // Delete receipt items
+        if ($siblingCount > 0) {
+            // Repayment row deleted by caller; rebuild aggregated GL from remaining rows on this receipt
+            return;
+        }
+
+        $this->purgeReceiptCompletely($receipt);
+    }
+
+    /**
+     * Hard-delete a receipt, its line items, and all related GL rows.
+     */
+    private function purgeReceiptCompletely(Receipt $receipt): void
+    {
         $receiptItemsCount = ReceiptItem::where('receipt_id', $receipt->id)->delete();
-        Log::info('Deleted receipt items', [
-            'receipt_id' => $receipt->id,
-            'count' => $receiptItemsCount
-        ]);
-
-        // Delete GL transactions for this receipt
         $receiptGLCount = GlTransaction::where('transaction_id', $receipt->id)
-            ->where('transaction_type', 'receipt')
+            ->whereIn('transaction_type', ['receipt', 'receipt_reversal'])
             ->delete();
-        Log::info('Deleted GL transactions for receipt', [
-            'receipt_id' => $receipt->id,
-            'count' => $receiptGLCount
-        ]);
 
-        // Delete the receipt
         $receipt->delete();
 
         Log::info('Receipt deletion completed', [
             'receipt_id' => $receipt->id,
             'receipt_items_deleted' => $receiptItemsCount,
-            'gl_transactions_deleted' => $receiptGLCount
+            'gl_transactions_deleted' => $receiptGLCount,
         ]);
+    }
+
+    /**
+     * Post reversing GL entries for all original receipt postings.
+     */
+    private function createReceiptGlReversals(Receipt $receipt, string $reversalType = 'receipt_reversal'): int
+    {
+        $originalGlTransactions = GlTransaction::where('transaction_id', $receipt->id)
+            ->where('transaction_type', 'receipt')
+            ->get();
+
+        foreach ($originalGlTransactions as $glTransaction) {
+            $oppositeNature = $glTransaction->nature === 'debit' ? 'credit' : 'debit';
+
+            GlTransaction::create([
+                'chart_account_id' => $glTransaction->chart_account_id,
+                'customer_id' => $glTransaction->customer_id,
+                'supplier_id' => $glTransaction->supplier_id,
+                'amount' => $glTransaction->amount,
+                'nature' => $oppositeNature,
+                'transaction_id' => $receipt->id,
+                'transaction_type' => $reversalType,
+                'date' => now(),
+                'description' => ($glTransaction->description ?? '') . ' (Reversal)',
+                'branch_id' => $glTransaction->branch_id,
+                'user_id' => auth()->id(),
+            ]);
+        }
+
+        return $originalGlTransactions->count();
     }
 
     /**
@@ -1981,60 +2356,27 @@ class LoanRepaymentService
     }
 
     /**
-     * Delete all GL transactions associated with a repayment
+     * Delete GL rows keyed by repayment id only (settle / cash journal).
+     * Shared receipt GL is handled by deleteRepaymentReceipt + rebuildReceiptGlFromRepayments.
      */
     private function deleteRepaymentGLTransactions($repayment)
     {
-        $totalDeleted = 0;
-
-        // Delete GL transactions by repayment ID (for settle repayments and direct references)
         $repaymentGLCount = GlTransaction::where('transaction_id', $repayment->id)
-            ->whereIn('transaction_type', ['receipt', 'journal repayment', 'Settle Interest', 'Settle Principal'])
+            ->whereIn('transaction_type', ['journal repayment', 'Settle Interest', 'Settle Principal'])
             ->delete();
-        $totalDeleted += $repaymentGLCount;
-        Log::info('Deleted GL transactions by repayment ID', [
-            'repayment_id' => $repayment->id,
-            'count' => $repaymentGLCount
-        ]);
 
-        // Delete GL transactions by receipt ID (if receipt exists)
-        $receipt = Receipt::where('reference', $repayment->id)
-            ->where('reference_type', 'loan_repayment')
-            ->first();
-        if ($receipt) {
-            $receiptGLCount = GlTransaction::where('transaction_id', $receipt->id)
-                ->where('transaction_type', 'receipt')
-                ->delete();
-            $totalDeleted += $receiptGLCount;
-            Log::info('Deleted GL transactions by receipt ID', [
-                'receipt_id' => $receipt->id,
-                'count' => $receiptGLCount
-            ]);
-        }
-
-        // Delete GL transactions by journal ID (if journal exists)
         $journal = Journal::where('reference', $repayment->id)
             ->where('reference_type', 'Withdrawal')
             ->first();
         if ($journal) {
-            $journalGLCount = GlTransaction::where('transaction_id', $journal->id)
+            GlTransaction::where('transaction_id', $journal->id)
                 ->where('transaction_type', 'journal repayment')
                 ->delete();
-            $totalDeleted += $journalGLCount;
-            Log::info('Deleted GL transactions by journal ID', [
-                'journal_id' => $journal->id,
-                'count' => $journalGLCount
-            ]);
         }
 
-        // Delete GL transactions for loan schedule (Mature Interest and Penalty)
-        // Note: Only delete if they are specifically related to this repayment
-        // We'll be conservative and not delete all schedule-related GL transactions
-        // as they might be shared across multiple repayments
-
-        Log::info('Total GL transactions deleted', [
+        Log::info('Deleted repayment-scoped GL transactions', [
             'repayment_id' => $repayment->id,
-            'total_deleted' => $totalDeleted
+            'count' => $repaymentGLCount,
         ]);
     }
 
@@ -2149,43 +2491,26 @@ class LoanRepaymentService
      */
     public function reverseReceipt(Receipt $receipt)
     {
-        // Validate reference_type
-        if (!in_array($receipt->reference_type, ['loan_repayment', 'Repayment'])) {
-            throw new \Exception('Receipt is not a loan repayment receipt');
+        if ($this->isLoanFeeReceipt($receipt)) {
+            return $this->reverseLoanFeeReceipt($receipt);
         }
+
+        if (!$this->isLoanRepaymentReceipt($receipt)) {
+            throw new \Exception('Receipt is not a loan-related receipt');
+        }
+
+        $loan = Loan::find($receipt->reference);
+        $originalLoanStatus = $loan ? $loan->status : null;
 
         DB::beginTransaction();
         try {
-            // Step 1: Reverse GL transactions
-            $originalGlTransactions = GlTransaction::where('transaction_id', $receipt->id)
-                ->where('transaction_type', 'receipt')
-                ->get();
-
-            foreach ($originalGlTransactions as $glTransaction) {
-                // Create reversal entry with opposite nature
-                $oppositeNature = $glTransaction->nature === 'debit' ? 'credit' : 'debit';
-                
-                GlTransaction::create([
-                    'chart_account_id' => $glTransaction->chart_account_id,
-                    'customer_id' => $glTransaction->customer_id,
-                    'supplier_id' => $glTransaction->supplier_id,
-                    'amount' => $glTransaction->amount,
-                    'nature' => $oppositeNature,
-                    'transaction_id' => $receipt->id,
-                    'transaction_type' => 'receipt_reversal',
-                    'date' => now(),
-                    'description' => ($glTransaction->description ?? '') . ' (Reversal)',
-                    'branch_id' => $glTransaction->branch_id,
-                    'user_id' => auth()->id(),
-                ]);
-            }
+            $reversalCount = $this->createReceiptGlReversals($receipt);
 
             Log::info('GL reversal entries created', [
                 'receipt_id' => $receipt->id,
-                'count' => $originalGlTransactions->count()
+                'count' => $reversalCount,
             ]);
 
-            // Step 2: Soft-delete repayments
             $repayments = Repayment::where('receipt_id', $receipt->id)->get();
             foreach ($repayments as $repayment) {
                 $repayment->delete();
@@ -2193,28 +2518,49 @@ class LoanRepaymentService
 
             Log::info('Repayments soft-deleted', [
                 'receipt_id' => $receipt->id,
-                'count' => $repayments->count()
+                'count' => $repayments->count(),
             ]);
 
-            // Step 3: Soft-delete receipt
             $receipt->delete();
 
-            Log::info('Receipt reversed successfully', [
-                'receipt_id' => $receipt->id
-            ]);
+            if ($loan && $originalLoanStatus !== null) {
+                $this->updateLoanStatusAfterDeletion($loan, $originalLoanStatus);
+            }
 
             DB::commit();
 
             return [
                 'success' => true,
-                'message' => 'Receipt reversed successfully'
+                'message' => 'Receipt reversed successfully',
             ];
         } catch (\Exception $e) {
             DB::rollBack();
             Log::error('Failed to reverse receipt', [
                 'receipt_id' => $receipt->id,
-                'error' => $e->getMessage()
+                'error' => $e->getMessage(),
             ]);
+            throw $e;
+        }
+    }
+
+    /**
+     * Reverse a loan fee receipt (reference_type = loan).
+     */
+    private function reverseLoanFeeReceipt(Receipt $receipt): array
+    {
+        DB::beginTransaction();
+        try {
+            $this->createReceiptGlReversals($receipt);
+            $receipt->delete();
+
+            DB::commit();
+
+            return [
+                'success' => true,
+                'message' => 'Loan fee receipt reversed successfully',
+            ];
+        } catch (\Exception $e) {
+            DB::rollBack();
             throw $e;
         }
     }
@@ -2228,27 +2574,23 @@ class LoanRepaymentService
      */
     public function restoreReversedReceipt(Receipt $receipt)
     {
-        // Validate receipt is trashed
         if (!$receipt->trashed()) {
             throw new \Exception('Receipt is not deleted');
         }
 
-        // Validate reference_type
-        if (!in_array($receipt->reference_type, ['loan_repayment', 'Repayment'])) {
-            throw new \Exception('Receipt is not a loan repayment receipt');
+        if (!$this->isLoanFeeReceipt($receipt) && !$this->isLoanRepaymentReceipt($receipt)) {
+            throw new \Exception('Receipt is not a loan-related receipt');
         }
 
         DB::beginTransaction();
         try {
-            // Step 1: Re-post original GL (reverse the reversal)
             $reversalGlTransactions = GlTransaction::where('transaction_id', $receipt->id)
                 ->where('transaction_type', 'receipt_reversal')
                 ->get();
 
             foreach ($reversalGlTransactions as $reversalGl) {
-                // Create entry with opposite nature to cancel the reversal
                 $oppositeNature = $reversalGl->nature === 'debit' ? 'credit' : 'debit';
-                
+
                 GlTransaction::create([
                     'chart_account_id' => $reversalGl->chart_account_id,
                     'customer_id' => $reversalGl->customer_id,
@@ -2264,39 +2606,25 @@ class LoanRepaymentService
                 ]);
             }
 
-            Log::info('Original GL entries re-posted', [
-                'receipt_id' => $receipt->id,
-                'count' => $reversalGlTransactions->count()
-            ]);
+            if ($this->isLoanRepaymentReceipt($receipt)) {
+                Repayment::withTrashed()
+                    ->where('receipt_id', $receipt->id)
+                    ->restore();
+            }
 
-            // Step 2: Restore repayments
-            $restoredCount = Repayment::withTrashed()
-                ->where('receipt_id', $receipt->id)
-                ->restore();
-
-            Log::info('Repayments restored', [
-                'receipt_id' => $receipt->id,
-                'count' => $restoredCount
-            ]);
-
-            // Step 3: Restore receipt
             $receipt->restore();
-
-            Log::info('Receipt restored successfully', [
-                'receipt_id' => $receipt->id
-            ]);
 
             DB::commit();
 
             return [
                 'success' => true,
-                'message' => 'Receipt restored successfully'
+                'message' => 'Receipt restored successfully',
             ];
         } catch (\Exception $e) {
             DB::rollBack();
             Log::error('Failed to restore receipt', [
                 'receipt_id' => $receipt->id,
-                'error' => $e->getMessage()
+                'error' => $e->getMessage(),
             ]);
             throw $e;
         }
@@ -2311,60 +2639,45 @@ class LoanRepaymentService
      */
     public function permanentlyDeleteReceipt(Receipt $receipt)
     {
-        // Validate reference_type
-        if (!in_array($receipt->reference_type, ['loan_repayment', 'Repayment'])) {
-            throw new \Exception('Receipt is not a loan repayment receipt');
+        if (!$this->isLoanFeeReceipt($receipt) && !$this->isLoanRepaymentReceipt($receipt)) {
+            throw new \Exception('Receipt is not a loan-related receipt');
         }
+
+        $loan = Loan::find($receipt->reference);
+        $originalLoanStatus = $loan ? $loan->status : null;
 
         DB::beginTransaction();
         try {
-            // Step 1: Delete all GL transactions (both receipt and receipt_reversal)
-            $glDeleted = GlTransaction::where('transaction_id', $receipt->id)
+            GlTransaction::where('transaction_id', $receipt->id)
                 ->whereIn('transaction_type', ['receipt', 'receipt_reversal'])
                 ->delete();
 
-            Log::info('GL transactions deleted', [
-                'receipt_id' => $receipt->id,
-                'count' => $glDeleted
-            ]);
+            ReceiptItem::where('receipt_id', $receipt->id)->delete();
 
-            // Step 2: Delete receipt items
-            $itemsDeleted = ReceiptItem::where('receipt_id', $receipt->id)->delete();
+            if ($this->isLoanRepaymentReceipt($receipt)) {
+                Repayment::withTrashed()
+                    ->where('receipt_id', $receipt->id)
+                    ->forceDelete();
+            }
 
-            Log::info('Receipt items deleted', [
-                'receipt_id' => $receipt->id,
-                'count' => $itemsDeleted
-            ]);
-
-            // Step 3: Force-delete repayments
-            $repaymentsDeleted = Repayment::withTrashed()
-                ->where('receipt_id', $receipt->id)
-                ->forceDelete();
-
-            Log::info('Repayments force-deleted', [
-                'receipt_id' => $receipt->id,
-                'count' => $repaymentsDeleted
-            ]);
-
-            // Step 4: Force-delete receipt (works for both active and trashed)
             $receipt = Receipt::withTrashed()->findOrFail($receipt->id);
             $receipt->forceDelete();
 
-            Log::info('Receipt permanently deleted', [
-                'receipt_id' => $receipt->id
-            ]);
+            if ($loan && $originalLoanStatus !== null) {
+                $this->updateLoanStatusAfterDeletion($loan, $originalLoanStatus);
+            }
 
             DB::commit();
 
             return [
                 'success' => true,
-                'message' => 'Receipt permanently deleted'
+                'message' => 'Receipt permanently deleted',
             ];
         } catch (\Exception $e) {
             DB::rollBack();
             Log::error('Failed to permanently delete receipt', [
                 'receipt_id' => $receipt->id,
-                'error' => $e->getMessage()
+                'error' => $e->getMessage(),
             ]);
             throw $e;
         }

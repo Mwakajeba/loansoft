@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../core/app_colors.dart';
 import 'login_screen.dart';
@@ -80,19 +81,20 @@ class _SplashScreenState extends State<SplashScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: Container(
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: SystemUiOverlayStyle.dark.copyWith(
+        statusBarColor: Colors.transparent,
+        statusBarIconBrightness: Brightness.dark,
+        systemNavigationBarColor: Colors.white,
+        systemNavigationBarIconBrightness: Brightness.dark,
+      ),
+      child: Scaffold(
+        backgroundColor: Colors.white,
+        body: Container(
         width: double.infinity,
         height: double.infinity,
         decoration: const BoxDecoration(
-          gradient: RadialGradient(
-            center: Alignment.center,
-            radius: 1.0,
-            colors: [
-              Color(0xFF1A2333),
-              AppColors.backgroundDark,
-            ],
-          ),
+          color: Color(0xFFFFFFFF),
         ),
         child: SafeArea(
           child: Column(
@@ -108,17 +110,17 @@ class _SplashScreenState extends State<SplashScreen> {
                       style: GoogleFonts.manrope(
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
-                        color: Colors.white.withOpacity(0.4),
+                        color: AppColors.logoTextOnWhite.withOpacity(0.45),
                       ),
                     ),
                     Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(Icons.signal_cellular_alt, size: 14, color: Colors.white.withOpacity(0.4)),
+                        Icon(Icons.signal_cellular_alt, size: 14, color: AppColors.logoTextOnWhite.withOpacity(0.45)),
                         const SizedBox(width: 6),
-                        Icon(Icons.wifi, size: 14, color: Colors.white.withOpacity(0.4)),
+                        Icon(Icons.wifi, size: 14, color: AppColors.logoTextOnWhite.withOpacity(0.45)),
                         const SizedBox(width: 6),
-                        Icon(Icons.battery_full, size: 18, color: Colors.white.withOpacity(0.4)),
+                        Icon(Icons.battery_full, size: 18, color: AppColors.logoTextOnWhite.withOpacity(0.45)),
                       ],
                     ),
                   ],
@@ -140,7 +142,7 @@ class _SplashScreenState extends State<SplashScreen> {
                           errorBuilder: (_, __, ___) => Icon(
                             Icons.image_not_supported_outlined,
                             size: 56,
-                            color: Colors.white.withOpacity(0.6),
+                            color: AppColors.primary.withOpacity(0.5),
                           ),
                         ),
                       ),
@@ -152,7 +154,7 @@ class _SplashScreenState extends State<SplashScreen> {
                           fontSize: 12,
                           fontWeight: FontWeight.w800,
                           letterSpacing: 4,
-                          color: AppColors.primary.withOpacity(0.9),
+                          color: AppColors.primary,
                         ),
                       ),
                     ],
@@ -163,6 +165,7 @@ class _SplashScreenState extends State<SplashScreen> {
           ),
         ),
       ),
+    ),
     );
   }
 }

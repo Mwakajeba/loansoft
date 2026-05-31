@@ -12,6 +12,7 @@ class ReceiptItem extends Model
 
     protected $fillable = [
         'receipt_id',
+        'fee_id',
         'chart_account_id',
         'amount',
         'description',
@@ -32,6 +33,11 @@ class ReceiptItem extends Model
     public function chartAccount()
     {
         return $this->belongsTo(ChartAccount::class);
+    }
+
+    public function fee()
+    {
+        return $this->belongsTo(Fee::class);
     }
 
     // Accessors

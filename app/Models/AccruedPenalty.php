@@ -52,7 +52,7 @@ class AccruedPenalty extends Model
      */
     public function loanSchedule()
     {
-        return $this->belongsTo(LoanSchedule::class);
+        return $this->belongsTo(LoanSchedule::class, 'loan_schedule_id');
     }
 
     /**

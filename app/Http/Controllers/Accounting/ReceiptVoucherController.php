@@ -10,6 +10,7 @@ use App\Models\Loan;
 use App\Models\Receipt;
 use App\Models\ReceiptItem;
 use App\Models\GlTransaction;
+use App\Models\Fee;
 use App\Services\LoanRepaymentService;
 use App\Traits\TransactionHelper;
 use Illuminate\Http\Request;
@@ -1058,7 +1059,7 @@ class ReceiptVoucherController extends Controller
             'description' => 'nullable|string',
             'attachment' => 'nullable|file|mimes:pdf|max:2048',
             'line_items' => 'required|array|min:1',
-            'line_items.*.chart_account_id' => 'required|exists:chart_accounts,id',
+            'line_items.*.fee_id' => 'required|exists:fees,id',
             'line_items.*.amount' => 'required|numeric|min:0.01',
             'line_items.*.description' => 'nullable|string',
         ]);
@@ -1076,6 +1077,12 @@ class ReceiptVoucherController extends Controller
             return $this->runTransaction(function () use ($request, $loan) {
                 $user = Auth::user();
                 $totalAmount = collect($request->line_items)->sum('amount');
+                $configuredFeeIds = [];
+                if ($loan->product && $loan->product->fees_ids) {
+                    $configuredFeeIds = is_array($loan->product->fees_ids)
+                        ? $loan->product->fees_ids
+                        : (json_decode($loan->product->fees_ids, true) ?: []);
+                }
 
                 \Log::info('Creating receipt voucher from loan with total amount:', ['total' => $totalAmount, 'loan_id' => $loan->id]);
 
@@ -1129,11 +1136,19 @@ class ReceiptVoucherController extends Controller
                 // Create receipt items
                 $receiptItems = [];
                 foreach ($request->line_items as $lineItem) {
+                    $fee = Fee::findOrFail($lineItem['fee_id']);
+                    if (!in_array($fee->id, $configuredFeeIds)) {
+                        throw new \Exception("Fee '{$fee->name}' is not configured for this loan product.");
+                    }
+                    if (!$fee->chart_account_id) {
+                        throw new \Exception("Fee '{$fee->name}' has no chart account configured.");
+                    }
                     $receiptItems[] = [
                         'receipt_id' => $receipt->id,
-                        'chart_account_id' => $lineItem['chart_account_id'],
+                        'fee_id' => $fee->id,
+                        'chart_account_id' => $fee->chart_account_id,
                         'amount' => $lineItem['amount'],
-                        'description' => $lineItem['description'] ?? null,
+                        'description' => $lineItem['description'] ?? ('Fee payment: ' . $fee->name),
                         'created_at' => now(),
                         'updated_at' => now(),
                     ];
@@ -1171,15 +1186,16 @@ class ReceiptVoucherController extends Controller
 
                 // Credit each chart account
                 foreach ($request->line_items as $lineItem) {
+                    $fee = Fee::findOrFail($lineItem['fee_id']);
                     GlTransaction::create([
-                        'chart_account_id' => $lineItem['chart_account_id'],
+                        'chart_account_id' => $fee->chart_account_id,
                         'customer_id' => $payeeType === 'customer' ? $payeeId : null,
                         'amount' => $lineItem['amount'],
                         'nature' => 'credit',
                         'transaction_id' => $receipt->id,
                         'transaction_type' => 'receipt',
                         'date' => $request->date,
-                        'description' => $lineItem['description'] ?: "Receipt voucher {$receipt->reference} for loan {$loan->loanNo}",
+                        'description' => $lineItem['description'] ?: ("Loan Fee: {$fee->name} for loan {$loan->loanNo}"),
                         'branch_id' => $user->branch_id,
                         'user_id' => $user->id,
                     ]);

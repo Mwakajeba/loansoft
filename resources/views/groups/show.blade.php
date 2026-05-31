@@ -395,23 +395,6 @@
                     { data: 'notes', orderable: false, searchable: true },
                     { data: 'actions', orderable: false, searchable: false }
                 ],
-                drawCallback: function () {
-                    // Ensure click handlers after each draw
-                    $('#groupMembersTable .js-remove-member').off('click').on('click', function () {
-                        const encodedGroup = $(this).data('encoded-group');
-                        const memberId = $(this).data('member-id');
-                        const memberName = $(this).data('member-name');
-                        removeMember(encodedGroup, memberId, memberName);
-                    });
-                }
-            });
-
-            // Delegate click handler for dynamically loaded remove buttons
-            $('#groupMembersTable').on('click', '.js-remove-member', function () {
-                const encodedGroup = $(this).data('encoded-group');
-                const memberId = $(this).data('member-id');
-                const memberName = $(this).data('member-name');
-                removeMember(encodedGroup, memberId, memberName);
             });
         });
     </script>
@@ -436,7 +419,11 @@
                 if (result.isConfirmed) {
                     const form = document.createElement('form');
                     form.method = 'POST';
-                    form.action = actionUrl || `/groups/${groupId}/members/${memberId}`;
+                    if (!actionUrl) {
+                        Swal.fire({ icon: 'error', title: 'Error', text: 'Remove action URL is missing. Please refresh the page.' });
+                        return;
+                    }
+                    form.action = actionUrl;
 
                     const csrfToken = document.createElement('input');
                     csrfToken.type = 'hidden';

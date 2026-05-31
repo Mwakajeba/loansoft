@@ -183,6 +183,27 @@ class SystemSetting extends Model
             'minimum_savings_balance' => ['value' => 100, 'type' => 'string', 'group' => 'microfinance', 'label' => 'Minimum Savings Balance'],
             'late_payment_penalty' => ['value' => 5.0, 'type' => 'string', 'group' => 'microfinance', 'label' => 'Late Payment Penalty (%)'],
             'grace_period_days' => ['value' => 7, 'type' => 'integer', 'group' => 'microfinance', 'label' => 'Grace Period (days)'],
+            'loan_rounding_enabled' => [
+                'value' => false,
+                'type' => 'boolean',
+                'group' => 'microfinance',
+                'label' => 'Enable Loan Rounding',
+                'description' => 'If enabled, schedule principal and interest amounts are rounded to the configured step (calculator + saved schedules).',
+            ],
+            'loan_rounding_method' => [
+                'value' => 'nearest',
+                'type' => 'string',
+                'group' => 'microfinance',
+                'label' => 'Loan Rounding Method',
+                'description' => 'How to round: nearest, up, or down.',
+            ],
+            'loan_rounding_step' => [
+                'value' => 1,
+                'type' => 'integer',
+                'group' => 'microfinance',
+                'label' => 'Loan Rounding Step',
+                'description' => 'Round to nearest step (e.g. 1, 5, 10, 50, 100).',
+            ],
 
             // SMS Notification / Repayment Reminder Settings
             'sms_reminder_enabled' => [
@@ -213,13 +234,31 @@ class SystemSetting extends Model
         ];
 
         foreach ($defaults as $key => $config) {
-            self::setValue(
-                $key,
-                $config['value'],
-                $config['type'],
-                $config['group'],
-                $config['label']
-            );
+            $setting = self::where('key', $key)->first();
+
+            if (!$setting) {
+                self::create([
+                    'key' => $key,
+                    'value' => $config['value'],
+                    'type' => $config['type'],
+                    'group' => $config['group'],
+                    'label' => $config['label'] ?? ucwords(str_replace('_', ' ', $key)),
+                    'description' => $config['description'] ?? null,
+                    'is_public' => $config['is_public'] ?? false,
+                ]);
+            } else {
+                // Do NOT override existing values; only keep metadata up to date.
+                $setting->update([
+                    'type' => $config['type'],
+                    'group' => $config['group'],
+                    'label' => $config['label'] ?? $setting->label,
+                    'description' => $config['description'] ?? $setting->description,
+                ]);
+            }
+
+            Cache::forget("system_setting_{$key}");
         }
+
+        Cache::forget('all_system_settings');
     }
 }

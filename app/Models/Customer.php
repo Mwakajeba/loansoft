@@ -100,7 +100,8 @@ class Customer extends Model
 
     public function groups()
     {
-        return $this->belongsToMany(Group::class, 'group_members', 'customer_id', 'group_id');
+        return $this->belongsToMany(Group::class, 'group_members', 'customer_id', 'group_id')
+            ->withPivot(['joined_date', 'status', 'notes']);
     }
 
     public function loanOfficers()

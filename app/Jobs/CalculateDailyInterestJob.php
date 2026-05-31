@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Models\Loan;
 use App\Models\JobLog;
+use App\Support\Loans\InterestAccrualMethod;
 use App\Services\InterestCalculationService;
 use App\Services\LoanScheduleService;
 use App\Services\AccountingService;
@@ -75,7 +76,10 @@ class CalculateDailyInterestJob implements ShouldQueue
                 ->whereHas('product', function ($query) {
                     // Filter to only loans with products using daily accrual method
                     // Support both new value 'daily' and legacy value 'daily_bases' for backward compatibility
-                    $query->whereIn('penalt_deduction_criteria', ['daily', 'daily_bases']);
+                    $query->whereIn('penalt_deduction_criteria', [
+                        InterestAccrualMethod::DAILY,
+                        InterestAccrualMethod::DAILY_LEGACY,
+                    ]);
                 })
                 ->with(['product', 'customer', 'branch', 'repayments', 'schedule.repayments'])
                 ->chunk(200, function ($loans) use (&$totalProcessed, &$totalSuccessful, &$totalFailed, &$totalSkipped, &$totalInterestAccrued, &$perLoanDetails) {
@@ -285,7 +289,8 @@ class CalculateDailyInterestJob implements ShouldQueue
             // If the due date has passed as of the accrual date and there's a remaining amount
             if ($dueDate->lt($asOfDate)) {
                 // Calculate remaining amount: total due - paid
-                $interestAmount = $scheduleItem->accrued_interest ?? $scheduleItem->interest ?? 0;
+                $scheduleItem->setRelation('loan', $loan);
+                $interestAmount = $scheduleItem->balance_interest_component;
                 $totalDue = $scheduleItem->principal + $interestAmount + $scheduleItem->fee_amount + $scheduleItem->penalty_amount;
                 $paidAmount = $scheduleItem->repayments ? $scheduleItem->repayments->sum(function ($rep) {
                     return $rep->principal + $rep->interest + $rep->fee_amount + $rep->penalt_amount;

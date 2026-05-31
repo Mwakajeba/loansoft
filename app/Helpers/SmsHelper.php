@@ -87,11 +87,10 @@ class SmsHelper
      * @param string $event
      * @return bool
      */
-    protected static function isEventEnabled(string $event): bool
+    public static function isEventEnabled(string $event): bool
     {
         $value = config("services.sms.events.$event", true);
 
-        // Use FILTER_VALIDATE_BOOLEAN to correctly parse "true"/"false", "1"/"0", etc.
         return filter_var($value, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE) !== false;
     }
 

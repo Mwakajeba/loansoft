@@ -26,20 +26,7 @@
 </head>
 <body>
     @php
-        $logoBase64 = null;
-        $logoPath = null;
-        if (isset($company) && $company && !empty($company->logo)) {
-            $storagePath = public_path('storage/' . $company->logo);
-            if (file_exists($storagePath)) { $logoPath = $storagePath; }
-        }
-        if (!$logoPath && file_exists(public_path('assets/images/logo-img.png'))) {
-            $logoPath = public_path('assets/images/logo-img.png');
-        }
-        if ($logoPath && file_exists($logoPath)) {
-            $logoType = pathinfo($logoPath, PATHINFO_EXTENSION);
-            $logoData = file_get_contents($logoPath);
-            $logoBase64 = 'data:image/' . $logoType . ';base64,' . base64_encode($logoData);
-        }
+        $logoBase64 = \App\Support\Pdf\PdfLogo::dataUri($company ?? null);
     @endphp
 
     <!-- Header -->

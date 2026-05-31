@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SmartFinance — Loan Management User Guide</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Serif:ital,wght@0,400;0,600;0,700;1,400&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --navy: #0f2744;
+      --navy-light: #1a3a5c;
+      --teal: #0d9488;
+      --teal-soft: #ecfdf8;
+      --ink: #1e293b;
+      --muted: #64748b;
+      --line: #e2e8f0;
+      --paper: #fafbfc;
+      --example-bg: #f0f9ff;
+      --example-border: #38bdf8;
+      --warn-bg: #fef2f2;
+      --warn-border: #f87171;
+      --note-bg: #fffbeb;
+      --note-border: #fbbf24;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      font-family: "IBM Plex Sans", system-ui, sans-serif;
+      font-size: 10.5pt;
+      line-height: 1.6;
+      color: var(--ink);
+      background: var(--paper);
+    }
+    .doc {
+      max-width: 52rem;
+      margin: 0 auto;
+      padding: 0 1.5rem 3rem;
+    }
+
+    /* Cover */
+    .cover {
+      display: grid;
+      grid-template-columns: 6px 1fr;
+      gap: 0;
+      margin: 2rem 0 2.5rem;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 4px 24px rgba(15, 39, 68, 0.08);
+      border: 1px solid var(--line);
+      background: #fff;
+    }
+    .cover-accent {
+      background: linear-gradient(180deg, var(--teal) 0%, var(--navy) 100%);
+    }
+    .cover-inner {
+      padding: 2.25rem 2rem 2rem;
+    }
+    .cover-badge {
+      display: inline-block;
+      font-size: 0.7rem;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--teal);
+      margin-bottom: 0.75rem;
+    }
+    h1 {
+      font-family: "IBM Plex Serif", Georgia, serif;
+      font-size: 2rem;
+      font-weight: 700;
+      color: var(--navy);
+      margin: 0 0 0.5rem;
+      line-height: 1.2;
+      letter-spacing: -0.02em;
+    }
+    .cover-sub {
+      font-size: 1.05rem;
+      color: var(--muted);
+      max-width: 36rem;
+      margin: 0 0 1.25rem;
+    }
+    .cover-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1rem;
+      font-size: 0.82rem;
+      color: var(--muted);
+    }
+    .cover-meta span {
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+    }
+    .cover-meta strong { color: var(--ink); font-weight: 600; }
+
+    /* TOC */
+    .toc-wrap {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 1.25rem 1.5rem 1.35rem;
+      margin-bottom: 2.5rem;
+    }
+    .toc-wrap h2 {
+      font-family: "IBM Plex Serif", Georgia, serif;
+      font-size: 1.05rem;
+      color: var(--navy);
+      margin: 0 0 1rem;
+      padding-bottom: 0.5rem;
+      border-bottom: 1px solid var(--line);
+    }
+    .toc-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.35rem 2rem;
+      font-size: 0.88rem;
+    }
+    @media (max-width: 640px) { .toc-grid { grid-template-columns: 1fr; } }
+    .toc-grid a {
+      color: var(--navy-light);
+      text-decoration: none;
+      padding: 0.25rem 0;
+      display: flex;
+      gap: 0.5rem;
+      align-items: baseline;
+    }
+    .toc-grid a:hover { color: var(--teal); }
+    .toc-num {
+      font-weight: 700;
+      color: var(--teal);
+      min-width: 1.5rem;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* Sections */
+    section {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 1.35rem 1.5rem 1.5rem;
+      margin-bottom: 1.25rem;
+      page-break-inside: avoid;
+    }
+    section h2 {
+      font-family: "IBM Plex Serif", Georgia, serif;
+      font-size: 1.2rem;
+      color: var(--navy);
+      margin: 0 0 0.85rem;
+      padding-bottom: 0.5rem;
+      border-bottom: 2px solid var(--teal);
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+    }
+    .sec-num {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 2rem;
+      height: 2rem;
+      background: var(--teal-soft);
+      color: var(--navy);
+      font-family: "IBM Plex Sans", sans-serif;
+      font-size: 0.85rem;
+      font-weight: 700;
+      border-radius: 8px;
+    }
+    h3 {
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: var(--navy-light);
+      margin: 1rem 0 0.4rem;
+    }
+    /* Definition lead-in: "What is …?" */
+    .def {
+      margin: 0 0 0.9rem;
+      padding: 0.7rem 0.95rem;
+      background: var(--teal-soft);
+      border-left: 3px solid var(--teal);
+      border-radius: 0 8px 8px 0;
+      font-size: 0.97rem;
+      line-height: 1.55;
+    }
+    .def strong:first-of-type {
+      display: block;
+      color: var(--navy);
+      font-size: 0.82rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      margin-bottom: 0.35rem;
+    }
+    /* When to use it */
+    .when {
+      margin: 0 0 0.9rem;
+      padding: 0.7rem 0.95rem;
+      background: #f5f3ff;
+      border-left: 3px solid #7c3aed;
+      border-radius: 0 8px 8px 0;
+      font-size: 0.97rem;
+      line-height: 1.55;
+    }
+    .when strong:first-of-type {
+      display: block;
+      color: #5b21b6;
+      font-size: 0.82rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      margin-bottom: 0.35rem;
+    }
+    p { margin: 0.4rem 0; }
+    ul, ol { margin: 0.4rem 0 0.6rem; padding-left: 1.25rem; }
+    li { margin: 0.2rem 0; }
+    code {
+      font-family: ui-monospace, monospace;
+      font-size: 0.88em;
+      background: var(--paper);
+      padding: 0.08em 0.35em;
+      border-radius: 3px;
+      border: 1px solid var(--line);
+    }
+
+    /* Example callout */
+    .example {
+      margin: 1rem 0 0;
+      padding: 0.85rem 1rem 0.95rem;
+      background: var(--example-bg);
+      border: 1px solid rgba(56, 189, 248, 0.45);
+      border-radius: 8px;
+      border-left: 4px solid var(--example-border);
+    }
+    .example-label {
+      font-size: 0.68rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #0369a1;
+      margin-bottom: 0.35rem;
+    }
+    .example p { margin: 0.25rem 0; font-size: 0.95rem; }
+    .example ul { margin: 0.35rem 0 0; font-size: 0.92rem; }
+
+    .note {
+      background: var(--note-bg);
+      border-left: 4px solid var(--note-border);
+      padding: 0.65rem 0.9rem;
+      margin: 0.85rem 0;
+      border-radius: 0 8px 8px 0;
+      font-size: 0.92rem;
+    }
+    .warn {
+      background: var(--warn-bg);
+      border-left: 4px solid var(--warn-border);
+      padding: 0.65rem 0.9rem;
+      margin: 0.85rem 0;
+      border-radius: 0 8px 8px 0;
+      font-size: 0.92rem;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.86rem;
+      margin: 0.5rem 0;
+    }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 0.45rem 0.55rem;
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      background: var(--paper);
+      font-weight: 600;
+      color: var(--navy);
+    }
+    tr:nth-child(even) td { background: #fafafa; }
+
+    footer.doc-foot {
+      margin-top: 2rem;
+      padding: 1rem 0;
+      border-top: 1px solid var(--line);
+      font-size: 0.82rem;
+      color: var(--muted);
+      text-align: center;
+    }
+
+    @media print {
+      body { background: #fff; }
+      .doc { max-width: 100%; padding: 0 0.5cm; font-size: 9.5pt; }
+      .cover { box-shadow: none; margin-top: 0; }
+      section { break-inside: avoid; page-break-inside: avoid; }
+      .toc-grid a { color: inherit; }
+      .example { break-inside: avoid; }
+      .def { break-inside: avoid; }
+      .when { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <div class="doc">
+
+    <header class="cover">
+      <div class="cover-accent" aria-hidden="true"></div>
+      <div class="cover-inner">
+        <span class="cover-badge">User documentation</span>
+        <h1>Loan Management User Guide</h1>
+        <p class="cover-sub">End-to-end reference for SmartFinance: products, applications, approvals, schedules, repayments, receipts, top-up, write-off, restructure, and settlement. Each topic includes what it is, <strong>when to use it</strong>, how-to steps, and examples.</p>
+        <div class="cover-meta">
+          <span><strong>Version</strong> 2.4</span>
+          <span><strong>Audience</strong> Loan officers, approvers, finance staff</span>
+          <span><strong>Access</strong> Authenticated web app</span>
+        </div>
+      </div>
+    </header>
+
+    <nav class="toc-wrap" aria-label="Table of contents">
+      <h2>Contents</h2>
+      <div class="toc-grid">
+        <a href="#s1"><span class="toc-num">1</span> Permissions overview</a>
+        <a href="#s2"><span class="toc-num">2</span> Loan product setup</a>
+        <a href="#s3"><span class="toc-num">3</span> Fees, penalties, grace period</a>
+        <a href="#s4"><span class="toc-num">4</span> Repayment order</a>
+        <a href="#s5"><span class="toc-num">5</span> Loan calculator</a>
+        <a href="#s6"><span class="toc-num">6</span> Applying for a loan</a>
+        <a href="#s7"><span class="toc-num">7</span> Creating a loan (direct)</a>
+        <a href="#s8"><span class="toc-num">8</span> View, edit, delete</a>
+        <a href="#s9"><span class="toc-num">9</span> Loan detail buttons</a>
+        <a href="#s10"><span class="toc-num">10</span> Check, approve, authorize, disburse</a>
+        <a href="#s11"><span class="toc-num">11</span> Repayment schedules</a>
+        <a href="#s12"><span class="toc-num">12</span> How to record a payment</a>
+        <a href="#s13"><span class="toc-num">13</span> How allocations work</a>
+        <a href="#s14"><span class="toc-num">14</span> Receipts</a>
+        <a href="#s15"><span class="toc-num">15</span> Top-up</a>
+        <a href="#s16"><span class="toc-num">16</span> Write-off</a>
+        <a href="#s17"><span class="toc-num">17</span> Restructure</a>
+        <a href="#s18"><span class="toc-num">18</span> Settle loan</a>
+        <a href="#s19"><span class="toc-num">19</span> Fees receipt, import, reports</a>
+      </div>
+    </nav>
+
+    <!-- 1 -->
+    <section id="s1">
+      <h2><span class="sec-num">1</span> Permissions overview</h2>
+      <p class="def"><strong>What are permissions?</strong> Permissions are named rules in SmartFinance that decide whether a signed-in user may perform an action (for example create a loan, approve a disbursement, or delete a record). They are usually grouped into <em>roles</em> (e.g. loan officer, branch manager) so many users share the same access pattern.</p>
+      <p class="when"><strong>When to use it</strong> Refer to this when <strong>onboarding or changing staff roles</strong>, when someone reports &ldquo;I cannot see that button,&rdquo; during <strong>access audits</strong>, or when designing who may create, approve, or reverse transactions. Day-to-day you do not &ldquo;use&rdquo; permissions yourself — your administrator assigns them — but you need the concept to know why screens differ by user.</p>
+      <p>SmartFinance uses role-based permissions (Laravel <code>@can</code>). Common seeded abilities include <strong>create loan</strong>, <strong>edit loan</strong>, <strong>delete loan</strong>, <strong>approve loan</strong>, <strong>reject loan</strong>, <strong>default loan</strong>, <strong>manage loan documents</strong>, <strong>manage loan collateral</strong>, <strong>generate loan schedule</strong>, and loan product CRUD. Your administrator maps these to roles such as teller, loan officer, branch manager, or accountant.</p>
+      <div class="example">
+        <div class="example-label">Example</div>
+        <p><strong>Scenario:</strong> Mary is a loan officer. She has <em>create loan</em> and <em>edit loan</em> but not <em>approve loan</em>. She can book a new loan and fix data entry errors, but she cannot press &ldquo;Approve&rdquo; or &ldquo;Disburse&rdquo; — her supervisor (with <em>approve loan</em> and the correct approval role on the product) must do that.</p>
+        <p><strong>Scenario:</strong> The Receipts tab may show Reverse/Delete to anyone who can open the loan page. Your organisation should still limit sensitive roles via training and, if needed, extra middleware — do not assume the UI hides every risk.</p>
+      </div>
+    </section>
+
+    <!-- 2 -->
+    <section id="s2">
+      <h2><span class="sec-num">2</span> Loan product setup</h2>
+      <p class="def"><strong>What is a loan product?</strong> A loan product is a <em>template</em> that defines how loans of that type behave: allowed amounts and terms, how interest is calculated, which fees and penalties apply, approval steps, accounting accounts, and optional rules such as top-up or collateral. Every real loan is linked to one product so the system applies the correct rules automatically.</p>
+      <p class="when"><strong>When to use it</strong> Use loan product setup when you <strong>launch a new credit programme</strong>, change pricing or limits, add or reorder <strong>approval levels</strong>, link new GL accounts, or adjust top-up/collateral rules. Complete this <em>before</em> staff book loans on that product, and revisit it when credit policy or accounting structure changes.</p>
+      <p>In the menu, find <strong>Loan products</strong> (or equivalent). Click it to see the list; use <strong>Add</strong> / <strong>Create</strong> to define a new product, or open an existing product and choose <strong>Edit</strong>. Configure name, type, interest min/max, interest cycle (the screen emphasises monthly; other cycles may be converted at loan entry), interest method (flat, reducing EMI, reducing equal principal), principal and period limits, optional max loans per customer, cash collateral rules, <strong>approval levels</strong> (ordered roles — last step is disburse in code), chart accounts (principal/interest receivable, interest revenue, write-off accounts), top-up type/value. For document rules on the product, open the product and find <strong>KYC configuration</strong> (or similar).</p>
+      <div class="example">
+        <div class="example-label">Example</div>
+        <p>You create <em>Business Term Loan — 12M</em>: principal TZS 500,000–50,000,000; period 3–24 months; rate 12–18% p.a.; method reducing balance (equal installment); approval roles in order: <em>Branch Credit</em> → <em>Regional Manager</em> → <em>Accountant</em> (disburse). You link principal receivable 1201, interest receivable 1202, interest revenue 4101, and provision write-off 1505 for later write-offs.</p>
+      </div>
+    </section>
+
+    <!-- 3 -->
+    <section id="s3">
+      <h2><span class="sec-num">3</span> Fees, penalties, and grace period</h2>
+      <p class="def"><strong>What are fees, penalties, and grace period?</strong> <em>Fees</em> are extra charges (processing, insurance, etc.) attached to the product and spread or charged according to each fee&rsquo;s rules. <em>Penalties</em> are charges for late payment (or similar), driven by penalty definitions on the product. <em>Grace period</em> is the number of days after a due date during which the borrower may still pay without being treated as late for penalty purposes (subject to your configuration).</p>
+      <p class="when"><strong>When to use it</strong> Configure these when you <strong>define or update a product</strong> to match your credit manual and regulatory disclosures. Adjust <strong>grace period</strong> when policy changes how many days after due date penalties start. Add or change <strong>fees/penalties</strong> when introducing new charges or fair-lending rules. On the live loan, use <strong>Remove penalty</strong> only when an exception is approved (e.g. system error or goodwill waiver).</p>
+      <p><strong>Grace period (days)</strong> on the product extends the window before late treatment; schedules store grace-related dates used with penalties. <strong>Fees</strong> and <strong>penalties</strong> are chosen from master lists and attached to the product; behaviour (e.g. fee on first installment vs release date) depends on each fee&rsquo;s definition. On-time payments may trigger automatic penalty removal; on the <strong>Loan details</strong> screen, under the schedule or repayments area, use <strong>Remove penalty</strong> (or equivalent) on a row when the system allows it.</p>
+      <div class="example">
+        <div class="example-label">Example</div>
+        <p><strong>Grace:</strong> Grace period = 7 days. A repayment due 1 March is not treated as late for penalty purposes until after the grace end date defined on the schedule.</p>
+        <p><strong>Fees:</strong> You attach <em>Processing fee</em> (deducted evenly across installments) and <em>Insurance fee</em> (first installment only). New loans on this product inherit both.</p>
+        <p><strong>Penalty:</strong> You attach <em>Late fee 2% on overdue principal</em>. If the borrower pays on the due date, the system may clear the penalty line according to rules; if they pay 10 days late, penalty accrues until paid or waived.</p>
+      </div>
+    </section>
+
+    <!-- 4 -->
+    <section id="s4">
+      <h2><span class="sec-num">4</span> Repayment order</h2>
+      <p class="def"><strong>What is repayment order?</strong> Repayment order is the sequence in which an incoming payment is applied to the parts of an installment: typically <strong>penalties</strong>, <strong>fees</strong>, <strong>interest</strong>, and <strong>principal</strong>. The product stores your chosen order so each payment clears one &ldquo;bucket&rdquo; before the next, which affects how quickly principal reduces and how arrears are cleared.</p>
+      <p class="when"><strong>When to use it</strong> Set or review repayment order <strong>when creating or editing each loan product</strong>, especially if policy requires (for example) <em>penalties and fees before principal</em> so arrears costs are cleared first. Revisit if collections or legal advice changes allocation rules. You do not change order per individual loan unless your process includes a product variant.</p>
+      <p>On the product, order <strong>Principal</strong>, <strong>Interest</strong>, <strong>Fees</strong>, and <strong>Penalties</strong>. When a payment arrives, the system pays the <em>first</em> component in your list until that bucket for the current installment is cleared, then the next, and so on. If the product order is empty or invalid, code falls back to: penalties → fees → interest → principal.</p>
+      <div class="example">
+        <div class="example-label">Example</div>
+        <p>You set order: <strong>Penalties → Interest → Fees → Principal</strong>. A borrower pays TZS 500,000 on an installment that still owes TZS 50,000 penalty, TZS 200,000 interest, TZS 30,000 fees, TZS 400,000 principal. Allocation: 50k penalty + 200k interest + 30k fees + 220k principal; TZS 180,000 principal remains for the next payment.</p>
+      </div>
+      <p class="note"><strong>Tip:</strong> Set the repayment order explicitly on every product so behaviour matches your credit policy — do not rely on the system default.</p>
+    </section>
+
+    <!-- 5 -->
+    <section id="s5">
+      <h2><span class="sec-num">5</span> Loan calculator</h2>
+      <p class="def"><strong>What is the loan calculator?</strong> The loan calculator is a planning tool that estimates installments, total repayable, or comparisons using amount, term, and product rules — <strong>without</strong> creating a real loan in the ledger. Use it for quotations, customer discussions, and internal checks before you use <strong>Create loan</strong> or an application.</p>
+      <p class="when"><strong>When to use it</strong> Use the calculator <strong>before</strong> booking a loan: customer quotations, negotiating amount/term, preparing <strong>loan committee or approval papers</strong>, or checking affordability. Use it when the customer asks &ldquo;what if I borrow X for Y months?&rdquo; Do <em>not</em> use it as a substitute for recording actual repayments — after disbursement, use the loan record and schedule.</p>
+      <p>In the menu, find and open <strong>Loan calculator</strong>. Use it to simulate installments before committing a loan. Use product-linked rates and limits where the screen offers them; use <strong>Export to PDF</strong> or <strong>Export to Excel</strong> (or similar) for customer files or internal approval packs.</p>
+      <div class="example">
+        <div class="example-label">Example</div>
+        <p>A customer asks for TZS 10,000,000 over 18 months. You select the same product you plan to book, enter amount and term, run <strong>Calculate</strong>, and print the PDF for the file. The formal loan is still created later via <strong>Create loan</strong> or <strong>Loan applications</strong> — the calculator does not book the loan.</p>
+      </div>
+    </section>
+
+    <!-- 6 -->
+    <section id="s6">
+      <h2><span class="sec-num">6</span> Applying for a loan (applications)</h2>
+      <p class="def"><strong>What is a loan application?</strong> A loan application is an early-stage record of a borrowing request: customer, proposed amount, product, and supporting data. It moves through workflow steps (such as check, approve, authorize, disburse) before money is released. It is useful when lending must be tracked separately from the final booked loan or when several people review the case.</p>
+      <p class="when"><strong>When to use it</strong> Use the applications module when your institution requires a <strong>formal pipeline</strong> (intake → credit check → approvals → disbursement), <strong>multi-level review</strong> before money out, or separation between &ldquo;request&rdquo; and &ldquo;booked loan.&rdquo; Prefer <strong>direct loan creation</strong> (section 7) if your policy allows booking in one step without a separate application record.</p>
+      <p>Go to <strong>Loan applications</strong> in the menu (or find <strong>Applications</strong> under Loans). Click <strong>New application</strong> or <strong>Create</strong> to start. To work an existing case, open the list and <strong>click the application</strong> you need — that opens the full record. The application screen uses status-based buttons: <strong>Check</strong> (applied), <strong>Approve</strong> (checked), <strong>Authorize</strong> (approved), <strong>Disburse</strong> (authorized — disburse often requires an <strong>accountant</strong>-type role), <strong>Reject</strong> when allowed.</p>
+      <div class="example">
+        <div class="example-label">Example</div>
+        <p>Juma applies online; you create the application, attach documents, then <strong>Check</strong> → status <code>checked</code>. Regional manager opens the same record and clicks <strong>Approve</strong> → <code>approved</code>. HQ authorizer clicks <strong>Authorize</strong> → <code>authorized</code>. The accountant opens it and completes <strong>Disburse</strong> with bank account and date. If any step is wrong, an approver with rights can <strong>Reject</strong> with comments.</p>
+      </div>
+    </section>
+
+    <!-- 7 -->
+    <section id="s7">
+      <h2><span class="sec-num">7</span> Creating a loan (direct)</h2>
+      <p class="def"><strong>What is direct loan creation?</strong> Direct creation means entering a full loan in one flow (customer, product, amount, dates, accounts) so a <em>loan account</em> exists in the system immediately, subject to approvals and disbursement rules. It contrasts with starting only an &ldquo;application&rdquo; record when your process uses the applications module first.</p>
+      <p class="when"><strong>When to use it</strong> Use direct creation when the customer is ready to proceed, <strong>KYC is complete</strong>, and your policy allows entering the loan straight onto the books (approvals still apply if the product has levels). Typical cases: walk-in after assessment, repeat borrower, or internal workflow that does not use the applications list. Avoid duplicate entry if you already captured the same case as an application unless process says to convert application to loan separately.</p>
+      <p>Requires permission <strong>create loan</strong>. In the menu, open <strong>Loans</strong> and choose <strong>Create loan</strong> (or <strong>New loan</strong>). Fill the form; use <strong>Calculate summary</strong> on the page if you want a preview before saving. To find loans later, use <strong>Loan list</strong>; use filters or tabs for status (e.g. active, completed) if your list provides them.</p>
+      <div class="example">
+        <div class="example-label">Example</div>
+        <p>Walk-in customer already KYC-approved: you choose customer <em>Asha M.</em>, product <em>Business Term Loan</em>, amount TZS 8,000,000, rate 15%, 12 months, first repayment date, disbursement account, branch. You click calculate summary to confirm total repayable, then save. The loan appears as <code>applied</code> (or per your workflow) and moves to approvals.</p>
+      </div>
+    </section>
+
+    <!-- 8 -->
+    <section id="s8">
+      <h2><span class="sec-num">8</span> View, edit, and delete</h2>
+      <p class="def"><strong>What are view, edit, and delete?</strong> <em>View</em> opens the loan&rsquo;s full detail screen (schedule, repayments, documents, etc.) without changing data. <em>Edit</em> changes allowed fields on an existing loan (often before disbursement or for corrections your policy permits). <em>Delete</em> removes a loan record from the system where policy and permissions allow — usually only for mistakes or duplicates, not for active performing loans.</p>
+      <p class="when"><strong>When to use it</strong> <strong>View</strong> — daily servicing, answering customer queries, checking arrears or collateral. <strong>Edit</strong> — correct data entry <em>before disbursement</em> where allowed, or approved post-disbursement fixes per policy (never to hide fraud). <strong>Delete</strong> — only for <em>wrong or duplicate records with no live exposure</em>, with supervisor/IT policy; never as a substitute for write-off or closure of real debt.</p>
+      <ul>
+        <li><strong>View details</strong> — From <strong>Loan list</strong>, find the loan (search by customer name or loan number if available), then <strong>click the row</strong> or <strong>View</strong> / <strong>Open</strong> to open <strong>Loan details</strong>. Use the tabs for overview, schedule, repayments, receipts, collaterals, and so on.</li>
+        <li><strong>Edit</strong> — On <strong>Loan details</strong>, click <strong>Edit</strong> (or the pencil icon) when your role allows.</li>
+        <li><strong>Delete</strong> — Where the screen offers <strong>Delete</strong>, use it only if you have <strong>delete loan</strong> and policy allows (often for duplicates before disbursement).</li>
+      </ul>
+      <div class="example">
+        <div class="example-label">Example</div>
+        <p>You open loan <code>SF-1000042</code> to verify collateral. You notice the first repayment date was typed as next year; with <em>edit loan</em> you open edit, correct the date before disbursement, and save. Deleting the loan is reserved for duplicate/erroneous records with no disbursement — your IT policy may forbid delete entirely.</p>
+      </div>
+    </section>
+
+    <!-- 9 -->
+    <section id="s9">
+      <h2><span class="sec-num">9</span> Loan detail — buttons and when they appear</h2>
+      <p class="def"><strong>What is this about?</strong> The loan detail page shows a row of <em>action buttons</em> (write-off, top-up, restructure, settle, etc.). Those buttons are not always visible: the system turns them on or off based on loan <strong>status</strong>, product rules, and sometimes your permissions. This section explains <em>when</em> each control appears so you know what to expect on screen.</p>
+      <p class="when"><strong>When to use it</strong> Read this when a <strong>button is missing</strong> and you need to know if it is a status issue (e.g. restructured, completed), eligibility (top-up), or permission; when <strong>training new users</strong>; or when explaining to a customer why an action is not available yet. Use the table below as a quick reference during support calls.</p>
+      <p>Header actions are hidden when status is <code>restructured</code>. Otherwise:</p>
+      <table>
+        <thead><tr><th>Control</th><th>Condition</th></tr></thead>
+        <tbody>
+          <tr><td>Write Off Loan</td><td>Shown (modal); not when restructured.</td></tr>
+          <tr><td>Apply for Top-Up</td><td><code>isEligibleForTopUp()</code> true.</td></tr>
+          <tr><td>Top-Up Not Available</td><td>Disabled when not eligible.</td></tr>
+          <tr><td>Loan Fees Receipt</td><td>Same header group.</td></tr>
+          <tr><td>Loan Restructure</td><td>Status <code>active</code> or <code>disbursed</code>.</td></tr>
+          <tr><td>Settle Loan</td><td>Status <code>active</code> or <code>disbursed</code>.</td></tr>
+          <tr><td>Export Loan Details</td><td>Status <code>active</code> only.</td></tr>
+          <tr><td>Change Status</td><td><strong>edit loan</strong>; not <code>restructured</code>.</td></tr>
+        </tbody>
+      </table>
+      <div class="example">
+        <div class="example-label">Example</div>
+        <p>Loan A is <strong>active</strong>, no arrears: you see Top-Up (if product allows), Restructure, Settle, Export, Fees Receipt, and Write Off. Loan B is <strong>restructured</strong>: the whole top action group is hidden — you work from tabs only until status changes. Loan C is <strong>completed</strong>: Settle/Restructure may be inappropriate; Export may already have been run while active.</p>
+      </div>
+    </section>
+
+    <!-- 10 -->
+    <section id="s10">
+      <h2><span class="sec-num">10</span> Check, approve, authorize, disburse, and reject</h2>
+      <p class="def"><strong>What are check, approve, authorize, disburse, and reject?</strong> These are <em>approval workflow</em> steps on a loan before (and including) payout. <strong>Check</strong> is first-line verification; <strong>approve</strong> and <strong>authorize</strong> are higher confirmations depending on how many levels your product defines; <strong>disburse</strong> is the final step that releases funds and usually generates the repayment schedule. <strong>Reject</strong> stops the process and marks the loan as declined. Who may act at each step is controlled by roles configured on the loan product.</p>
+      <p class="when"><strong>When to use it</strong> Use each action <strong>only when the loan is waiting at your step</strong> and your user has the correct role: perform <strong>Check</strong> after intake and document review, <strong>Approve/Authorize</strong> per your hierarchy, <strong>Disburse</strong> when funds are actually released and accounts are ready. Use <strong>Reject</strong> when credit is declined or documents are insufficient — do not disburse. After status is <code>active</code>, these approval buttons are no longer the path for normal servicing.</p>
+      <p>On the <strong>main loan record</strong> (not application-only), when status is not <code>active</code>, the approval card shows the next action from the product&rsquo;s role hierarchy: <strong>Check</strong>, <strong>Approve</strong>, <strong>Authorize</strong>, or <strong>Disburse</strong> (last level). The user must have the matching role for the current level, not have approved this loan already, and have <strong>approve loan</strong> for the primary button. <strong>Reject</strong> needs <strong>reject loan</strong> and status in applied/checked/approved.</p>
+      <div class="example">
+        <div class="example-label">Example</div>
+        <p>Product has 3 roles: Credit Analyst → Branch Manager → Accountant. Loan status <code>applied</code>: only Credit Analyst sees <strong>Check Loan</strong>. After check, status <code>checked</code>: Branch Manager sees <strong>Approve Loan</strong>. After approve, Accountant sees <strong>Disburse Loan</strong> and must pick bank account and disbursement date; system generates the schedule and posts GL.</p>
+      </div>
+      <div class="warn"><strong>UI note:</strong> The &ldquo;Mark as defaulted&rdquo; block inside the same approval card is unreachable for <code>active</code> loans due to a Blade logic quirk. For active loans use <strong>Change Status → Defaulted</strong> (with <em>edit loan</em>) or the application workflow where applicable.</div>
+    </section>
+
+    <!-- 11 -->
+    <section id="s11">
+      <h2><span class="sec-num">11</span> Repayment schedules</h2>
+      <p class="def"><strong>What is a repayment schedule?</strong> A repayment schedule is the list of future due dates for a disbursed loan. Each line (installment) shows how much principal, interest, fees, and penalties are due on that date, and over time how much has been paid and what remains. It is the main tool for tracking whether the borrower is on time and for recording payments.</p>
+      <p class="when"><strong>When to use it</strong> Open the schedule <strong>after disbursement</strong> whenever you need due dates, balances, or proof for the customer; before calling about <strong>arrears</strong>; when printing the official plan; after <strong>restructure</strong> to show the new installments. Before disbursement, the schedule may not exist or may be preliminary depending on your workflow.</p>
+      <p>Installments are generated at <strong>disbursement</strong>. Each line shows due date, principal, interest, fees, penalties, accrued interest, paid and remaining amounts, and status. On <strong>Loan details</strong>, open the <strong>Schedule</strong> tab and click <strong>Print Schedule (PDF)</strong> (or similar) to download or print. Restructuring marks old unpaid lines as <code>restructured</code> and replaces them with a new plan.</p>
+      <div class="example">
+        <div class="example-label">Example</div>
+        <p>After disbursement on 15 January, you open the Schedule tab: 12 rows, monthly due on the 15th, equal total installment TZS 950,000. Row 1 shows full amounts; after first payment, <em>Paid</em> updates and <em>Remaining</em> drops. You email the customer the PDF from <strong>Print Schedule (PDF)</strong>.</p>
+      </div>
+    </section>
+
+    <!-- 12 -->
+    <section id="s12">
+      <h2><span class="sec-num">12</span> How to record a payment</h2>
+      <p class="def"><strong>What is recording a payment?</strong> Recording a payment (repayment) means entering the amount the customer actually paid, the date, and the bank or cash account used. The system then allocates that money across due installments, updates the schedule, creates receipt/accounting entries, and may close the loan when fully paid.</p>
+      <p class="when"><strong>When to use it</strong> Use this <strong>every time money is received</strong> from the borrower (cash, transfer, cheque cleared) and must appear on the loan — same day or next business day per your policy. Use <strong>bulk repayment</strong> only when your process batches many repayments in one session. Do not record fictional payments to hide arrears; use <strong>restructure</strong> or official waivers where allowed.</p>
+      <ol>
+        <li>Open the loan → Repayments area / modal.</li>
+        <li>Confirm loan is <strong>active</strong> and has unpaid schedules.</li>
+        <li>Enter amount, payment date, bank/cash account; click <strong>Save</strong> / <strong>Submit payment</strong> (or equivalent).</li>
+        <li>For many loans at once, use bulk repayment where enabled.</li>
+        <li>Print receipt if needed from repayment/receipt actions.</li>
+      </ol>
+      <div class="example">
+        <div class="example-label">Example</div>
+        <p>On 20 March the customer deposits TZS 1,200,000. You open the loan, enter 1,200,000, date 20/03, select <em>CRDB Main</em>, save. The system allocates across the oldest unpaid installments per repayment order. You hand over printed receipt #45821.</p>
+      </div>
+    </section>
+
+    <!-- 13 -->
+    <section id="s13">
+      <h2><span class="sec-num">13</span> How the system allocates repayments</h2>
+      <p class="def"><strong>What is repayment allocation?</strong> Allocation is the automatic split of one payment across overdue and current installments. The system starts from the oldest unpaid due dates, and within each installment it applies money according to the product&rsquo;s <strong>repayment order</strong> (penalties, fees, interest, principal) until the payment is used up or all allowed buckets are cleared.</p>
+      <p class="when"><strong>When to use it</strong> You do not trigger allocation manually — it runs <strong>automatically each time you save a repayment</strong>. Read this section when <strong>training staff</strong>, when a customer disputes how a payment was applied, or when checking why principal barely moved (often penalties/interest were cleared first). Use it to align expectations with your <strong>repayment order</strong> settings.</p>
+      <ol>
+        <li>Loads unpaid schedules by <strong>due date</strong> (earliest first).</li>
+        <li>For each schedule, may remove penalties if payment is on time.</li>
+        <li>Splits the payment across principal, interest, fees, penalties according to the product <strong>repayment order</strong>.</li>
+        <li>Creates repayment rows and a receipt; posts GL (bank debit, receivables/revenue credits).</li>
+        <li>Closes the loan when fully paid.</li>
+      </ol>
+      <div class="example">
+        <div class="example-label">Example</div>
+        <p>Two installments are overdue. Order is <em>interest before principal</em>. Payment TZS 300,000: first satisfies interest arrears on installment 1, then principal on installment 1, then spills to installment 2. Nothing is skipped out of date order.</p>
+      </div>
+    </section>
+
+    <!-- 14 -->
+    <section id="s14">
+      <h2><span class="sec-num">14</span> Receipts — reverse, restore, permanent delete</h2>
+      <p class="def"><strong>What is a receipt (and reverse / restore / permanent delete)?</strong> A <em>receipt</em> is the voucher proving a repayment was posted; it links to repayment lines and the general ledger. <strong>Reverse</strong> cancels that posting for correction (undoing repayments and GL while keeping an audit trail). <strong>Restore</strong> brings back a reversed receipt. <strong>Permanent delete</strong> removes receipt and related data entirely — for exceptional cases only.</p>
+      <p class="when"><strong>When to use it</strong> <strong>Reverse</strong> — wrong loan, wrong amount, or duplicate posting discovered soon after entry; always with supervisor awareness. <strong>Restore</strong> — you reversed by mistake. <strong>Permanent delete</strong> — only under <strong>strict policy</strong> (e.g. test data or rare legal/accounting instruction) with audit trail elsewhere. Do not use reverse/delete to bypass normal collections — use write-off or restructure when appropriate.</p>
+      <p>On <strong>Loan details</strong>, open the <strong>Receipts</strong> tab. <strong>Reverse</strong> creates opposite GL lines and soft-deletes linked repayments and the receipt. <strong>Restore</strong> (under reversed history) reverses that. <strong>Permanent delete</strong> removes accounting and receipt data permanently — use rarely and only with approval.</p>
+      <div class="example">
+        <div class="example-label">Example</div>
+        <p>You posted TZS 500,000 to the wrong loan. You open the correct loan’s Receipts tab, find the receipt, click <strong>Reverse</strong>. Balances and schedule paid amounts roll back; reversal appears in GL. If it was the correct action after all, use <strong>Restore</strong> from <em>Reversed Receipts History</em>. Only compliance officer uses <strong>Permanent Delete</strong> after audit sign-off.</p>
+      </div>
+      <p class="note">Receipt action buttons may be visible without a specific <code>@can</code> — align access control with your security policy.</p>
+    </section>
+
+    <!-- 15 -->
+    <section id="s15">
+      <h2><span class="sec-num">15</span> Top-up</h2>
+      <p class="def"><strong>What is a top-up?</strong> A top-up is <em>additional borrowing</em> on an existing loan relationship once the customer meets eligibility (for example a minimum share of the original loan already repaid and no arrears). The new amount is handled according to your product&rsquo;s top-up rules; it is different from restructuring, which changes terms on the existing balance without the same &ldquo;new facility&rdquo; meaning.</p>
+      <p class="when"><strong>When to use it</strong> Use top-up when the customer needs <strong>more funds</strong>, has a <strong>good payment history</strong> per product rules (e.g. minimum % repaid), has <strong>no arrears</strong>, and credit approves an increase. Do not use top-up to fix distress without new credit approval — consider <strong>restructure</strong> instead if the issue is affordability of the existing balance.</p>
+      <p>Eligible when: product has top-up type and value; loan <strong>active</strong>; <strong>not in arrears</strong>; and paid amount meets the rule (percentage of total, fixed amount, or equivalent of N installments). Amount is based on outstanding schedule balance. On <strong>Loan details</strong>, click <strong>Apply for Top-Up</strong> when that button is enabled and complete the form.</p>
+      <div class="example">
+        <div class="example-label">Example</div>
+        <p>Product requires <strong>40% of total repayable</strong> paid before top-up. Original total repayable TZS 12M; customer paid TZS 5M → eligible. <strong>Apply for Top-Up</strong> is enabled. Outstanding balance TZS 4.2M becomes the basis for the new facility rules configured in your top-up flow.</p>
+      </div>
+    </section>
+
+    <!-- 16 -->
+    <section id="s16">
+      <h2><span class="sec-num">16</span> Write-off</h2>
+      <p class="def"><strong>What is a write-off?</strong> A write-off is the accounting decision to stop pursuing the remaining collectible balance as a normal receivable: the outstanding amount is moved from the loan receivable to an expense or provision account (depending on type you choose). The loan is marked written off for reporting; it does not mean cash was received — it recognises that recovery is no longer expected in full.</p>
+      <p class="when"><strong>When to use it</strong> Use write-off only after <strong>formal approval</strong> (credit committee, board, or policy threshold), when recovery is exhausted or the borrower is insolvent, and when finance confirms <strong>direct vs provision</strong> treatment. Typical timing: long-term NPL, bankruptcy, death without estate, or fraud loss. Do not use write-off for small recording errors — use receipt reversal or corrections.</p>
+      <p>From the loan, <strong>Write Off Loan</strong> opens a modal: reason (required), type <strong>direct</strong> (expense account) or <strong>provision</strong> (provision account). Server refuses if there is no positive outstanding. GL debits write-off account, credits principal receivable; status → <code>written_off</code>.</p>
+      <div class="example">
+        <div class="example-label">Example</div>
+        <p>After 180 days NPL, committee approves write-off. Outstanding TZS 3,400,000. You choose <strong>Using Provision</strong>, enter reason <em>Committee ref 2025-14 / bankruptcy</em>, submit. Loan status shows Written off; portfolio report moves balance to written-off category.</p>
+      </div>
+    </section>
+
+    <!-- 17 -->
+    <section id="s17">
+      <h2><span class="sec-num">17</span> Restructure</h2>
+      <p class="def"><strong>What is restructure?</strong> Restructure means changing the <em>terms</em> of an existing disbursed loan when the borrower cannot keep the original schedule — for example longer tenure, lower interest rate, new start date, or waiving penalties. Already paid installments stay as they are; unpaid future installments are replaced by a <strong>new schedule</strong> built on the remaining balance. No new cash is disbursed in the standard restructure flow; it is a reschedule, not a new loan payout.</p>
+      <p class="when"><strong>When to use it</strong> Use restructure when the borrower faces <strong>temporary hardship</strong> but is cooperative, you want a <strong>smaller installment</strong> or more time, and policy allows a workout <strong>without new money</strong> (standard flow). Also when rates or dates must be corrected by agreement. Prefer <strong>top-up</strong> if the need is additional principal; prefer <strong>write-off</strong> if the debt is unrecoverable.</p>
+      <p>For <code>active</code> or <code>disbursed</code> loans: on <strong>Loan details</strong>, click <strong>Loan Restructure</strong>. Enter new tenure, new rate, new start date; optionally waive penalties, then submit. Paid installments stay; unpaid future lines are cancelled; new schedule generated; no new disbursement in the standard flow.</p>
+      <div class="example">
+        <div class="example-label">Example</div>
+        <p>Borrower loses income temporarily. Outstanding principal TZS 6M, 8 months left at 18%. You extend to 16 months at 15%, start next month, tick <strong>Waive outstanding penalty</strong>. New installment drops; customer signs addendum; you process restructure and share the new PDF schedule.</p>
+      </div>
+    </section>
+
+    <!-- 18 -->
+    <section id="s18">
+      <h2><span class="sec-num">18</span> Settle loan</h2>
+      <p class="def"><strong>What is settling a loan?</strong> Settlement is a single payment flow intended to <strong>pay off the loan in full</strong> in one go: it applies the amount to remaining interest (as defined by the system) and principal so the borrower can close the facility early. After a successful settle, the loan may show as completed/closed depending on balances.</p>
+      <p class="when"><strong>When to use it</strong> Use <strong>Settle Loan</strong> when the borrower wants to <strong>clear the entire facility early</strong> in one payment (bonus, asset sale, refinancing payout). Confirm the payoff amount and bank account before confirming. For routine partial payments, use normal <strong>record payment</strong> instead. If only a small final balance remains after regular payments, either last normal repayment or settle — follow local procedure.</p>
+      <p>On <strong>Loan details</strong>, click <strong>Settle Loan</strong> when the loan is <strong>active</strong> or <strong>disbursed</strong>. Enter amount, bank account, payment date, and optional notes, then confirm. The system pays current interest and remaining principal per your rules; the success message shows interest/principal split and whether the loan closed.</p>
+      <div class="example">
+        <div class="example-label">Example</div>
+        <p>Customer wins a lump sum and wants to clear everything today. System shows payoff quote implicitly via settle: you enter amount TZS 2,150,000, today’s date, main collection account. Success: interest portion TZS 150,000, principal TZS 2,000,000, loan <strong>closed</strong>.</p>
+      </div>
+    </section>
+
+    <!-- 19 -->
+    <section id="s19">
+      <h2><span class="sec-num">19</span> Fees receipt, import, opening balance, and reports</h2>
+      <p class="def"><strong>What are fees receipt, import, opening balance, and reports?</strong> <em>Fees receipt</em> records fee income linked to a specific loan (separate from normal installment repayments). <em>Import</em> loads many loans from a spreadsheet template in one go. <em>Opening balance</em> brings in legacy loan balances when you first move to SmartFinance. <em>Reports</em> are standard lists and exports (disbursements, repayments, portfolio quality, etc.) for management and regulators.</p>
+      <p class="when"><strong>When to use it</strong> <strong>Fees receipt</strong> — when the customer pays product fees (commitment, processing, etc.) tied to that loan. <strong>Import</strong> — migration projects or bulk onboarding with validated data, not for everyday single loans. <strong>Opening balance</strong> — <strong>go-live</strong> or cut-over from another system only. <strong>Reports</strong> — daily operations, <strong>month-end</strong>, ALCO, internal audit, and <strong>regulatory returns</strong> on the reporting calendar.</p>
+      <ul>
+        <li><strong>Fees receipt</strong> — On <strong>Loan details</strong>, click <strong>Loan Fees Receipt</strong> (or similar) to record fee collections tied to that loan.</li>
+        <li><strong>Import</strong> — In the Loans area, find <strong>Import loans</strong> (or <strong>Bulk import</strong>). Download the <strong>template</strong>, fill it, upload the file, then open <strong>import progress</strong> or <strong>failed rows</strong> if the system reports errors.</li>
+        <li><strong>Opening balance</strong> — Find <strong>Opening balance</strong> under Loans (or accounting migration). Download the template, complete it, and upload using the on-screen <strong>Submit</strong> action.</li>
+        <li><strong>Reports</strong> — Use the <strong>Reports</strong> or <strong>Accounting</strong> menu for disbursements, repayments, aging, PAR, portfolio, performance, NPL, expected vs collected, monthly performance; open <strong>Loan analytics</strong> (or similar) for dashboards.</li>
+      </ul>
+      <div class="example">
+        <div class="example-label">Example</div>
+        <p><strong>Fees:</strong> Customer pays commitment fee before disbursement; you record via Loan Fees Receipt and attach to the file. <strong>Import:</strong> You load 200 legacy rows from Excel using the template; fix 3 failed rows from the failed download. <strong>Reports:</strong> Month-end you export <em>Loan Repayment</em> and <em>Portfolio at Risk</em> to Excel for the ALCO pack.</p>
+      </div>
+    </section>
+
+    <footer class="doc-foot">
+      SmartFinance Loan Management User Guide v2.4 — Each section: definition (&ldquo;What is …?&rdquo;), <strong>when to use it</strong>, then how-to and examples. Navigate using menus and on-screen buttons. Configure products, roles, and accounts to match your institution.
+    </footer>
+  </div>
+</body>
+</html>

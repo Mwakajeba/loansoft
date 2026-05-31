@@ -2,6 +2,8 @@
 
 namespace App\Models;
 
+use App\Services\PenaltyAccrualService;
+use App\Support\Loans\LoanRounding;
 use App\Traits\LogsActivity;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -37,6 +39,11 @@ class Loan extends Model
         'first_repayment_date',
         'last_repayment_date',
         'branch_id',
+        'custom_fee_amounts',
+    ];
+
+    protected $casts = [
+        'custom_fee_amounts' => 'array',
     ];
 
     /**
@@ -59,7 +66,123 @@ class Loan extends Model
     const STATUS_COMPLETE = 'completed';
     const STATUS_RESTRUCTURED = 'restructured';
 
+    /** Outstanding balance below this amount (TZS) means the loan is fully settled. */
+    public const OUTSTANDING_CLOSURE_THRESHOLD = 20.0;
 
+    /** Statuses that cannot be edited or deleted (disbursed or post-disbursement). */
+    const MODIFICATION_LOCKED_STATUSES = [
+        self::STATUS_ACTIVE,
+        self::STATUS_DEFAULTED,
+        self::STATUS_COMPLETE,
+        self::STATUS_RESTRUCTURED,
+    ];
+
+    /** Application / approval pipeline statuses (before disbursement). */
+    const APPLICATION_WORKFLOW_STATUSES = [
+        self::STATUS_APPLIED,
+        self::STATUS_CHECKED,
+        self::STATUS_APPROVED,
+        self::STATUS_AUTHORIZED,
+        self::STATUS_REJECTED,
+    ];
+
+    /** @deprecated Use APPLICATION_WORKFLOW_STATUSES */
+    const APPLICATION_EDITABLE_STATUSES = self::APPLICATION_WORKFLOW_STATUSES;
+
+    /**
+     * Loan created via direct entry (loans/create) or import — not the application workflow.
+     */
+    public function isDirectLoan(): bool
+    {
+        if ($this->approvals()->exists()) {
+            return false;
+        }
+
+        // Application loans get bank_account_id only after approval/disbursement
+        if ($this->hasDisbursementBankAccount()) {
+            return true;
+        }
+
+        // Bulk import may set bank account after create; active + no approvals = direct entry
+        return $this->status === self::STATUS_ACTIVE;
+    }
+
+    /**
+     * Resolve bank_account_id even when the model was loaded with a partial select (e.g. DataTables).
+     */
+    protected function hasDisbursementBankAccount(): bool
+    {
+        if (!array_key_exists('bank_account_id', $this->attributes)) {
+            if (!$this->exists) {
+                return false;
+            }
+
+            $this->setAttribute(
+                'bank_account_id',
+                static::whereKey($this->getKey())->value('bank_account_id')
+            );
+        }
+
+        return $this->bank_account_id !== null;
+    }
+
+    /**
+     * Loan created via the application workflow (loans/application).
+     */
+    public function isApplicationLoan(): bool
+    {
+        return in_array($this->status, self::APPLICATION_WORKFLOW_STATUSES, true)
+            && !$this->isDirectLoan();
+    }
+
+    /**
+     * Completed / restructured loans must never be edited or deleted.
+     */
+    public function isPermanentlyLocked(): bool
+    {
+        return in_array($this->status, [self::STATUS_COMPLETE, self::STATUS_RESTRUCTURED], true);
+    }
+
+    public function canBeEdited(): bool
+    {
+        if ($this->isPermanentlyLocked()) {
+            return false;
+        }
+
+        // Direct loans (create/import) stay editable while active — e.g. fix data before repayments
+        if ($this->isDirectLoan()) {
+            return true;
+        }
+
+        if (in_array($this->status, self::MODIFICATION_LOCKED_STATUSES, true)) {
+            return false;
+        }
+
+        return $this->isApplicationLoan();
+    }
+
+    public function canBeDeleted(): bool
+    {
+        if ($this->isPermanentlyLocked()) {
+            return false;
+        }
+
+        if ($this->isDirectLoan()) {
+            return true;
+        }
+
+        if (in_array($this->status, self::MODIFICATION_LOCKED_STATUSES, true)) {
+            return false;
+        }
+
+        return $this->isApplicationLoan()
+            || $this->status === self::STATUS_REJECTED;
+    }
+
+    public function usesApplicationEditForm(): bool
+    {
+        return $this->isApplicationLoan();
+    }
 
     protected static function boot()
     {
@@ -95,6 +218,33 @@ class Loan extends Model
     public function product()
     {
         return $this->belongsTo(LoanProduct::class, 'product_id');
+    }
+
+    /**
+     * Schedule "interest" component for balances uses accrued_interest only for these products
+     * (same rule as CalculateDailyInterestJob).
+     */
+    public function usesDailyInterestAccrual(): bool
+    {
+        $product = $this->product;
+        if (!$product && $this->product_id) {
+            $product = $this->product()->first();
+        }
+        if (!$product) {
+            return false;
+        }
+
+        return $product->usesDailyInterestAccrual();
+    }
+
+    public function usesAsExpectedInterestAccrual(): bool
+    {
+        $product = $this->product;
+        if (!$product && $this->product_id) {
+            $product = $this->product()->first();
+        }
+
+        return $product ? $product->usesAsExpectedInterestAccrual() : false;
     }
 
     public function bankAccount()
@@ -379,9 +529,9 @@ class Loan extends Model
                     $monthlyInterest = $interestAmount / $period;
                     for ($i = 1; $i <= $period; $i++) {
                         $schedule[] = [
-                            'principal' => round($monthlyPrincipal, 2),
-                            'interest' => round($monthlyInterest, 2),
-                            'total' => round($monthlyPrincipal + $monthlyInterest, 2),
+                            'principal' => LoanRounding::roundAmount($monthlyPrincipal),
+                            'interest' => LoanRounding::roundAmount($monthlyInterest),
+                            'total' => LoanRounding::roundAmount($monthlyPrincipal + $monthlyInterest),
                         ];
                     }
                 }
@@ -404,9 +554,9 @@ class Loan extends Model
                         $balance -= $principalPart;
 
                         $schedule[] = [
-                            'principal' => round($principalPart, 2),
-                            'interest' => round($interest, 2),
-                            'total' => round($emi, 2),
+                            'principal' => LoanRounding::roundAmount($principalPart),
+                            'interest' => LoanRounding::roundAmount($interest),
+                            'total' => LoanRounding::roundAmount($emi),
                         ];
                     }
                 }
@@ -422,9 +572,9 @@ class Loan extends Model
                         $interest = $balance * $ratePerPeriod;
                         $totalInterest += $interest;
                         $schedule[] = [
-                            'principal' => round($monthlyPrincipal, 2),
-                            'interest' => round($interest, 2),
-                            'total' => round($monthlyPrincipal + $interest, 2),
+                            'principal' => LoanRounding::roundAmount($monthlyPrincipal),
+                            'interest' => LoanRounding::roundAmount($interest),
+                            'total' => LoanRounding::roundAmount($monthlyPrincipal + $interest),
                         ];
                         $balance -= $monthlyPrincipal;
                     }
@@ -442,6 +592,21 @@ class Loan extends Model
             default:
                 $interestAmount = $principal * $ratePerPeriod; // Flat rate: interest on principal only
                 break;
+        }
+
+        if ($returnSchedule && count($schedule) > 0) {
+            // Reconcile rounding drift on the last row so sums match principal + computed interest amount.
+            $sumPrincipal = 0.0;
+            $sumInterest = 0.0;
+            foreach ($schedule as $row) {
+                $sumPrincipal += (float) ($row['principal'] ?? 0);
+                $sumInterest += (float) ($row['interest'] ?? 0);
+            }
+
+            $lastIndex = count($schedule) - 1;
+            $schedule[$lastIndex]['principal'] = round((float) $schedule[$lastIndex]['principal'] + ($principal - $sumPrincipal), 2);
+            $schedule[$lastIndex]['interest'] = round((float) $schedule[$lastIndex]['interest'] + ($interestAmount - $sumInterest), 2);
+            $schedule[$lastIndex]['total'] = round((float) $schedule[$lastIndex]['principal'] + (float) $schedule[$lastIndex]['interest'], 2);
         }
 
         return $returnSchedule ? $schedule : round($interestAmount, 2);
@@ -504,6 +669,32 @@ class Loan extends Model
         ];
     }
 
+    /**
+     * Resolve first/last repayment dates. If $firstRepaymentOverride is set, last date is derived from
+     * the same stepping rules as generateRepaymentSchedule; otherwise dates follow disbursement + cycle.
+     */
+    public function resolveRepaymentDates(?string $firstRepaymentOverride = null): array
+    {
+        $override = $firstRepaymentOverride ? trim($firstRepaymentOverride) : null;
+        if ($override === '' || $override === null) {
+            return $this->getRepaymentDates();
+        }
+
+        $first = Carbon::parse($override)->startOfDay();
+        $disbursed = Carbon::parse($this->disbursed_on ?? $this->date_applied)->startOfDay();
+        if ($first->lt($disbursed)) {
+            throw new \InvalidArgumentException('First repayment date cannot be before the disbursement date.');
+        }
+
+        $method = $this->getDateIncrementMethod();
+        $idx = max(0, (int) $this->period - 1);
+        $last = $first->copy()->{$method}($this->getDateIncrementValue($idx));
+
+        return [
+            'first_repayment_date' => $first->toDateString(),
+            'last_repayment_date' => $last->toDateString(),
+        ];
+    }
 
     /**
      * Get the date increment method based on interest cycle
@@ -579,7 +770,6 @@ class Loan extends Model
 
         $fees = $isOpeningBalance ? [] : $product->getFeesAttribute();
         \Log::info('[LoanSchedule] Fees: ' . json_encode($fees) . ' | is_opening_balance=' . ($isOpeningBalance ? 'true' : 'false'));
-        $penalty = $product->penalty;
 
         $isReducing = in_array($method, [
             'reducing_balance_with_equal_installment',
@@ -589,9 +779,22 @@ class Loan extends Model
         $schedule = $isReducing
             ? $this->calculateInterestAmount($rate, true)
             : array_fill(0, $period, [
-                'principal' => round($principal / $period, 2),
-                'interest' => round($interestAmount / $period, 2)
+                'principal' => LoanRounding::roundAmount($principal / $period),
+                'interest' => LoanRounding::roundAmount($interestAmount / $period),
             ]);
+
+        if (!empty($schedule)) {
+            // Reconcile rounding drift (esp. for step rounding) on the last row.
+            $sumP = 0.0;
+            $sumI = 0.0;
+            foreach ($schedule as $row) {
+                $sumP += (float) ($row['principal'] ?? 0);
+                $sumI += (float) ($row['interest'] ?? 0);
+            }
+            $last = count($schedule) - 1;
+            $schedule[$last]['principal'] = round((float) $schedule[$last]['principal'] + ($principal - $sumP), 2);
+            $schedule[$last]['interest'] = round((float) $schedule[$last]['interest'] + ($interestAmount - $sumI), 2);
+        }
 
 
         // === Fees on release date ===
@@ -619,24 +822,14 @@ class Loan extends Model
             if (!empty($releaseFeeIds) && $bankChartAccountId) {
                 $releaseFees = \DB::table('fees')->whereIn('id', $releaseFeeIds)->get();
                 foreach ($releaseFees as $releaseFee) {
-                    $feeAmount = (float) $releaseFee->amount;
-                    $feeType = $releaseFee->fee_type;
                     $feeName = $releaseFee->name;
                     $chartAccountId = $releaseFee->chart_account_id;
 
                     if ($chartAccountId) {
-                        $totalFee = 0;
-                        if ($feeType === 'percentage') {
-                            $totalFee = ((float) $principal * (float) $feeAmount / 100);
-                        } elseif ($feeType === 'range') {
-                            $feeModel = \App\Models\Fee::find($releaseFee->id);
-                            if ($feeModel) {
-                                $totalFee = (float) $feeModel->calculateRangeFee($principal);
-                            }
-                        } else {
-                            $totalFee = (float) $feeAmount;
-                        }
-                        $totalFeeFloat = (float) $totalFee;
+                        $feeModel = \App\Models\Fee::find($releaseFee->id);
+                        $totalFeeFloat = $feeModel
+                            ? $feeModel->monetaryAmountForPrincipal((float) $principal, $this->custom_fee_amounts)
+                            : 0;
 
                         // Create journal and GL transaction for release fee
                         $journal = \App\Models\Journal::create([
@@ -687,8 +880,7 @@ class Loan extends Model
         // - as_expected_interest: seed accrued_interest = scheduled interest
         // - otherwise: keep accrued_interest = 0 (daily accrual will build it up later)
         // Backward compatibility: legacy value 'full_amount' is treated as 'as_expected_interest'
-        $accrualMethod = $product->penalt_deduction_criteria;
-        $seedAccruedInterest = in_array($accrualMethod, ['as_expected_interest', 'full_amount'], true);
+        $seedAccruedInterest = $product->usesAsExpectedInterestAccrual();
 
         foreach ($schedule as $i => $row) {
             $dueDate = $startDate->copy()->{$this->getDateIncrementMethod()}($this->getDateIncrementValue($i));
@@ -699,8 +891,6 @@ class Loan extends Model
             $loanFee = 0;
             if (!empty($fees) && is_iterable($fees)) {
                 foreach ($fees as $fee) {
-                    $feeAmount = (float) $fee->amount;
-                    $feeType = $fee->fee_type;
                     $criteria = $fee->deduction_criteria;
                     $includeInSchedule = $fee->include_in_schedule;
                     $status = $fee->status;
@@ -708,20 +898,7 @@ class Loan extends Model
                     \Log::info('[LoanSchedule] Repayment #' . $i . ' Fee ID: ' . $fee->id . ' include_in_schedule: ' . ($includeInSchedule ? 'true' : 'false') . ', status: ' . $status);
 
                     if ($includeInSchedule && $status === 'active') {
-                        // Total fee basis (for distribution or per-installment use)
-                        $totalFee = 0;
-                        if ($feeType === 'percentage') {
-                            $totalFee = ((float) $principal * (float) $feeAmount / 100);
-                        } elseif ($feeType === 'range') {
-                            // Get fee model to calculate range fee
-                            $feeModel = \App\Models\Fee::find($fee->id);
-                            if ($feeModel) {
-                                $totalFee = (float) $feeModel->calculateRangeFee($principal);
-                            }
-                        } else {
-                            $totalFee = (float) $feeAmount;
-                        }
-                        $totalFeeFloat = (float) $totalFee;
+                        $totalFeeFloat = $fee->monetaryAmountForPrincipal((float) $principal, $this->custom_fee_amounts);
 
                         $feeValue = 0;
                         switch ($criteria) {
@@ -759,25 +936,6 @@ class Loan extends Model
                 }
             }
 
-            // === Penalty ===
-            $penaltyAmount = 0;
-            if ($penalty && Carbon::now()->gt($dueDate)) {
-                $type = $penalty->penalty_type;
-                $criteria = $penalty->deduction_type;
-
-                $base = match ($criteria) {
-                    'over_due_principal_amount' => $row['principal'],
-                    'over_due_interest_amount' => $row['interest'],
-                    'over_due_principal_and_interest' => $row['principal'] + $row['interest'],
-                    'total_principal_amount_released' => $principal,
-                    default => $principal
-                };
-
-                $penaltyAmount = $type === 'percentage'
-                    ? round((float) $base * (float) $penalty->amount / 100, 2)
-                    : round((float) $penalty->amount, 2);
-            }
-
             LoanSchedule::create([
                 'loan_id' => $this->id,
                 'customer_id' => $this->customer_id,
@@ -787,7 +945,7 @@ class Loan extends Model
                 'principal' => $row['principal'],
                 'interest' => $row['interest'],
                 'fee_amount' => $loanFee,
-                'penalty_amount' => $penaltyAmount,
+                'penalty_amount' => 0,
                 'accrued_interest' => $seedAccruedInterest ? (float) $row['interest'] : 0,
             ]);
         }
@@ -806,10 +964,14 @@ class Loan extends Model
     /**
      * Calculate the total amount in arrears (overdue amount)
      */
+    private function suppressCollectionsState(): bool
+    {
+        return in_array($this->status, [self::STATUS_COMPLETE, self::STATUS_RESTRUCTURED], true);
+    }
+
     public function getArrearsAmountAttribute()
     {
-        // Restructured loans should not show arrears
-        if ($this->status === 'restructured') {
+        if ($this->suppressCollectionsState()) {
             return 0;
         }
 
@@ -838,8 +1000,7 @@ class Loan extends Model
      */
     public function getDaysInArrearsAttribute()
     {
-        // Restructured loans should not show arrears
-        if ($this->status === 'restructured') {
+        if ($this->suppressCollectionsState()) {
             return 0;
         }
 
@@ -1038,30 +1199,36 @@ class Loan extends Model
     }
 
     /**
-     * Get top-up balance breakdown: outstanding principal, interest, penalty and total.
-     * Used for top-up form display and validation.
+     * Outstanding balance by component (principal, interest, penalty, fees) from schedules.
      *
-     * @return array{outstanding_principal: float, outstanding_interest: float, outstanding_penalty: float, total_balance: float}
+     * @return array{outstanding_principal: float, outstanding_interest: float, outstanding_penalty: float, outstanding_fees: float, total_balance: float}
      */
-    public function getTopUpBalanceBreakdown(): array
+    public function getOutstandingBalanceBreakdown(): array
     {
-        if (!$this->isEligibleForTopUp()) {
+        if ($this->suppressCollectionsState()) {
             return [
-                'outstanding_principal' => 0,
-                'outstanding_interest' => 0,
-                'outstanding_penalty' => 0,
-                'total_balance' => 0,
+                'outstanding_principal' => 0.0,
+                'outstanding_interest' => 0.0,
+                'outstanding_penalty' => 0.0,
+                'outstanding_fees' => 0.0,
+                'total_balance' => 0.0,
             ];
         }
 
         $schedules = $this->schedule;
         if (!$schedules) {
-            $schedules = $this->schedule()->with('repayments')->get();
+            $schedules = $this->schedule()->with(['repayments', 'loan'])->get();
         } else {
             $schedules = $schedules instanceof \Illuminate\Database\Eloquent\Collection
-                ? $schedules->load('repayments')
-                : $this->schedule()->with('repayments')->get();
+                ? $schedules->load(['repayments', 'loan'])
+                : $this->schedule()->with(['repayments', 'loan'])->get();
         }
+
+        $schedules->each(function ($schedule) {
+            if (!$schedule->relationLoaded('loan')) {
+                $schedule->setRelation('loan', $this);
+            }
+        });
 
         $totalPaidPrincipal = $schedules->sum(function ($schedule) {
             return $schedule->repayments ? $schedule->repayments->sum('principal') : 0;
@@ -1070,23 +1237,55 @@ class Loan extends Model
 
         $outstandingInterest = 0;
         $outstandingPenalty = 0;
+        $outstandingFees = 0;
         foreach ($schedules as $schedule) {
-            $paidInterest = $schedule->repayments ? $schedule->repayments->sum('interest') : 0;
-            $paidPenalty = $schedule->repayments ? $schedule->repayments->sum('penalt_amount') : 0;
-            $outstandingInterest += max(0, ($schedule->interest ?? 0) - $paidInterest);
+            $repayments = $schedule->repayments ?? collect();
+            $paidInterest = $repayments->sum('interest');
+            $paidPenalty = $repayments->sum('penalt_amount');
+            $paidFees = $repayments->sum('fee_amount');
+            $interestDue = (float) $schedule->balance_interest_component;
+            $outstandingInterest += max(0, $interestDue - $paidInterest);
             $outstandingPenalty += max(0, ($schedule->penalty_amount ?? 0) - $paidPenalty);
+            $outstandingFees += max(0, ($schedule->fee_amount ?? 0) - $paidFees);
         }
 
         $outstandingPrincipal = round($outstandingPrincipal, 2);
         $outstandingInterest = round($outstandingInterest, 2);
         $outstandingPenalty = round($outstandingPenalty, 2);
-        $totalBalance = round($outstandingPrincipal + $outstandingInterest + $outstandingPenalty, 2);
+        $outstandingFees = round($outstandingFees, 2);
+        $totalBalance = round(
+            $outstandingPrincipal + $outstandingInterest + $outstandingPenalty + $outstandingFees,
+            2
+        );
 
         return [
             'outstanding_principal' => $outstandingPrincipal,
             'outstanding_interest' => $outstandingInterest,
             'outstanding_penalty' => $outstandingPenalty,
+            'outstanding_fees' => $outstandingFees,
             'total_balance' => $totalBalance,
+        ];
+    }
+
+    public function getTopUpBalanceBreakdown(): array
+    {
+        if (!$this->isEligibleForTopUp()) {
+            return [
+                'outstanding_principal' => 0,
+                'outstanding_interest' => 0,
+                'outstanding_penalty' => 0,
+                'outstanding_fees' => 0,
+                'total_balance' => 0,
+            ];
+        }
+
+        $breakdown = $this->getOutstandingBalanceBreakdown();
+
+        return [
+            'outstanding_principal' => $breakdown['outstanding_principal'],
+            'outstanding_interest' => $breakdown['outstanding_interest'],
+            'outstanding_penalty' => $breakdown['outstanding_penalty'],
+            'total_balance' => $breakdown['total_balance'],
         ];
     }
 
@@ -1195,6 +1394,10 @@ class Loan extends Model
      */
     public function postMaturedInterestForPastLoan()
     {
+        if ($this->usesDailyInterestAccrual()) {
+            return 0;
+        }
+
         $today = Carbon::today();
 
         // Find schedules that are due before today and have interest
@@ -1219,10 +1422,10 @@ class Loan extends Model
             // Load repayments for this schedule
             $schedule->loadMissing('repayments');
 
-            // Calculate unpaid interest for this schedule
-            $totalInterest = $schedule->interest;
-            $paidInterest = $schedule->repayments->sum('interest');
-            $unpaidInterest = $totalInterest - $paidInterest;
+            $schedule->setRelation('loan', $this);
+            $totalInterest = (float) $schedule->balance_interest_component;
+            $paidInterest = (float) $schedule->repayments->sum('interest');
+            $unpaidInterest = round($totalInterest - $paidInterest, 2);
 
             if ($unpaidInterest <= 0) {
                 continue;
@@ -1249,6 +1452,58 @@ class Loan extends Model
         }
 
         return $totalInterestPosted;
+    }
+
+    /**
+     * Accrue penalties for overdue schedules when creating a back-dated loan.
+     * Uses the product's penalty settings and accounting penalty configuration.
+     */
+    public function accruePenaltiesForPastLoan(): float
+    {
+        $this->loadMissing(['product']);
+
+        $product = $this->product;
+        if (!$product || empty($product->penalty_ids)) {
+            return 0.0;
+        }
+
+        $today = Carbon::today();
+
+        $hasOverdueSchedule = $this->schedule()
+            ->whereNotIn('status', ['restructured', 'paid', 'cancelled'])
+            ->whereDate('due_date', '<', $today)
+            ->exists();
+
+        if (!$hasOverdueSchedule) {
+            return 0.0;
+        }
+
+        $this->unsetRelation('schedule');
+        $this->load(['schedule.repayments']);
+
+        return PenaltyAccrualService::forDate($today->toDateString())
+            ->catchUpForLoan($this, $today);
+    }
+
+    /**
+     * Accrue penalties after the current DB transaction commits (create/import flows).
+     * When not in a transaction, accrues immediately.
+     */
+    public function accruePenaltiesForPastLoanWhenReady(): float
+    {
+        if (DB::transactionLevel() === 0) {
+            return $this->accruePenaltiesForPastLoan();
+        }
+
+        $loanId = $this->id;
+        DB::afterCommit(function () use ($loanId) {
+            $loan = Loan::with(['product', 'schedule.repayments'])->find($loanId);
+            if ($loan) {
+                $loan->accruePenaltiesForPastLoan();
+            }
+        });
+
+        return 0.0;
     }
 
     /**
@@ -1301,18 +1556,15 @@ class Loan extends Model
             return false;
         }
 
-        // Check if loan is fully paid using the new settlement logic
-        if (!$this->isLoanFullyPaidForSettlement()) {
-            $totalPrincipalPaid = $this->getTotalPrincipalPaid();
-            Log::info("Loan {$this->loanNo} cannot be closed - principal paid: {$totalPrincipalPaid}, loan amount: {$this->amount}");
+        if (!$this->isEligibleForClosing()) {
+            Log::info("Loan {$this->loanNo} cannot be closed - outstanding remains above closure threshold");
             return false;
         }
 
-        // All principal is paid - close the loan
         $this->status = self::STATUS_COMPLETE;
         $this->save();
 
-        Log::info("Loan {$this->loanNo} has been successfully closed - all principal paid");
+        Log::info("Loan {$this->loanNo} has been successfully closed");
 
         return true;
     }
@@ -1324,13 +1576,55 @@ class Loan extends Model
      */
     public function isEligibleForClosing(): bool
     {
-        // Only active loans can be closed
         if ($this->status !== self::STATUS_ACTIVE) {
             return false;
         }
 
-        // Check if loan is fully paid using the new settlement logic
-        return $this->isLoanFullyPaidForSettlement();
+        return $this->isLoanFullyPaidForSettlement() || $this->isOutstandingBelowClosureThreshold();
+    }
+
+    public function getTotalContractOutstanding(): float
+    {
+        return (float) $this->getOutstandingBalanceBreakdown()['total_balance'];
+    }
+
+    public function isOutstandingBelowClosureThreshold(?float $threshold = null): bool
+    {
+        $threshold = $threshold ?? self::OUTSTANDING_CLOSURE_THRESHOLD;
+
+        return $this->getTotalContractOutstanding() < $threshold;
+    }
+
+    public function syncCompletionStatusIfEligible(): bool
+    {
+        if ($this->status !== self::STATUS_ACTIVE || !$this->isEligibleForClosing()) {
+            return false;
+        }
+
+        $this->status = self::STATUS_COMPLETE;
+        $this->save();
+
+        Log::info("Loan {$this->loanNo} auto-completed — outstanding below closure threshold");
+
+        return true;
+    }
+
+    public static function syncActiveLoansEligibleForCompletion(): int
+    {
+        $updated = 0;
+
+        static::query()
+            ->where('status', self::STATUS_ACTIVE)
+            ->with(['schedule.repayments'])
+            ->chunkById(100, function ($loans) use (&$updated) {
+                foreach ($loans as $loan) {
+                    if ($loan->syncCompletionStatusIfEligible()) {
+                        $updated++;
+                    }
+                }
+            });
+
+        return $updated;
     }
 
     /**
@@ -1340,6 +1634,10 @@ class Loan extends Model
      */
     public function getTotalOutstandingAmount(): float
     {
+        if ($this->suppressCollectionsState()) {
+            return 0;
+        }
+
         $schedules = $this->schedule;
         if (!$schedules) {
             $schedules = $this->schedule()->get();
@@ -1367,44 +1665,99 @@ class Loan extends Model
         return $schedules->sum('paid_amount');
     }
 
-    //get the total amount to settle the loan, this include the interest of the current unpaid schedule + all the remaining principal
+    public function buildSettlementPlan(?string $asOfDate = null): array
+    {
+        $schedules = $this->schedule;
+        if (!$schedules) {
+            $schedules = $this->schedule()->with('repayments')->get();
+        }
+
+        if (!$schedules || !($schedules instanceof \Illuminate\Database\Eloquent\Collection) || $schedules->isEmpty()) {
+            return [
+                'due_schedule_payments' => [],
+                'future_principal_payments' => [],
+                'total_due_components' => 0.0,
+                'total_future_principal' => 0.0,
+                'settle_amount' => 0.0,
+            ];
+        }
+
+        $asOf = $asOfDate ? Carbon::parse($asOfDate)->endOfDay() : now()->endOfDay();
+        $dueSchedulePayments = [];
+        $futurePrincipalPayments = [];
+        $totalDueComponents = 0.0;
+        $totalFuturePrincipal = 0.0;
+
+        foreach ($schedules->sortBy('due_date') as $schedule) {
+            if (in_array(($schedule->status ?? null), ['restructured', 'paid', 'cancelled'], true)) {
+                continue;
+            }
+
+            if (!$schedule->relationLoaded('loan')) {
+                $schedule->setRelation('loan', $this);
+            }
+
+            $repayments = $schedule->repayments ?? collect();
+            $principalPaid = (float) $repayments->sum('principal');
+            $interestPaid = (float) $repayments->sum('interest');
+            $feesPaid = (float) $repayments->sum('fee_amount');
+            $penaltyPaid = (float) $repayments->sum('penalt_amount');
+
+            $remainingPrincipal = round(max(0.0, (float) $schedule->principal - $principalPaid), 2);
+            $remainingInterest = round(max(0.0, (float) $schedule->balance_interest_component - $interestPaid), 2);
+            $remainingFees = round(max(0.0, (float) ($schedule->fee_amount ?? 0) - $feesPaid), 2);
+            $remainingPenalty = round(max(0.0, (float) ($schedule->penalty_amount ?? 0) - $penaltyPaid), 2);
+            $remainingTotal = round($remainingPrincipal + $remainingInterest + $remainingFees + $remainingPenalty, 2);
+
+            if ($remainingTotal <= self::OUTSTANDING_CLOSURE_THRESHOLD) {
+                continue;
+            }
+
+            $payment = [
+                'schedule' => $schedule,
+                'schedule_id' => $schedule->id,
+                'principal' => $remainingPrincipal,
+                'interest' => $remainingInterest,
+                'fee_amount' => $remainingFees,
+                'penalty_amount' => $remainingPenalty,
+                'amount' => $remainingTotal,
+            ];
+
+            if (Carbon::parse($schedule->due_date)->endOfDay()->lte($asOf)) {
+                $dueSchedulePayments[] = $payment;
+                $totalDueComponents += $remainingTotal;
+                continue;
+            }
+
+            if ($remainingPrincipal > self::OUTSTANDING_CLOSURE_THRESHOLD) {
+                $futurePayment = $payment;
+                $futurePayment['interest'] = 0.0;
+                $futurePayment['fee_amount'] = 0.0;
+                $futurePayment['penalty_amount'] = 0.0;
+                $futurePayment['amount'] = $remainingPrincipal;
+                $futurePrincipalPayments[] = $futurePayment;
+                $totalFuturePrincipal += $remainingPrincipal;
+            }
+        }
+
+        return [
+            'due_schedule_payments' => $dueSchedulePayments,
+            'future_principal_payments' => $futurePrincipalPayments,
+            'total_due_components' => round($totalDueComponents, 2),
+            'total_future_principal' => round($totalFuturePrincipal, 2),
+            'settle_amount' => round($totalDueComponents + $totalFuturePrincipal, 2),
+        ];
+    }
+
+    // Get the total amount to settle the loan:
+    // clear all due/overdue components first, then pay remaining principal on future schedules.
     public function getTotalAmountToSettle(): float
     {
-        // Ensure schedule is loaded as a collection
-        $schedules = $this->schedule;
-        // If schedule relationship returns null or is not a collection, try to load it
-        if (!$schedules) {
-            $schedules = $this->schedule()->get();
-        }
-        // Check if schedule exists and is not empty
-        if (!$schedules || !($schedules instanceof \Illuminate\Database\Eloquent\Collection) || $schedules->isEmpty()) {
+        if ($this->suppressCollectionsState()) {
             return 0;
         }
 
-        // Get all outstanding principal from all schedules
-        $totalPrincipal = $schedules->sum('principal');
-        $totalPaidPrincipal = $schedules->sum(function ($schedule) {
-            $scheduleRepayments = $schedule->repayments ?? collect();
-            return $scheduleRepayments->sum('principal');
-        });
-        $outstandingPrincipal = $totalPrincipal - $totalPaidPrincipal;
-
-        // Get remaining interest from current unpaid/partially paid schedule only
-        // Use filter() instead of where() for accessor-based filtering
-        $currentSchedule = $schedules->filter(function ($schedule) {
-            return !$schedule->is_fully_paid;
-        })->first();
-
-        $currentScheduleInterest = 0;
-        if ($currentSchedule) {
-            // Calculate remaining interest (original interest - interest already paid)
-            $scheduleRepayments = $currentSchedule->repayments ?? collect();
-            $interestPaid = $scheduleRepayments->sum('interest');
-            $currentScheduleInterest = max(0, $currentSchedule->interest - $interestPaid);
-        }
-
-        // Always round to 2 decimal places to avoid floating point precision issues
-        return round($outstandingPrincipal + $currentScheduleInterest, 2);
+        return (float) ($this->buildSettlementPlan()['settle_amount'] ?? 0);
     }
 
     /**
@@ -1657,9 +2010,6 @@ class Loan extends Model
      */
     public function isLoanFullyPaidForSettlement(): bool
     {
-        $totalPrincipalPaid = $this->getTotalPrincipalPaid();
-        // Allow up to 0.5 TZS difference due to rounding
-        $epsilon = 0.5;
-        return ($totalPrincipalPaid + $epsilon) >= $this->amount;
+        return $this->getTotalAmountToSettle() <= self::OUTSTANDING_CLOSURE_THRESHOLD;
     }
 }

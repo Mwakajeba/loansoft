@@ -24,16 +24,36 @@ class PaymentVoucherController extends Controller
     use TransactionHelper;
 
     /**
+     * Current branch for listing/stats: session branch (change branch) or user's default branch.
+     */
+    protected function paymentVouchersBranchId($user): ?int
+    {
+        $branchId = function_exists('current_branch_id') ? current_branch_id() : null;
+        if ($branchId !== null && $branchId !== '') {
+            return (int) $branchId;
+        }
+        if (!empty($user->branch_id)) {
+            return (int) $user->branch_id;
+        }
+
+        return null;
+    }
+
+    /**
      * Display a listing of the resource.
      */
     public function index()
     {
         $user = Auth::user();
+        $branchId = $this->paymentVouchersBranchId($user);
 
-        // Calculate stats only
+        // Calculate stats only (scoped to login / current branch)
         $allPayments = Payment::with(['bankAccount.chartAccount.accountClassGroup'])
             ->whereHas('bankAccount.chartAccount.accountClassGroup', function ($query) use ($user) {
                 $query->where('company_id', $user->company_id);
+            })
+            ->when($branchId, function ($query) use ($branchId) {
+                $query->where('payments.branch_id', $branchId);
             })
             ->get();
 
@@ -51,10 +71,14 @@ class PaymentVoucherController extends Controller
     public function getPaymentVouchersData(Request $request)
     {
         $user = Auth::user();
+        $branchId = $this->paymentVouchersBranchId($user);
 
         $payments = Payment::with(['bankAccount', 'customer', 'supplier', 'user', 'approvals'])
             ->whereHas('bankAccount.chartAccount.accountClassGroup', function ($query) use ($user) {
                 $query->where('company_id', $user->company_id);
+            })
+            ->when($branchId, function ($query) use ($branchId) {
+                $query->where('payments.branch_id', $branchId);
             })
             ->select('payments.*');
 
@@ -109,8 +133,9 @@ class PaymentVoucherController extends Controller
 
                     $isManual = $payment->reference_type === 'manual';
                     $settings = \App\Models\PaymentVoucherApprovalSetting::where('company_id', auth()->user()->company_id)->first();
-                    $approvalsDisabled = $settings && !$settings->require_approval_for_all;
+                    $approvalsEnabled = (bool) ($settings && $settings->require_approval_for_all);
                     $isApproved = $payment->isFullyApproved();
+                    $isLocked = $approvalsEnabled && $isApproved;
 
                     // View action
                     if ($canView) {
@@ -125,11 +150,11 @@ class PaymentVoucherController extends Controller
 
                     // Edit action: always show if user has permission, enable if allowed
                     if ($canEdit) {
-                        // Allow edit for manual vouchers regardless of approval; otherwise require override
-                        $editAllowed = ($isManual) || $canEditApproved;
+                        // Lock editing once fully approved when approvals are enabled
+                        $editAllowed = !$isLocked;
                         $editTitle = $editAllowed
                             ? 'Edit payment voucher'
-                            : ($isManual ? 'Cannot edit: Payment voucher is approved' : 'Edit locked: Source is ' . ucfirst($payment->reference_type) . ' transaction');
+                            : 'Cannot edit: Payment voucher is fully approved';
 
                         if ($editAllowed) {
                             $actions .= '<a href="' . route('accounting.payment-vouchers.edit', $payment->hash_id) . '" 
@@ -153,11 +178,11 @@ class PaymentVoucherController extends Controller
 
                     // Delete action: always show if user has permission, enable if allowed
                     if ($canDelete) {
-                        // Allow delete for manual vouchers regardless of approval; otherwise require override
-                        $deleteAllowed = ($isManual) || $canDeleteApproved;
+                        // Lock deleting once fully approved when approvals are enabled
+                        $deleteAllowed = !$isLocked;
                         $deleteTitle = $deleteAllowed
                             ? 'Delete payment voucher'
-                            : ($isManual ? 'Cannot delete: Payment voucher is approved' : 'Delete locked: Source is ' . ucfirst($payment->reference_type) . ' transaction');
+                            : 'Cannot delete: Payment voucher is fully approved';
 
                         if ($deleteAllowed) {
                             $actions .= '<button type="button" 
@@ -203,10 +228,11 @@ class PaymentVoucherController extends Controller
             ->orderBy('name')
             ->get();
 
-        // Get customers for the current company/branch
+        // Get customers for the current company / login (session) branch
+        $branchForScope = $this->paymentVouchersBranchId($user);
         $customers = Customer::where('company_id', $user->company_id)
-            ->when($user->branch_id, function ($query) use ($user) {
-                return $query->where('branch_id', $user->branch_id);
+            ->when($branchForScope, function ($query) use ($branchForScope) {
+                return $query->where('branch_id', $branchForScope);
             })
             ->orderBy('name')
             ->get();
@@ -280,8 +306,17 @@ class PaymentVoucherController extends Controller
                     $payeeId = $request->customer_id;
                 } elseif ($request->payee_type === 'supplier') {
                     $payeeId = $request->supplier_id;
-                } elseif ($request->payee_type === 'other') {
+                } else                if ($request->payee_type === 'other') {
                     $payeeName = $request->payee_name;
+                }
+
+                $paymentBranchId = $this->paymentVouchersBranchId($user) ?: ($user->branch_id ? (int) $user->branch_id : null);
+                if (!$paymentBranchId) {
+                    DB::rollBack();
+                    return redirect()
+                        ->back()
+                        ->withErrors(['error' => 'No branch context for this voucher. Select a branch or set your default branch.'])
+                        ->withInput();
                 }
 
                 // Create payment
@@ -300,14 +335,11 @@ class PaymentVoucherController extends Controller
                     'payee_name' => $payeeName,
                     'customer_id' => $request->customer_id,
                     'supplier_id' => $request->supplier_id,
-                    'branch_id' => $user->branch_id,
+                    'branch_id' => $paymentBranchId,
                     'approved' => false, // Will be set by approval workflow
                     'approved_by' => null,
                     'approved_at' => null,
                 ]);
-
-                // Initialize approval workflow (may auto-approve depending on settings)
-                $payment->initializeApprovalWorkflow();
 
                 // Create payment items
                 $paymentItems = [];
@@ -324,7 +356,11 @@ class PaymentVoucherController extends Controller
 
                 PaymentItem::insert($paymentItems);
 
-                // Post to GL only if payment has been approved (either approvals disabled or auto-approved)
+                // Initialize approval workflow (may auto-approve depending on settings).
+                // Important: do this AFTER inserting line items so auto-approval can post GL entries.
+                $payment->initializeApprovalWorkflow();
+
+                // If approved (e.g. approvals disabled), ensure GL transactions exist.
                 $payment->refresh();
                 if ($payment->approved) {
                     $bankAccount = BankAccount::find($request->bank_account_id);
@@ -342,48 +378,8 @@ class PaymentVoucherController extends Controller
                         }
                     }
 
-                    // Prepare description for GL transactions
-                    $glDescription = $request->description ?: "Payment voucher {$payment->reference}";
-                    if ($payeeType === 'other' && $payeeName) {
-                        $glDescription = $payeeName . ' - ' . $glDescription;
-                    }
-
-                    // Credit bank account
-                    GlTransaction::create([
-                        'chart_account_id' => $bankAccount->chart_account_id,
-                        'customer_id' => $request->customer_id,
-                        'supplier_id' => $request->supplier_id,
-                        'amount' => $totalAmount,
-                        'nature' => 'credit',
-                        'transaction_id' => $payment->id,
-                        'transaction_type' => 'payment',
-                        'date' => $request->date,
-                        'description' => $glDescription,
-                        'branch_id' => $user->branch_id,
-                        'user_id' => $user->id,
-                    ]);
-
-                    // Debit each chart account
-                    foreach ($request->line_items as $lineItem) {
-                        $lineItemDescription = $lineItem['description'] ?: "Payment voucher {$payment->reference}";
-                        if ($payeeType === 'other' && $payeeName) {
-                            $lineItemDescription = $payeeName . ' - ' . $lineItemDescription;
-                        }
-                        
-                        GlTransaction::create([
-                            'chart_account_id' => $lineItem['chart_account_id'],
-                            'customer_id' => $request->customer_id,
-                            'supplier_id' => $request->supplier_id,
-                            'amount' => $lineItem['amount'],
-                            'nature' => 'debit',
-                            'transaction_id' => $payment->id,
-                            'transaction_type' => 'payment',
-                            'date' => $request->date,
-                            'description' => $lineItemDescription,
-                            'branch_id' => $user->branch_id,
-                            'user_id' => $user->id,
-                        ]);
-                    }
+                    // Uses Payment::createGlTransactions() which guards against duplicates.
+                    $payment->createGlTransactions();
 
                     return redirect()->route('accounting.payment-vouchers.show', $payment)
                         ->with('success', 'Payment voucher created and posted to GL successfully.');
@@ -422,10 +418,13 @@ class PaymentVoucherController extends Controller
 
         $user = Auth::user();
 
-        // For manual vouchers, allow edit even if approved; otherwise require override
-        if ($paymentVoucher->isFullyApproved() && $paymentVoucher->reference_type !== 'manual' && !auth()->user()->can('edit approved payment voucher')) {
+        // Lock editing after final approval when approvals are enabled (Require Approval for All Vouchers).
+        // If approvals are disabled, allow editing (even if auto-approved).
+        $settings = \App\Models\PaymentVoucherApprovalSetting::where('company_id', $user->company_id)->first();
+        $approvalsEnabled = (bool) ($settings && $settings->require_approval_for_all);
+        if ($approvalsEnabled && $paymentVoucher->isFullyApproved()) {
             return redirect()->route('accounting.payment-vouchers.show', $paymentVoucher)
-                ->withErrors(['error' => 'Cannot edit an approved payment voucher.']);
+                ->withErrors(['error' => 'Cannot edit a fully approved payment voucher.']);
         }
 
         // Get bank accounts for the current company and user's branches
@@ -437,10 +436,10 @@ class PaymentVoucherController extends Controller
             ->orderBy('name')
             ->get();
 
-        // Get customers for the current company/branch
+        $branchForScope = $this->paymentVouchersBranchId($user);
         $customers = Customer::where('company_id', $user->company_id)
-            ->when($user->branch_id, function ($query) use ($user) {
-                return $query->where('branch_id', $user->branch_id);
+            ->when($branchForScope, function ($query) use ($branchForScope) {
+                return $query->where('branch_id', $branchForScope);
             })
             ->orderBy('name')
             ->get();
@@ -477,10 +476,13 @@ class PaymentVoucherController extends Controller
             abort(403, 'You do not have permission to edit payment vouchers.');
         }
 
-        // For manual vouchers, allow update even if approved; otherwise require override
-        if ($paymentVoucher->isFullyApproved() && $paymentVoucher->reference_type !== 'manual' && !auth()->user()->can('edit approved payment voucher')) {
+        // Lock updating after final approval when approvals are enabled.
+        $user = Auth::user();
+        $settings = \App\Models\PaymentVoucherApprovalSetting::where('company_id', $user->company_id)->first();
+        $approvalsEnabled = (bool) ($settings && $settings->require_approval_for_all);
+        if ($approvalsEnabled && $paymentVoucher->isFullyApproved()) {
             return redirect()->route('accounting.payment-vouchers.show', $paymentVoucher)
-                ->withErrors(['error' => 'Cannot update an approved payment voucher.']);
+                ->withErrors(['error' => 'Cannot update a fully approved payment voucher.']);
         }
 
         $validator = Validator::make($request->all(), [
@@ -613,7 +615,7 @@ class PaymentVoucherController extends Controller
                     'transaction_type' => 'payment',
                     'date' => $request->date,
                     'description' => $glDescription,
-                    'branch_id' => $user->branch_id,
+                    'branch_id' => $paymentVoucher->branch_id,
                     'user_id' => $user->id,
                 ]);
 
@@ -634,7 +636,7 @@ class PaymentVoucherController extends Controller
                         'transaction_type' => 'payment',
                         'date' => $request->date,
                         'description' => $lineItemDescription,
-                        'branch_id' => $user->branch_id,
+                        'branch_id' => $paymentVoucher->branch_id,
                         'user_id' => $user->id,
                     ]);
                 }
@@ -659,10 +661,13 @@ class PaymentVoucherController extends Controller
             abort(403, 'You do not have permission to delete payment vouchers.');
         }
 
-        // For manual vouchers, allow delete even if approved; otherwise require override
-        if ($paymentVoucher->isFullyApproved() && $paymentVoucher->reference_type !== 'manual' && !auth()->user()->can('delete approved payment voucher')) {
+        // Lock deleting after final approval when approvals are enabled.
+        $user = Auth::user();
+        $settings = \App\Models\PaymentVoucherApprovalSetting::where('company_id', $user->company_id)->first();
+        $approvalsEnabled = (bool) ($settings && $settings->require_approval_for_all);
+        if ($approvalsEnabled && $paymentVoucher->isFullyApproved()) {
             return redirect()->route('accounting.payment-vouchers.show', $paymentVoucher)
-                ->withErrors(['error' => 'Cannot delete an approved payment voucher.']);
+                ->withErrors(['error' => 'Cannot delete a fully approved payment voucher.']);
         }
 
         try {

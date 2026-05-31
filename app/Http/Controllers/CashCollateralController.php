@@ -541,9 +541,7 @@ class CashCollateralController extends Controller
                 $collateral = CashCollateral::with(['customer', 'type'])->findOrFail($collateralId);
                 $bankAccount = BankAccount::findOrFail($request->bank_account_id);
                 
-                // Validate bank account is accessible by user's branches
-                $userBranchIds = $user->branches()->pluck('branches.id')->toArray();
-                if (!empty($userBranchIds) && !$bankAccount->branches()->whereIn('branches.id', $userBranchIds)->exists()) {
+                if (!$bankAccount->isAccessibleByUser($user)) {
                     return redirect()->back()->withErrors(['bank_account_id' => 'You do not have access to this bank account.']);
                 }
                 

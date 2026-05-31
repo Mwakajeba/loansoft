@@ -9,7 +9,6 @@ use Maatwebsite\Excel\Concerns\WithStyles;
 use Maatwebsite\Excel\Concerns\ShouldAutoSize;
 use PhpOffice\PhpSpreadsheet\Worksheet\Worksheet;
 use PhpOffice\PhpSpreadsheet\Style\Fill;
-use PhpOffice\PhpSpreadsheet\Style\Color;
 use PhpOffice\PhpSpreadsheet\Style\Alignment;
 
 class ExpectedVsCollectedExport implements FromArray, WithHeadings, WithTitle, WithStyles, ShouldAutoSize
@@ -23,88 +22,92 @@ class ExpectedVsCollectedExport implements FromArray, WithHeadings, WithTitle, W
 
     public function array(): array
     {
-        $exportData = [];
-        
-        // Add header information
-        $exportData[] = ['Expected vs Collected Report'];
-        $exportData[] = ['Generated:', $this->data['generated_date']];
-        $exportData[] = ['Period:', \Carbon\Carbon::parse($this->data['start_date'])->format('d-m-Y') . ' to ' . \Carbon\Carbon::parse($this->data['end_date'])->format('d-m-Y')];
-        $exportData[] = ['Branch:', $this->data['branch_name']];
-        $exportData[] = ['Group:', $this->data['group_name']];
-        $exportData[] = ['Loan Officer:', $this->data['loan_officer_name']];
-        $exportData[] = []; // Empty row
-        
-        // Add summary information if there's data
-        if (!empty($this->data['report_data'])) {
-            $totalExpected = array_sum(array_column($this->data['report_data'], 'expected_total'));
-            $totalCollected = array_sum(array_column($this->data['report_data'], 'collected_total'));
-            $totalVariance = array_sum(array_column($this->data['report_data'], 'variance'));
-            $collectionRate = $totalExpected > 0 ? ($totalCollected / $totalExpected) * 100 : 0;
-            
-            $exportData[] = ['SUMMARY'];
-            $exportData[] = ['Total Expected:', 'TZS ' . number_format($totalExpected, 2)];
-            $exportData[] = ['Total Collected:', 'TZS ' . number_format($totalCollected, 2)];
-            $exportData[] = ['Total Variance:', 'TZS ' . number_format($totalVariance, 2)];
-            $exportData[] = ['Collection Rate:', number_format($collectionRate, 2) . '%'];
-            $exportData[] = []; // Empty row
-        }
-        
-        // Add data rows
-        foreach ($this->data['report_data'] as $row) {
-            $exportData[] = [
+        $rows = [];
+        $reportData = $this->data['report_data'] ?? [];
+        $totals = [
+            'outstanding_fees' => 0.0,
+            'arrears_before_period' => 0.0,
+            'due_instalment' => 0.0,
+            'accrued_penalties' => 0.0,
+            'total_instalment_due' => 0.0,
+            'amount_paid' => 0.0,
+            'balance_due' => 0.0,
+        ];
+
+        foreach ($reportData as $index => $row) {
+            foreach ($totals as $key => $value) {
+                $totals[$key] += (float) ($row[$key] ?? 0);
+            }
+
+            $rows[] = [
+                $index + 1,
                 $row['customer'],
                 $row['customer_no'],
                 $row['phone'],
-                $row['loan_no'],
                 $row['loan_amount'],
                 $row['disbursed_date'],
-                $row['branch'],
-                $row['group'],
                 $row['loan_officer'],
-                $row['expected_principal'],
-                $row['expected_interest'],
-                $row['expected_fees'],
-                $row['expected_penalty'],
-                $row['expected_total'],
-                $row['collected_principal'],
-                $row['collected_interest'],
-                $row['collected_fees'],
-                $row['collected_penalty'],
-                $row['collected_total'],
-                $row['variance'],
-                $row['collection_rate'] . '%',
-                $row['collection_status']
+                $row['instalment_due_dates'] ?? '',
+                $row['outstanding_fees'] ?? 0,
+                $row['arrears_before_period'] ?? 0,
+                $row['due_instalment'] ?? 0,
+                $row['accrued_penalties'] ?? 0,
+                $row['total_instalment_due'] ?? 0,
+                $row['amount_paid'] ?? 0,
+                $row['balance_due'] ?? 0,
             ];
         }
 
-        return $exportData;
+        if (count($reportData) > 0) {
+            $rows[] = [
+                'TOTALS',
+                '',
+                '',
+                '',
+                '',
+                '',
+                '',
+                '',
+                $totals['outstanding_fees'],
+                $totals['arrears_before_period'],
+                $totals['due_instalment'],
+                $totals['accrued_penalties'],
+                $totals['total_instalment_due'],
+                $totals['amount_paid'],
+                $totals['balance_due'],
+            ];
+        }
+
+        return $rows;
     }
 
     public function headings(): array
     {
         return [
-            'Customer',
-            'Customer No',
-            'Phone',
-            'Loan No',
-            'Loan Amount',
-            'Disbursed Date',
-            'Branch',
-            'Group',
-            'Loan Officer',
-            'Expected Principal',
-            'Expected Interest',
-            'Expected Fees',
-            'Expected Penalty',
-            'Expected Total',
-            'Collected Principal',
-            'Collected Interest',
-            'Collected Fees',
-            'Collected Penalty',
-            'Collected Total',
-            'Variance',
-            'Collection Rate',
-            'Status'
+            ['Expected vs Collected Report'],
+            ['Generated:', $this->data['generated_date']],
+            ['Period:', \Carbon\Carbon::parse($this->data['start_date'])->format('d-m-Y') . ' to ' . \Carbon\Carbon::parse($this->data['end_date'])->format('d-m-Y')],
+            ['Branch:', $this->data['branch_name']],
+            ['Group:', $this->data['group_name']],
+            ['Loan Officer:', $this->data['loan_officer_name']],
+            [],
+            [
+                '#',
+                'Customer',
+                'Customer No',
+                'Phone',
+                'Loan Amount',
+                'Disbursed Date',
+                'Loan Officer',
+                'Instalment due date(s)',
+                'Outstanding Fees',
+                'Arrears (before period)',
+                'Due Instalment',
+                'Accrued Penalties',
+                'Total Instalment due',
+                'Amount paid',
+                'Balance Due',
+            ],
         ];
     }
 
@@ -115,40 +118,25 @@ class ExpectedVsCollectedExport implements FromArray, WithHeadings, WithTitle, W
 
     public function styles(Worksheet $sheet)
     {
-        $headerRowNumber = count($this->data['report_data']) > 0 ? 13 : 8; // Adjust based on summary presence
-        
-        return [
-            // Style the title
-            1 => [
-                'font' => [
-                    'bold' => true,
-                    'size' => 16,
-                    'color' => ['rgb' => '000000']
-                ],
-                'alignment' => [
-                    'horizontal' => Alignment::HORIZONTAL_CENTER,
-                ]
+        $headerRow = 8;
+        $lastRow = (int) $sheet->getHighestRow();
+
+        $styles = [
+            1 => ['font' => ['bold' => true, 'size' => 16]],
+            $headerRow => [
+                'font' => ['bold' => true, 'color' => ['rgb' => 'FFFFFF']],
+                'fill' => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => '4472C4']],
+                'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER],
             ],
-            
-            // Style the summary section
-            9 => [
-                'font' => [
-                    'bold' => true,
-                    'color' => ['rgb' => '000000']
-                ]
-            ],
-            
-            // Style the data headers
-            $headerRowNumber => [
-                'font' => [
-                    'bold' => true,
-                    'color' => ['rgb' => 'FFFFFF']
-                ],
-                'fill' => [
-                    'fillType' => Fill::FILL_SOLID,
-                    'startColor' => ['rgb' => '4472C4']
-                ]
-            ]
         ];
+
+        if ($lastRow > $headerRow) {
+            $styles[$lastRow] = [
+                'font' => ['bold' => true, 'color' => ['rgb' => 'FFFFFF']],
+                'fill' => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => '343A40']],
+            ];
+        }
+
+        return $styles;
     }
 }

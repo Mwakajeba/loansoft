@@ -31,34 +31,31 @@ class CollectMatureInterestJob implements ShouldQueue
 
     public function handle()
     {
-        Log::info('Starting mature interest & penalty collection job');
+        Log::info('Starting mature interest collection job (penalties run via accounting:accrue-penalties)');
 
-        try {
-            DB::beginTransaction();
+        $activeLoans = Loan::where('status', 'active')
+            ->with(['product', 'customer', 'branch', 'schedule.repayments'])
+            ->get();
 
-            $activeLoans = Loan::where('status', 'active')
-                ->with(['product', 'customer', 'branch', 'schedule.repayments'])
-                ->get();
+        $totalProcessed = 0;
+        $totalFailed = 0;
 
-            $totalProcessed = 0;
+        foreach ($activeLoans as $loan) {
+            try {
+                $processed = DB::transaction(function () use ($loan) {
+                    return $this->processLoanMatureInterest($loan);
+                });
 
-            foreach ($activeLoans as $loan) {
-                $processedInterest = $this->processLoanMatureInterest($loan);
-                $processedPenalty = $this->processLoanPenalty($loan);
-
-                if ($processedInterest || $processedPenalty) {
+                if ($processed) {
                     $totalProcessed++;
                 }
+            } catch (\Exception $e) {
+                $totalFailed++;
+                Log::error("Mature interest failed for loan {$loan->id} ({$loan->loanNo}): " . $e->getMessage());
             }
-
-            DB::commit();
-
-            Log::info("Job completed. Processed {$totalProcessed} loans");
-        } catch (\Exception $e) {
-            DB::rollBack();
-            Log::error('Error in job: ' . $e->getMessage());
-            throw $e;
         }
+
+        Log::info("Mature interest job completed. Posted: {$totalProcessed} loans, failed: {$totalFailed}");
     }
 
     /**
@@ -66,6 +63,11 @@ class CollectMatureInterestJob implements ShouldQueue
      */
     private function processLoanMatureInterest(Loan $loan): bool
     {
+        // Daily-accrual products post interest via CalculateDailyInterestJob (DailyInterestAccrual GL).
+        if ($loan->usesDailyInterestAccrual()) {
+            return false;
+        }
+
         $maturedSchedules = $loan->schedule()
             ->where('due_date', '=', Carbon::today())
             ->where('interest', '>', 0)
@@ -96,12 +98,10 @@ class CollectMatureInterestJob implements ShouldQueue
         // Ensure repayments relationship is available
         $schedule->loadMissing('repayments');
 
-        $totalInterest = $schedule->interest;
-        // Consider only repayments recorded against this schedule and matching the schedule due_date
-        $paidInterest = $schedule->repayments
-            ->where('due_date', Carbon::parse($schedule->due_date))
-            ->sum('interest');
-        $unpaidInterest = $totalInterest - $paidInterest;
+        $schedule->setRelation('loan', $loan);
+        $totalInterest = (float) $schedule->balance_interest_component;
+        $paidInterest = (float) $schedule->repayments->sum('interest');
+        $unpaidInterest = round($totalInterest - $paidInterest, 2);
 
         if ($unpaidInterest <= 0) {
             return 0;

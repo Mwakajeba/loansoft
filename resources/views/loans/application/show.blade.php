@@ -27,11 +27,18 @@
                     <a href="{{ route('loans.application.index') }}" class="btn btn-secondary">
                         <i class="bx bx-arrow-back me-1"></i> Back
                     </a>
-                    @if($loanApplication->status === 'pending')
+                    @if($loanApplication->canBeEdited() && $loanApplication->usesApplicationEditForm())
                         <a href="{{ route('loans.application.edit', Hashids::encode($loanApplication->id)) }}" class="btn btn-warning">
                             <i class="bx bx-edit me-1"></i> Edit
                         </a>
                     @endif
+                    @can('delete loan')
+                    @if($loanApplication->canBeDeleted())
+                        <button type="button" class="btn btn-danger" onclick="deleteApplication('{{ Hashids::encode($loanApplication->id) }}')">
+                            <i class="bx bx-trash me-1"></i> Delete
+                        </button>
+                    @endif
+                    @endcan
                 </div>
                 @endcan
             </div>

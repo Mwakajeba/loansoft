@@ -186,6 +186,13 @@ class LoanTopUpController extends Controller
             // Generate repayment schedule
             $newLoan->generateRepaymentSchedule($newLoan->interest);
 
+            // Mark unpaid schedules on the old loan before closing it
+            $loan->schedule()->with('repayments')->get()->each(function ($schedule) {
+                if (!$schedule->is_fully_paid && $schedule->status !== 'restructured') {
+                    $schedule->update(['status' => 'restructured']);
+                }
+            });
+
             // Create GL Transactions for Restructure Top-Up (use totalBalance for amount being capitalized)
             $this->createRestructureTopUpGlTransactions($loan, $newLoan, $totalBalance, $customerReceives);
 

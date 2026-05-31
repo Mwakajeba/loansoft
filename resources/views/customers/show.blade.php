@@ -262,6 +262,23 @@
                                                 <td>{{ $customer->branch->name ?? 'N/A' }}</td>
                                             </tr>
                                             <tr>
+                                                <th scope="row">Group :</th>
+                                                <td>
+                                                    @forelse($customer->groups as $group)
+                                                        <a href="{{ route('groups.show', \Vinkla\Hashids\Facades\Hashids::encode($group->id)) }}"
+                                                            class="text-decoration-none">{{ $group->name }}</a>
+                                                        @if(!empty($group->pivot->joined_date))
+                                                            <span class="text-muted small">(since {{ \Carbon\Carbon::parse($group->pivot->joined_date)->format('M d, Y') }})</span>
+                                                        @endif
+                                                        @if(!$loop->last)
+                                                            <br>
+                                                        @endif
+                                                    @empty
+                                                        <span class="text-muted">Not in a group</span>
+                                                    @endforelse
+                                                </td>
+                                            </tr>
+                                            <tr>
                                                 <th scope="row">Relation with business :</th>
                                                 <td>{{ $customer->relation ?? 'N/A' }}</td>
                                             </tr>
@@ -442,10 +459,10 @@
                                                         @endcan
 
                                                         @can('edit loan')
-                                                            @if($loan->status == 'pending')
+                                                            @if($loan->canBeEdited())
                                                                 @php
                                                                     $encodedId = Hashids::encode($loan->id);
-                                                                    $editRoute = in_array($loan->status, ['applied', 'rejected'])
+                                                                    $editRoute = $loan->usesApplicationEditForm()
                                                                         ? route('loans.application.edit', $encodedId)
                                                                         : route('loans.edit', $encodedId);
                                                                 @endphp

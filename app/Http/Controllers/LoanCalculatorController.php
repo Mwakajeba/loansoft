@@ -43,7 +43,9 @@ class LoanCalculatorController extends Controller
             'period' => 'required|integer|min:1',
             'interest_rate' => 'required|numeric|min:0',
             'start_date' => 'required|date|after_or_equal:today',
-            'interest_cycle' => 'nullable|string|in:daily,weekly,bimonthly,monthly,quarterly,semi_annually,annually'
+            'interest_cycle' => 'nullable|string|in:daily,weekly,bimonthly,monthly,quarterly,semi_annually,annually',
+            'custom_fee_amounts' => 'nullable|array',
+            'custom_fee_amounts.*' => 'nullable|numeric|min:0',
         ]);
         
         if ($validator->fails()) {
@@ -177,7 +179,9 @@ class LoanCalculatorController extends Controller
             'period' => 'required|integer|min:1',
             'interest_rate' => 'required|numeric|min:0',
             'start_date' => 'required|date|after_or_equal:today',
-            'interest_cycle' => 'nullable|string|in:daily,weekly,bimonthly,monthly,quarterly,semi_annually,annually'
+            'interest_cycle' => 'nullable|string|in:daily,weekly,bimonthly,monthly,quarterly,semi_annually,annually',
+            'custom_fee_amounts' => 'nullable|array',
+            'custom_fee_amounts.*' => 'nullable|numeric|min:0',
         ]);
         
         if ($validator->fails()) {
@@ -215,7 +219,9 @@ class LoanCalculatorController extends Controller
             'period' => 'required|integer|min:1',
             'interest_rate' => 'required|numeric|min:0',
             'start_date' => 'required|date|after_or_equal:today',
-            'interest_cycle' => 'nullable|string|in:daily,weekly,bimonthly,monthly,quarterly,semi_annually,annually'
+            'interest_cycle' => 'nullable|string|in:daily,weekly,bimonthly,monthly,quarterly,semi_annually,annually',
+            'custom_fee_amounts' => 'nullable|array',
+            'custom_fee_amounts.*' => 'nullable|numeric|min:0',
         ]);
         
         if ($validator->fails()) {

@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Support\Loans\InterestAccrualMethod;
 use App\Traits\LogsActivity;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -308,10 +309,15 @@ class LoanProduct extends Model
             return null;
         }
 
-        // Get the first penalty ID from the array
-        $penaltyId = is_array($this->penalty_ids) ? $this->penalty_ids[0] : $this->penalty_ids;
+        $ids = is_array($this->penalty_ids) ? $this->penalty_ids : [$this->penalty_ids];
+        foreach ($ids as $penaltyId) {
+            $penalty = Penalty::where('id', $penaltyId)->where('status', 'active')->first();
+            if ($penalty) {
+                return $penalty;
+            }
+        }
 
-        return Penalty::find($penaltyId);
+        return null;
     }
 
     /**
@@ -407,5 +413,20 @@ class LoanProduct extends Model
     {
         return $this->belongsToMany(Filetype::class, 'filetype_loan_product')
             ->withTimestamps();
+    }
+
+    public function usesDailyInterestAccrual(): bool
+    {
+        return InterestAccrualMethod::isDaily($this->penalt_deduction_criteria);
+    }
+
+    public function usesAsExpectedInterestAccrual(): bool
+    {
+        return InterestAccrualMethod::isAsExpected($this->penalt_deduction_criteria);
+    }
+
+    public function accrualMethodLabel(): string
+    {
+        return InterestAccrualMethod::label($this->penalt_deduction_criteria);
     }
 }

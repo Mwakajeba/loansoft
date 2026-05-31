@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\LoanProduct;
 use App\Models\Fee;
 use App\Models\Penalty;
+use App\Support\Loans\LoanRounding;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Log;
 
@@ -164,24 +165,7 @@ class LoanCalculatorService
      */
     private function convertInterestRate(float $monthlyRate, string $selectedCycle): float
     {
-        switch (strtolower($selectedCycle)) {
-            case 'daily':
-                return $monthlyRate / 30;
-            case 'weekly':
-                return $monthlyRate / 4;
-            case 'bimonthly':
-                return $monthlyRate / 2;
-            case 'monthly':
-                return $monthlyRate; // Base rate
-            case 'quarterly':
-                return $monthlyRate * 4;
-            case 'semi_annually':
-                return $monthlyRate * 6;
-            case 'annually':
-                return $monthlyRate * 12;
-            default:
-                return $monthlyRate; // Default to monthly if unknown
-        }
+        return \App\Support\InterestRateConverter::fromMonthlyToCycle($monthlyRate, $selectedCycle);
     }
 
     /**
@@ -234,9 +218,9 @@ class LoanCalculatorService
         return [
             'method' => 'flat_rate',
             'total_interest' => round($totalInterest, 2),
-            'monthly_interest' => round($monthlyInterest, 2),
-            'monthly_principal' => round($monthlyPrincipal, 2),
-            'monthly_payment' => round($monthlyPrincipal + $monthlyInterest, 2),
+            'monthly_interest' => LoanRounding::roundAmount($monthlyInterest),
+            'monthly_principal' => LoanRounding::roundAmount($monthlyPrincipal),
+            'monthly_payment' => LoanRounding::roundAmount($monthlyPrincipal + $monthlyInterest),
             'rate_per_period' => $ratePerPeriod
         ];
     }
@@ -262,15 +246,15 @@ class LoanCalculatorService
             $interest = $remainingBalance * $ratePerPeriod;
             $principalPayment = $monthlyPayment - $interest;
             
-            // Round components
-            $interest = round($interest, 2);
-            $principalPayment = round($principalPayment, 2);
+            // Round components (optionally to step)
+            $interest = LoanRounding::roundAmount((float) $interest);
+            $principalPayment = LoanRounding::roundAmount((float) $principalPayment);
 
             // On final installment, adjust principal to clear remaining balance to zero
             if ($i === $period) {
-                $principalPayment = round($remainingBalance, 2);
-                // Recompute interest to keep total payment aligned
-                $interest = round($monthlyPayment - $principalPayment, 2);
+                $principalPayment = LoanRounding::roundAmount((float) $remainingBalance);
+                // Recompute interest to keep payment aligned
+                $interest = LoanRounding::roundAmount((float) ($monthlyPayment - $principalPayment));
             }
 
             $newRemaining = round($remainingBalance - $principalPayment, 2);
@@ -293,11 +277,24 @@ class LoanCalculatorService
             
             $remainingBalance = $newRemaining;
         }
+
+        if (LoanRounding::enabled() && count($schedule) > 0) {
+            $sumP = 0.0;
+            $sumI = 0.0;
+            foreach ($schedule as $row) {
+                $sumP += (float) ($row['principal'] ?? 0);
+                $sumI += (float) ($row['interest'] ?? 0);
+            }
+            $last = count($schedule) - 1;
+            $schedule[$last]['principal'] = round((float) $schedule[$last]['principal'] + ($principal - $sumP), 2);
+            $schedule[$last]['interest'] = round((float) $schedule[$last]['interest'] + ($totalInterest - $sumI), 2);
+            $schedule[$last]['total_amount'] = round((float) $schedule[$last]['principal'] + (float) $schedule[$last]['interest'], 2);
+        }
         
         return [
             'method' => 'reducing_balance_with_equal_installment',
             'total_interest' => round($totalInterest, 2),
-            'monthly_payment' => round($monthlyPayment, 2),
+            'monthly_payment' => LoanRounding::roundAmount((float) $monthlyPayment),
             'total_payment' => round($totalPayment, 2),
             'rate_per_period' => $ratePerPeriod,
             'schedule' => $schedule
@@ -323,11 +320,11 @@ class LoanCalculatorService
 
             // On final installment, adjust principal to remaining
             if ($i === $period) {
-                $principalForRow = round($remainingBalance, 2);
+                $principalForRow = LoanRounding::roundAmount((float) $remainingBalance);
             }
 
-            $interest = round($interest, 2);
-            $principalForRow = round($principalForRow, 2);
+            $interest = LoanRounding::roundAmount((float) $interest);
+            $principalForRow = LoanRounding::roundAmount((float) $principalForRow);
             $totalPayment = $principalForRow + $interest;
 
             $newRemaining = round($remainingBalance - $principalForRow, 2);
@@ -351,11 +348,24 @@ class LoanCalculatorService
             $remainingBalance = $newRemaining;
             $totalInterest += $interest;
         }
+
+        if (LoanRounding::enabled() && count($schedule) > 0) {
+            $sumP = 0.0;
+            $sumI = 0.0;
+            foreach ($schedule as $row) {
+                $sumP += (float) ($row['principal'] ?? 0);
+                $sumI += (float) ($row['interest'] ?? 0);
+            }
+            $last = count($schedule) - 1;
+            $schedule[$last]['principal'] = round((float) $schedule[$last]['principal'] + ($principal - $sumP), 2);
+            $schedule[$last]['interest'] = round((float) $schedule[$last]['interest'] + ($totalInterest - $sumI), 2);
+            $schedule[$last]['total_amount'] = round((float) $schedule[$last]['principal'] + (float) $schedule[$last]['interest'], 2);
+        }
         
         return [
             'method' => 'reducing_balance_with_equal_principal',
             'total_interest' => round($totalInterest, 2),
-            'monthly_principal' => round($monthlyPrincipal, 2),
+            'monthly_principal' => LoanRounding::roundAmount((float) $monthlyPrincipal),
             'schedule' => $schedule,
             'rate_per_period' => $ratePerPeriod
         ];
@@ -371,10 +381,14 @@ class LoanCalculatorService
         $principal = $params['amount'];
         $period = $params['period'];
         
+        $customMap = isset($params['custom_fee_amounts']) && is_array($params['custom_fee_amounts'])
+            ? $this->normalizeCustomFeeAmountsInput($params['custom_fee_amounts'])
+            : null;
+
         foreach ($productFees as $fee) {
             if ($fee->status !== 'active') continue;
-            
-            $feeAmount = $this->calculateFeeAmount($fee, $principal);
+
+            $feeAmount = $this->calculateFeeAmount($fee, $principal, $customMap);
             $feeApplication = $this->determineFeeApplication($fee, $period, $feeAmount);
             
             $fees[] = [
@@ -390,21 +404,21 @@ class LoanCalculatorService
         
         return $fees;
     }
-    
+
     /**
-     * Calculate fee amount
+     * @param  array<int|string, mixed>  $raw
+     * @return array<int, float>
      */
-    private function calculateFeeAmount(Fee $fee, float $principal): float
+    private function normalizeCustomFeeAmountsInput(array $raw): array
     {
-        if ($fee->fee_type === 'percentage') {
-            return round(($principal * $fee->amount) / 100, 2);
-        }
-        if ($fee->fee_type === 'range') {
-            return round($fee->calculateRangeFee($principal), 2);
-        }
-        return round($fee->amount, 2);
+        return Fee::normalizeCustomFeeAmountsMap($raw);
     }
-    
+
+    private function calculateFeeAmount(Fee $fee, float $principal, ?array $customFeeAmounts = null): float
+    {
+        return $fee->monetaryAmountForPrincipal($principal, $customFeeAmounts);
+    }
+
     /**
      * Determine how fee is applied
      */
@@ -504,18 +518,39 @@ class LoanCalculatorService
             $scheduleWithFees = [];
             foreach ($baseSchedule as $index => $installment) {
                 $installmentFees = $this->calculateInstallmentFees($index, $period, $fees, $params['amount']);
-                
+
+                $principalRounded = LoanRounding::roundAmount((float) ($installment['principal'] ?? 0));
+                $interestRounded = LoanRounding::roundAmount((float) ($installment['interest'] ?? 0));
+
                 $scheduleWithFees[] = [
                     'installment_number' => $installment['installment_number'],
                     'due_date' => $installment['due_date'],
-                    'principal' => $installment['principal'],
-                    'interest' => $installment['interest'],
+                    'principal' => $principalRounded,
+                    'interest' => $interestRounded,
                     'fee_amount' => round($installmentFees, 2),
-                    'total_amount' => round($installment['total_amount'] + $installmentFees, 2),
+                    'total_amount' => round($principalRounded + $interestRounded + $installmentFees, 2),
                     'remaining_balance' => $installment['remaining_balance']
                 ];
             }
-            
+
+            if (LoanRounding::enabled() && count($scheduleWithFees) > 0) {
+                $sumP = 0.0;
+                $sumI = 0.0;
+                foreach ($scheduleWithFees as $row) {
+                    $sumP += (float) ($row['principal'] ?? 0);
+                    $sumI += (float) ($row['interest'] ?? 0);
+                }
+                $last = count($scheduleWithFees) - 1;
+                $scheduleWithFees[$last]['principal'] = round((float) $scheduleWithFees[$last]['principal'] + ((float) $params['amount'] - $sumP), 2);
+                $scheduleWithFees[$last]['interest'] = round((float) $scheduleWithFees[$last]['interest'] + ((float) ($interestCalculation['total_interest'] ?? 0) - $sumI), 2);
+                $scheduleWithFees[$last]['total_amount'] = round(
+                    (float) $scheduleWithFees[$last]['principal']
+                    + (float) $scheduleWithFees[$last]['interest']
+                    + (float) ($scheduleWithFees[$last]['fee_amount'] ?? 0),
+                    2
+                );
+            }
+
             return $scheduleWithFees;
         }
         
@@ -530,13 +565,13 @@ class LoanCalculatorService
             $principal = $interestCalculation['monthly_principal'] ?? ($params['amount'] / $period);
             $interest = $interestCalculation['monthly_interest'] ?? ($interestCalculation['monthly_payment'] - $principal);
 
-            // Round
-            $principal = round($principal, 2);
-            $interest = round($interest, 2);
+            // Round (optionally to step)
+            $principal = LoanRounding::roundAmount((float) $principal);
+            $interest = LoanRounding::roundAmount((float) $interest);
 
             // On final installment, adjust principal to clear remaining
             if ($i === $period - 1) {
-                $principal = round($remainingBalance, 2);
+                $principal = LoanRounding::roundAmount((float) $remainingBalance);
             }
             
             // Calculate fees for this installment
@@ -562,6 +597,24 @@ class LoanCalculatorService
             ];
 
             $remainingBalance = $newRemaining;
+        }
+
+        if (LoanRounding::enabled() && count($schedule) > 0) {
+            $sumP = 0.0;
+            $sumI = 0.0;
+            foreach ($schedule as $row) {
+                $sumP += (float) ($row['principal'] ?? 0);
+                $sumI += (float) ($row['interest'] ?? 0);
+            }
+            $last = count($schedule) - 1;
+            $schedule[$last]['principal'] = round((float) $schedule[$last]['principal'] + ((float) $params['amount'] - $sumP), 2);
+            $schedule[$last]['interest'] = round((float) $schedule[$last]['interest'] + ((float) ($interestCalculation['total_interest'] ?? 0) - $sumI), 2);
+            $schedule[$last]['total_amount'] = round(
+                (float) $schedule[$last]['principal']
+                + (float) $schedule[$last]['interest']
+                + (float) ($schedule[$last]['fee_amount'] ?? 0),
+                2
+            );
         }
         
         return $schedule;
@@ -612,26 +665,33 @@ class LoanCalculatorService
     
     /**
      * Calculate due date for installment
+     *
+     * Business rule: first repayment is due ONE full period
+     * after the start date, not on the same date. So index 0
+     * always means "next period", index 1 = "two periods", etc.
      */
     private function calculateDueDate(Carbon $startDate, int $installmentIndex, string $cycle): Carbon
     {
+        // Shift by one period so the first installment is after start date
+        $offset = $installmentIndex + 1;
+
         switch (strtolower($cycle)) {
             case 'daily':
-                return $startDate->copy()->addDays($installmentIndex);
+                return $startDate->copy()->addDays($offset);
             case 'weekly':
-                return $startDate->copy()->addWeeks($installmentIndex);
+                return $startDate->copy()->addWeeks($offset);
             case 'bimonthly':
-                return $startDate->copy()->addMonths($installmentIndex * 2);
+                return $startDate->copy()->addMonths($offset * 2);
             case 'monthly':
-                return $startDate->copy()->addMonths($installmentIndex);
+                return $startDate->copy()->addMonths($offset);
             case 'quarterly':
-                return $startDate->copy()->addMonths($installmentIndex * 3);
+                return $startDate->copy()->addMonths($offset * 3);
             case 'semi_annually':
-                return $startDate->copy()->addMonths($installmentIndex * 6);
+                return $startDate->copy()->addMonths($offset * 6);
             case 'annually':
-                return $startDate->copy()->addYears($installmentIndex);
+                return $startDate->copy()->addYears($offset);
             default:
-                return $startDate->copy()->addMonths($installmentIndex);
+                return $startDate->copy()->addMonths($offset);
         }
     }
     

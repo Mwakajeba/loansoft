@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Controllers\Concerns\NormalizesDcbRequestInput;
 use App\Models\BankAccount;
 use App\Models\Loan;
 use App\Models\LoanSchedule;
@@ -11,6 +12,7 @@ use App\Models\ReceiptItem;
 use App\Models\GlTransaction;
 use App\Services\LoanRepaymentService;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Auth;
@@ -18,6 +20,8 @@ use Carbon\Carbon;
 
 class LoanRepaymentController extends Controller
 {
+    use NormalizesDcbRequestInput;
+
     protected $repaymentService;
 
     public function __construct(LoanRepaymentService $repaymentService)
@@ -50,14 +54,24 @@ class LoanRepaymentController extends Controller
             // Add debugging
             Log::info('Repayment request received', $request->all());
 
+            $this->normalizeDcbRequestInput($request, 'dcb_repay', 'dcb', 'dcb_settle');
+
             $request->validate([
                 'loan_id' => 'required|exists:loans,id',
-                'schedule_id' => 'required|exists:loan_schedules,id',
+                'schedule_id' => [
+                    'nullable',
+                    Rule::exists('loan_schedules', 'id')->where('loan_id', $request->loan_id),
+                ],
                 'payment_date' => 'required|date',
                 'amount' => 'required|numeric|min:0.01',
-                'payment_source' => 'required|in:bank,cash_deposit',
-                'bank_account_id' => 'required_if:payment_source,bank|nullable|exists:bank_accounts,id',
+                'payment_source' => 'required|in:bank,cash_deposit,dcb',
+                'bank_account_id' => 'required_if:payment_source,bank,dcb|nullable|exists:bank_accounts,id',
                 'cash_deposit_id' => 'required_if:payment_source,cash_deposit|nullable|exists:cash_collaterals,id',
+                'dcb_msisdn' => 'required_if:payment_source,dcb|nullable|string|max:20',
+                'dcb_control_no' => 'nullable|string|max:64',
+                'dcb_institution_code' => 'nullable|string|max:64',
+                'dcb_destination_account' => 'nullable|string|max:64',
+                'dcb_beneficiary_name' => 'nullable|string|max:120',
             ]);
 
             Log::info('Validation passed');
@@ -73,6 +87,46 @@ class LoanRepaymentController extends Controller
                 'difference' => abs($paymentAmount - $settleAmount)
             ]);
 
+
+            if ($request->payment_source === 'dcb') {
+                $dcbService = app(\App\Services\DcbPaymentService::class);
+                if (!$dcbService->isEnabled()) {
+                    return redirect()->back()->with('error', 'DCB payments are not enabled. Configure DCB in Settings.');
+                }
+
+                $dcbResult = $dcbService->collectRepayment($loan, $paymentAmount, [
+                    'payment_date' => $request->payment_date,
+                    'schedule_id' => $request->input('schedule_id'),
+                    'bank_account_id' => $request->bank_account_id,
+                    'msisdn' => $request->dcb_msisdn,
+                    'control_no' => $request->dcb_control_no,
+                    'calculation_method' => $loan->product->interest_method ?? 'flat_rate',
+                ]);
+
+                if (!($dcbResult['success'] ?? false)) {
+                    $msg = $dcbResult['message'] ?? 'DCB repayment request failed.';
+                    if ($request->ajax() || $request->wantsJson()) {
+                        return response()->json(['success' => false, 'message' => $msg], 422);
+                    }
+
+                    return redirect()->back()->with('error', $msg);
+                }
+
+                if ($dcbResult['pending'] ?? false) {
+                    $msg = 'DCB collection initiated. Customer must approve payment on their phone. Repayment will post automatically when confirmed.';
+                    if ($request->ajax() || $request->wantsJson()) {
+                        return response()->json(['success' => true, 'message' => $msg, 'pending' => true]);
+                    }
+
+                    return redirect()->back()->with('success', $msg);
+                }
+
+                if ($request->ajax() || $request->wantsJson()) {
+                    return response()->json(['success' => true, 'message' => 'Repayment recorded successfully via DCB!']);
+                }
+
+                return redirect()->back()->with('success', 'Repayment recorded successfully via DCB!');
+            }
 
             Log::info('Processing normal repayment', [
                 'loan_id' => $request->loan_id,
@@ -136,21 +190,28 @@ class LoanRepaymentController extends Controller
                 'payment_source' => $request->payment_source
             ]);
 
-            // Process repayment using service
+            // Process repayment using service (schedule_id from "Repay Schedule Item" modal when present)
             $result = $this->repaymentService->processRepayment(
                 $request->loan_id,
                 $request->amount,
                 $paymentData,
-                $calculationMethod
+                $calculationMethod,
+                $request->input('schedule_id')
             );
 
             Log::info('Repayment processing result', $result);
 
+            if ($request->ajax() || $request->wantsJson()) {
+                return response()->json(['success' => true, 'message' => 'Repayment recorded successfully!']);
+            }
             return redirect()->back()->with('success', 'Repayment recorded successfully!');
         } catch (\Exception $e) {
             Log::error('Loan repayment error: ' . $e->getMessage());
             Log::error('Repayment error stack trace: ' . $e->getTraceAsString());
 
+            if ($request->ajax() || $request->wantsJson()) {
+                return response()->json(['success' => false, 'message' => 'Failed to record repayment: ' . $e->getMessage()], 422);
+            }
             return redirect()->back()->with('error', 'Failed to record repayment: ' . $e->getMessage());
         }
     }
@@ -193,28 +254,16 @@ class LoanRepaymentController extends Controller
             $repayment = Repayment::with(['loan', 'bankAccount'])->findOrFail($id);
             $bankAccount = BankAccount::findOrFail($request->bank_account_id);
             
-            // Validate bank account is accessible by user's branches or global scope
             $user = Auth::user();
-            $userBranchIds = $user->branches()->pluck('branches.id')->toArray();
-            $currentBranchId = function_exists('current_branch_id') ? current_branch_id() : null;
-            if (!$currentBranchId) {
-                $currentBranchId = $user->branch_id;
-            }
-
-            $hasPivotAccess = !empty($userBranchIds)
-                ? $bankAccount->branches()->whereIn('branches.id', $userBranchIds)->exists()
-                : false;
-            $hasDirectScope = $bankAccount->is_all_branches
-                || ($currentBranchId && (int) $bankAccount->branch_id === (int) $currentBranchId);
-
-            if (!empty($userBranchIds) && !$hasPivotAccess && !$hasDirectScope) {
+            if (!$bankAccount->isAccessibleByUser($user)) {
                 return redirect()->back()->withErrors(['bank_account_id' => 'You do not have access to this bank account.']);
             }
-            
+
             $bankChartAccount = $bankAccount->chart_account_id;
 
             // Store the loan and schedule info before deletion
             $loanId = $repayment->loan_id;
+            $targetScheduleId = $repayment->loan_schedule_id;
 
             // Delete the existing repayment (this will also delete receipt, journal, and GL transactions)
             $this->repaymentService->deleteRepayment($repayment->id);
@@ -235,7 +284,8 @@ class LoanRepaymentController extends Controller
                 $loanId,
                 $request->amount,
                 $paymentData,
-                $calculationMethod
+                $calculationMethod,
+                $targetScheduleId
             );
 
             DB::commit();
@@ -332,6 +382,78 @@ class LoanRepaymentController extends Controller
                 'message' => 'Failed to delete repayments: ' . $e->getMessage(),
             ], 500);
         }
+    }
+
+    /**
+     * Loan summary for quick repayment modal (loans list).
+     */
+    public function repaymentContext($loanId)
+    {
+        $loan = Loan::with(['customer', 'product', 'schedule.repayments'])->findOrFail($loanId);
+
+        $schedules = $loan->schedule ?? collect();
+        $paidPrincipal = 0.0;
+        $outstandingInterest = 0.0;
+        $outstandingPenalty = 0.0;
+        $outstandingFees = 0.0;
+
+        foreach ($schedules as $schedule) {
+            $repayments = $schedule->repayments ?? collect();
+            $paidPrincipal += (float) $repayments->sum('principal');
+            $outstandingInterest += max(0, (float) ($schedule->interest ?? 0) - (float) $repayments->sum('interest'));
+            $outstandingPenalty += max(0, (float) ($schedule->penalty_amount ?? 0) - (float) $repayments->sum('penalt_amount'));
+            $outstandingFees += max(0, (float) ($schedule->fee_amount ?? 0) - (float) $repayments->sum('fee_amount'));
+        }
+
+        $outstandingPrincipal = max(0, round((float) $loan->amount - $paidPrincipal, 2));
+        $outstandingInterest = round($outstandingInterest, 2);
+        $outstandingPenalty = round($outstandingPenalty, 2);
+        $outstandingFees = round($outstandingFees, 2);
+        $totalOutstanding = round($outstandingPrincipal + $outstandingInterest + $outstandingPenalty + $outstandingFees, 2);
+
+        $nextSchedule = $schedules
+            ->filter(fn ($schedule) => !($schedule->is_fully_paid ?? false))
+            ->sortBy('due_date')
+            ->first();
+
+        $nextInstallment = null;
+        if ($nextSchedule) {
+            $repayments = $nextSchedule->repayments ?? collect();
+            $remainingPrincipal = max(0, (float) $nextSchedule->principal - (float) $repayments->sum('principal'));
+            $remainingInterest = max(0, (float) $nextSchedule->interest - (float) $repayments->sum('interest'));
+            $remainingFee = max(0, (float) ($nextSchedule->fee_amount ?? 0) - (float) $repayments->sum('fee_amount'));
+            $remainingPenalty = max(0, (float) ($nextSchedule->penalty_amount ?? 0) - (float) $repayments->sum('penalt_amount'));
+            $dueTotal = round($remainingPrincipal + $remainingInterest + $remainingFee + $remainingPenalty, 2);
+
+            $nextInstallment = [
+                'schedule_id' => $nextSchedule->id,
+                'due_date' => $nextSchedule->due_date
+                    ? Carbon::parse($nextSchedule->due_date)->format('M d, Y')
+                    : 'N/A',
+                'principal' => $remainingPrincipal,
+                'interest' => $remainingInterest,
+                'penalty' => $remainingPenalty,
+                'fee' => $remainingFee,
+                'total' => $dueTotal,
+            ];
+        }
+
+        return response()->json([
+            'loan_id' => $loan->id,
+            'loan_no' => $loan->loanNo ?? (string) $loan->id,
+            'customer_name' => $loan->customer->name ?? 'Unknown',
+            'product_name' => $loan->product->name ?? 'N/A',
+            'loan_amount' => (float) $loan->amount,
+            'amount_total' => (float) ($loan->amount_total ?? 0),
+            'total_paid' => round((float) $loan->getTotalPaidAmount(), 2),
+            'outstanding_principal' => $outstandingPrincipal,
+            'outstanding_interest' => $outstandingInterest,
+            'outstanding_penalty' => $outstandingPenalty,
+            'outstanding_fees' => $outstandingFees,
+            'total_outstanding' => $totalOutstanding,
+            'settle_amount' => round((float) $loan->total_amount_to_settle, 2),
+            'next_installment' => $nextInstallment,
+        ]);
     }
 
     /**
@@ -443,24 +565,11 @@ class LoanRepaymentController extends Controller
             ]);
             $bankAccount = BankAccount::findOrFail($request->repayments[0]['bank_account_id']);
             
-            // Validate bank account is accessible by user's branches or global scope
             $user = Auth::user();
-            $userBranchIds = $user->branches()->pluck('branches.id')->toArray();
-            $currentBranchId = function_exists('current_branch_id') ? current_branch_id() : null;
-            if (!$currentBranchId) {
-                $currentBranchId = $user->branch_id;
-            }
-
-            $hasPivotAccess = !empty($userBranchIds)
-                ? $bankAccount->branches()->whereIn('branches.id', $userBranchIds)->exists()
-                : false;
-            $hasDirectScope = $bankAccount->is_all_branches
-                || ($currentBranchId && (int) $bankAccount->branch_id === (int) $currentBranchId);
-
-            if (!empty($userBranchIds) && !$hasPivotAccess && !$hasDirectScope) {
+            if (!$bankAccount->isAccessibleByUser($user)) {
                 return redirect()->back()->withErrors(['repayments.0.bank_account_id' => 'You do not have access to this bank account.']);
             }
-            
+
             $bankChartAccount = $bankAccount->chart_account_id;
 
             $results = [];
@@ -559,7 +668,7 @@ class LoanRepaymentController extends Controller
         try {
             $receiptIds = $request->receipt_ids;
             $receipts = Receipt::whereIn('id', $receiptIds)
-                ->whereIn('reference_type', ['loan_repayment', 'Repayment'])
+                ->whereIn('reference_type', ['loan_repayment', 'Repayment', 'loan'])
                 ->get();
 
             $successCount = 0;
@@ -665,7 +774,7 @@ class LoanRepaymentController extends Controller
             $receiptIds = $request->receipt_ids;
             $receipts = Receipt::withTrashed()
                 ->whereIn('id', $receiptIds)
-                ->whereIn('reference_type', ['loan_repayment', 'Repayment'])
+                ->whereIn('reference_type', ['loan_repayment', 'Repayment', 'loan'])
                 ->get();
 
             $successCount = 0;
@@ -714,29 +823,40 @@ class LoanRepaymentController extends Controller
             $repayment = Repayment::with([
                 'loan.customer',
                 'schedule',
-                'chartAccount',
-                'receipt.receiptItems.chartAccount'
+                'receipt.bankAccount',
+                'receipt.repayments',
             ])->findOrFail($id);
+
+            $receipt = $repayment->receipt;
+            $sharedReceiptCount = $receipt ? $receipt->repayments->count() : 0;
+            $paymentDate = $repayment->payment_date
+                ? Carbon::parse($repayment->payment_date)
+                : ($receipt?->date ? Carbon::parse($receipt->date) : now());
 
             // Generate receipt data for thermal printer
             $receiptData = [
-                'receipt_number' => $repayment->receipt->reference ?? 'N/A',
-                'date' => $repayment->payment_date,
+                'receipt_number' => $receipt?->display_number ?? 'N/A',
+                'receipt_id' => $receipt?->id,
+                'receipt_total_amount' => $receipt ? (float) $receipt->amount : null,
+                'shared_receipt_installments' => $sharedReceiptCount > 1 ? $sharedReceiptCount : null,
+                'date' => $paymentDate->format('d/m/Y'),
                 'customer_name' => $repayment->customer->name,
                 'loan_number' => $repayment->loan->loanNo,
-                'amount_paid' => $repayment->amount_paid,
+                'amount_paid' => round((float) $repayment->amount_paid, 2),
                 'schedule_number' => $repayment->schedule_number,
-                'due_date' => $repayment->due_date,
-                'remain_schedule' => $repayment->remain_schedule,
+                'due_date' => $repayment->due_date
+                    ? Carbon::parse($repayment->due_date)->format('d/m/Y')
+                    : null,
+                'remain_schedule' => round((float) $repayment->remain_schedule, 2),
                 'remaining_schedules_count' => $repayment->remaining_schedules_count,
-                'remaining_schedules_amount' => $repayment->remaining_schedules_amount,
+                'remaining_schedules_amount' => round((float) $repayment->remaining_schedules_amount, 2),
                 'payment_breakdown' => [
-                    'principal' => $repayment->principal,
-                    'interest' => $repayment->interest,
-                    'penalty' => $repayment->penalt_amount,
-                    'fee' => $repayment->fee_amount,
+                    'principal' => round((float) $repayment->principal, 2),
+                    'interest' => round((float) $repayment->interest, 2),
+                    'penalty' => round((float) $repayment->penalt_amount, 2),
+                    'fee' => round((float) $repayment->fee_amount, 2),
                 ],
-                'bank_account' => $repayment->chartAccount()->name ?? 'N/A',
+                'bank_account' => $receipt?->bankAccount?->name ?? 'N/A',
                 'received_by' => Auth::check() ? Auth::user()->name : 'System',
                 'branch' => Auth::check() && Auth::user()->branch ? Auth::user()->branch->name : 'N/A',
             ];
@@ -764,13 +884,17 @@ class LoanRepaymentController extends Controller
     public function storeSettlementRepayment(Request $request)
     {
         try {
+            $this->normalizeDcbRequestInput($request, 'dcb_settle', 'dcb', 'dcb_repay');
+
             $request->validate([
                 'loan_id' => 'required|exists:loans,id',
                 'payment_date' => 'required|date',
                 'amount' => 'required|numeric|min:0.01',
-                'payment_source' => 'required|in:bank,cash_deposit',
-                'bank_account_id' => 'required_if:payment_source,bank|nullable|exists:bank_accounts,id',
+                'payment_source' => 'required|in:bank,cash_deposit,dcb',
+                'bank_account_id' => 'required_if:payment_source,bank,dcb|nullable|exists:bank_accounts,id',
                 'cash_deposit_id' => 'required_if:payment_source,cash_deposit|nullable|exists:cash_collaterals,id',
+                'dcb_msisdn' => 'required_if:payment_source,dcb|nullable|string|max:20',
+                'dcb_control_no' => 'nullable|string|max:64',
             ]);
 
             info("request data >>>>>>>>>>>>>>", ['request' => $request->all()]);
@@ -801,6 +925,31 @@ class LoanRepaymentController extends Controller
                 }
             }
 
+            if ($request->payment_source === 'dcb') {
+                $dcbService = app(\App\Services\DcbPaymentService::class);
+                if (!$dcbService->isEnabled()) {
+                    return redirect()->back()->with('error', 'DCB payments are not enabled.');
+                }
+
+                $dcbResult = $dcbService->collectRepayment($loan, $paymentAmount, [
+                    'payment_date' => $request->payment_date,
+                    'bank_account_id' => $request->bank_account_id,
+                    'msisdn' => $request->dcb_msisdn,
+                    'control_no' => $request->dcb_control_no,
+                    'settlement_type' => 'settlement',
+                    'calculation_method' => $loan->product->interest_method ?? 'flat_rate',
+                ]);
+
+                if (!($dcbResult['success'] ?? false)) {
+                    return redirect()->back()->with('error', $dcbResult['message'] ?? 'DCB settlement failed.');
+                }
+
+                if ($dcbResult['pending'] ?? false) {
+                    return redirect()->back()->with('success', 'DCB collection initiated. Loan will settle when customer approves payment on their phone.');
+                }
+
+                $result = ['success' => true, 'loan_closed' => true];
+            } else {
             // Prepare payment data based on source
             $paymentData = [
                 'payment_date' => $request->payment_date,
@@ -810,14 +959,12 @@ class LoanRepaymentController extends Controller
 
             if ($request->payment_source === 'bank') {
                 $bankAccount = BankAccount::findOrFail($request->bank_account_id);
-                
-                // Validate bank account is accessible by user's branches
+
                 $user = Auth::user();
-                $userBranchIds = $user->branches()->pluck('branches.id')->toArray();
-                if (!empty($userBranchIds) && !$bankAccount->branches()->whereIn('branches.id', $userBranchIds)->exists()) {
+                if (!$bankAccount->isAccessibleByUser($user)) {
                     return redirect()->back()->withErrors(['bank_account_id' => 'You do not have access to this bank account.']);
                 }
-                
+
                 $paymentData['bank_chart_account_id'] = $bankAccount->chart_account_id;
                 $paymentData['bank_account_id'] = $request->bank_account_id;
             } else {
@@ -825,6 +972,7 @@ class LoanRepaymentController extends Controller
             }
 
             $result = $this->repaymentService->processSettleRepayment($request->loan_id, $paymentAmount, $paymentData);
+            }
 
             if ($result['success']) {
                 $message = "Loan settled successfully. ";

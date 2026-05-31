@@ -100,28 +100,28 @@
         <div class="row">
             <div class="col-xl-3 col-md-6">
                 <div class="summary-card">
-                    <h3>Total Portfolio</h3>
-                    <p class="value" id="totalPortfolio">TZS {{ number_format(array_sum(array_column($parData, 'outstanding_balance')), 2) }}</p>
+                    <h3>Total outstanding (P+I)</h3>
+                    <p class="value" id="totalPortfolio">TZS {{ number_format(array_sum(array_column($parData, 'total_outstanding')), 2) }}</p>
                 </div>
             </div>
             <div class="col-xl-3 col-md-6">
                 <div class="summary-card">
-                    <h3>At Risk Amount</h3>
+                    <h3>At risk (PAR {{ $parDays }})</h3>
                     <p class="value" id="atRiskAmount">TZS {{ number_format(array_sum(array_column($parData, 'at_risk_amount')), 2) }}</p>
                 </div>
             </div>
             <div class="col-xl-3 col-md-6">
                 <div class="summary-card">
-                    <h3>PAR {{ $parDays }} Ratio</h3>
+                    <h3>PAR {{ $parDays }} ratio</h3>
                     <p class="value" id="parRatio">
-                        {{ array_sum(array_column($parData, 'outstanding_balance')) > 0 ? 
-                           number_format((array_sum(array_column($parData, 'at_risk_amount')) / array_sum(array_column($parData, 'outstanding_balance'))) * 100, 1) : '0' }}%
+                        {{ array_sum(array_column($parData, 'total_outstanding')) > 0 ?
+                           number_format((array_sum(array_column($parData, 'at_risk_amount')) / array_sum(array_column($parData, 'total_outstanding'))) * 100, 1) : '0' }}%
                     </p>
                 </div>
             </div>
             <div class="col-xl-3 col-md-6">
                 <div class="summary-card">
-                    <h3>Loans at Risk</h3>
+                    <h3>Loans at risk</h3>
                     <p class="value" id="loansAtRisk">
                         {{ count(array_filter($parData, function($item) { return $item['is_at_risk']; })) }} / {{ count($parData) }}
                     </p>
@@ -237,59 +237,58 @@
                     <div class="card-body">
                         @if(!empty($parData))
                             <div class="table-responsive">
-                                <table class="table table-striped table-hover" id="parTable">
+                                <table class="table table-striped table-hover table-sm" id="parTable">
                                     <thead>
                                         <tr>
-                                            <th style="width: 3%;">#</th>
-                                            <th style="width: 10%;">Customer</th>
-                                            <th style="width: 6%;">Customer No</th>
-                                            <th style="width: 7%;">Phone</th>
-                                            <th style="width: 6%;">Loan No</th>
-                                            <th style="width: 7%;">Loan Amount</th>
-                                            <th style="width: 6%;">Branch</th>
-                                            <th style="width: 6%;">Group</th>
-                                            <th style="width: 7%;">Officer</th>
-                                            <th style="width: 8%;">Outstanding</th>
-                                            <th style="width: 8%;">At Risk Amount</th>
-                                            <th style="width: 6%;">Risk %</th>
-                                            <th style="width: 5%;">Days</th>
-                                            <th style="width: 6%;">Risk Level</th>
-                                            <th style="width: 4%;">Status</th>
+                                            <th>#</th>
+                                            <th>Loan No</th>
+                                            <th>Borrower Name</th>
+                                            <th>Branch</th>
+                                            <th>Loan Officer</th>
+                                            <th>Loan Product</th>
+                                            <th>Disbursement Date</th>
+                                            <th>Maturity Date</th>
+                                            <th class="text-end">Principal O/s</th>
+                                            <th class="text-end">Interest O/s</th>
+                                            <th class="text-end">Total O/s</th>
+                                            <th class="text-end">Installment</th>
+                                            <th class="text-end">Amount Due</th>
+                                            <th class="text-end">Amount Paid</th>
+                                            <th class="text-end">Arrears</th>
+                                            <th class="text-center">DIA</th>
+                                            <th>PAR Category</th>
+                                            <th>Last Payment</th>
+                                            <th class="text-end">At risk</th>
+                                            <th class="text-center">PAR {{ $parDays }}</th>
                                         </tr>
                                     </thead>
                                     <tbody>
                                         @foreach($parData as $index => $row)
                                             <tr>
                                                 <td class="text-center">{{ $index + 1 }}</td>
-                                                <td>{{ $row['customer'] }}</td>
-                                                <td class="text-center">{{ $row['customer_no'] }}</td>
-                                                <td class="text-center">{{ $row['phone'] }}</td>
                                                 <td class="text-center">{{ $row['loan_no'] }}</td>
-                                                <td class="text-end">{{ number_format($row['loan_amount'], 0) }}</td>
+                                                <td>{{ $row['borrower_name'] }}</td>
                                                 <td>{{ $row['branch'] }}</td>
-                                                <td>{{ $row['group'] }}</td>
                                                 <td>{{ $row['loan_officer'] }}</td>
-                                                <td class="text-end">{{ number_format($row['outstanding_balance'], 2) }}</td>
+                                                <td>{{ $row['loan_product'] }}</td>
+                                                <td>{{ $row['disbursement_date'] }}</td>
+                                                <td>{{ $row['maturity_date'] }}</td>
+                                                <td class="text-end">{{ number_format($row['principal_outstanding'], 2) }}</td>
+                                                <td class="text-end">{{ number_format($row['interest_outstanding'], 2) }}</td>
+                                                <td class="text-end">{{ number_format($row['total_outstanding'], 2) }}</td>
+                                                <td class="text-end">{{ number_format($row['installment_amount'], 2) }}</td>
+                                                <td class="text-end">{{ number_format($row['amount_due'], 2) }}</td>
+                                                <td class="text-end">{{ number_format($row['amount_paid'], 2) }}</td>
+                                                <td class="text-end">{{ number_format($row['arrears_amount'], 2) }}</td>
+                                                <td class="text-center">{{ $row['days_in_arrears'] }}</td>
+                                                <td class="text-center"><span class="badge bg-secondary">{{ $row['par_category'] }}</span></td>
+                                                <td>{{ $row['last_payment_date'] }}</td>
                                                 <td class="text-end at-risk">{{ number_format($row['at_risk_amount'], 2) }}</td>
                                                 <td class="text-center">
-                                                    <span class="par-indicator 
-                                                        @if($row['risk_percentage'] == 0) par-safe 
-                                                        @elseif($row['risk_percentage'] < 50) par-warning 
-                                                        @else par-danger @endif">
-                                                    </span>
-                                                    {{ $row['risk_percentage'] }}%
-                                                </td>
-                                                <td class="text-center">{{ $row['days_in_arrears'] }}</td>
-                                                <td class="text-center">
-                                                    <span class="risk-badge risk-{{ strtolower($row['risk_level']) }}">
-                                                        {{ $row['risk_level'] }}
-                                                    </span>
-                                                </td>
-                                                <td class="text-center">
                                                     @if($row['is_at_risk'])
-                                                        <i class="bx bx-error-circle text-danger" title="At Risk"></i>
+                                                        <i class="bx bx-error-circle text-danger" title="Meets PAR {{ $parDays }}"></i>
                                                     @else
-                                                        <i class="bx bx-check-circle text-success" title="Safe"></i>
+                                                        <i class="bx bx-check-circle text-success" title="Below PAR {{ $parDays }}"></i>
                                                     @endif
                                                 </td>
                                             </tr>
@@ -297,16 +296,19 @@
                                     </tbody>
                                     <tfoot>
                                         <tr class="table-dark">
-                                            <td colspan="9" class="text-center fw-bold">TOTALS</td>
-                                            <td class="text-end fw-bold">{{ number_format(array_sum(array_column($parData, 'outstanding_balance')), 2) }}</td>
+                                            <td colspan="8" class="text-center fw-bold">TOTALS</td>
+                                            <td class="text-end fw-bold">{{ number_format(array_sum(array_column($parData, 'principal_outstanding')), 2) }}</td>
+                                            <td class="text-end fw-bold">{{ number_format(array_sum(array_column($parData, 'interest_outstanding')), 2) }}</td>
+                                            <td class="text-end fw-bold">{{ number_format(array_sum(array_column($parData, 'total_outstanding')), 2) }}</td>
+                                            <td class="text-end fw-bold">{{ number_format(array_sum(array_column($parData, 'installment_amount')), 2) }}</td>
+                                            <td class="text-end fw-bold">{{ number_format(array_sum(array_column($parData, 'amount_due')), 2) }}</td>
+                                            <td class="text-end fw-bold">{{ number_format(array_sum(array_column($parData, 'amount_paid')), 2) }}</td>
+                                            <td class="text-end fw-bold">{{ number_format(array_sum(array_column($parData, 'arrears_amount')), 2) }}</td>
+                                            <td class="text-center fw-bold">—</td>
+                                            <td class="text-center fw-bold">—</td>
+                                            <td class="text-center fw-bold">—</td>
                                             <td class="text-end fw-bold">{{ number_format(array_sum(array_column($parData, 'at_risk_amount')), 2) }}</td>
-                                            <td class="text-center fw-bold">
-                                                {{ array_sum(array_column($parData, 'outstanding_balance')) > 0 ? 
-                                                   number_format((array_sum(array_column($parData, 'at_risk_amount')) / array_sum(array_column($parData, 'outstanding_balance'))) * 100, 1) : '0' }}%
-                                            </td>
-                                            <td class="text-center fw-bold">-</td>
-                                            <td class="text-center fw-bold">-</td>
-                                            <td class="text-center fw-bold">{{ count($parData) }} Loans</td>
+                                            <td class="text-center fw-bold">{{ count($parData) }} loans</td>
                                         </tr>
                                     </tfoot>
                                 </table>

@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Customer;
 use App\Models\Loan;
 use App\Models\LoanProduct;
+use App\Models\Fee;
 use App\Models\ContributionAccount;
 use App\Models\ContributionProduct;
 use App\Models\ShareAccount;
@@ -18,6 +19,7 @@ use App\Models\LoanFile;
 use App\Models\Receipt;
 use App\Models\Company;
 use App\Models\Announcement;
+use App\Support\InterestRateConverter;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\DB;
@@ -1325,6 +1327,8 @@ class CustomerAuthController extends Controller
                 'group_id' => 'nullable|exists:groups,id',
                 'sector' => 'required|string',
                 'interest_cycle' => 'required|string|in:daily,weekly,monthly,quarterly,semi_annually,annually',
+                'custom_fee_amounts' => 'nullable|array',
+                'custom_fee_amounts.*' => 'nullable|numeric|min:0',
             ]);
 
             $product = LoanProduct::findOrFail($validated['product_id']);
@@ -1358,6 +1362,27 @@ class CustomerAuthController extends Controller
                     'message' => 'Period must be between ' . $product->minimum_period . ' and ' . $product->maximum_period . ' months.',
                     'status' => 400
                 ], 400);
+            }
+
+            $feeIds = is_array($product->fees_ids) ? $product->fees_ids : (json_decode($product->fees_ids ?? '[]', true) ?: []);
+            $customFees = Fee::whereIn('id', $feeIds)->where('fee_type', 'custom')->where('status', 'active')->get();
+            $input = $request->input('custom_fee_amounts', []);
+            $customFeeAmounts = [];
+            foreach ($customFees as $fee) {
+                if (!array_key_exists($fee->id, $input) && !array_key_exists((string) $fee->id, $input)) {
+                    return response()->json([
+                        'message' => 'Amount is required for custom fee: ' . $fee->name,
+                        'status' => 422,
+                    ], 422);
+                }
+                $val = $input[$fee->id] ?? $input[(string) $fee->id];
+                if (!is_numeric($val) || (float) $val < 0) {
+                    return response()->json([
+                        'message' => 'Invalid amount for custom fee: ' . $fee->name,
+                        'status' => 422,
+                    ], 422);
+                }
+                $customFeeAmounts[(int) $fee->id] = max(0, (float) $val);
             }
 
             // Check cash collateral if required
@@ -1404,11 +1429,17 @@ class CustomerAuthController extends Controller
 
             DB::beginTransaction();
 
+            // Monthly rate from form → per-period rate (same as web direct loan / application)
+            $convertedInterest = InterestRateConverter::fromMonthlyToCycle(
+                (float) $validated['interest'],
+                $validated['interest_cycle']
+            );
+
             // Create loan application with 'applied' status
             $loan = Loan::create([
                 'product_id' => $validated['product_id'],
                 'period' => $validated['period'],
-                'interest' => $validated['interest'],
+                'interest' => $convertedInterest,
                 'amount' => $validated['amount'],
                 'customer_id' => $validated['customer_id'],
                 'group_id' => $groupId,
@@ -1424,11 +1455,12 @@ class CustomerAuthController extends Controller
                 'first_repayment_date' => null,
                 'last_repayment_date' => null,
                 'disbursed_on' => null,
-                'top_up_id' => null
+                'top_up_id' => null,
+                'custom_fee_amounts' => !empty($customFeeAmounts) ? $customFeeAmounts : null,
             ]);
 
-            // Calculate interest amount
-            $interestAmount = $loan->calculateInterestAmount($validated['interest']);
+            // Calculate interest amount using converted per-period rate
+            $interestAmount = $loan->calculateInterestAmount($convertedInterest);
             $loan->update([
                 'interest_amount' => $interestAmount,
                 'amount_total' => $validated['amount'] + $interestAmount,

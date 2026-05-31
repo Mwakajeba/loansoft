@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Accounting\Reports;
 
 use App\Http\Controllers\Controller;
+use App\Support\Accounting\GlTransactionReportFilter;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -152,6 +153,8 @@ class AccountingNotesReportController extends Controller
             ->where('account_class_groups.company_id', $company->id)
             ->where('gl_transactions.date', '<=', $asOfDate);
 
+        GlTransactionReportFilter::apply($query);
+
         // Branch filter: 'all' means all assigned branches
         $assignedBranchIds = Auth::user()->branches()->pluck('branches.id')->toArray();
         if ($branchId === 'all') {
@@ -253,7 +256,7 @@ class AccountingNotesReportController extends Controller
         $user = Auth::user();
         $company = $user->company;
 
-        $query = DB::table('gl_transactions')
+        $query = GlTransactionReportFilter::apply(DB::table('gl_transactions'))
             ->join('chart_accounts', 'gl_transactions.chart_account_id', '=', 'chart_accounts.id')
             ->join('account_class_groups', 'chart_accounts.account_class_group_id', '=', 'account_class_groups.id')
             ->where('account_class_groups.company_id', $company->id)
@@ -301,7 +304,7 @@ class AccountingNotesReportController extends Controller
         $company = $user->company;
 
         // Get actual contingent liabilities from GL transactions
-        $query = DB::table('gl_transactions')
+        $query = GlTransactionReportFilter::apply(DB::table('gl_transactions'))
             ->join('chart_accounts', 'gl_transactions.chart_account_id', '=', 'chart_accounts.id')
             ->join('account_class_groups', 'chart_accounts.account_class_group_id', '=', 'account_class_groups.id')
             ->where('account_class_groups.company_id', $company->id)
@@ -389,7 +392,7 @@ class AccountingNotesReportController extends Controller
         $company = $user->company;
 
         // Get actual related party transactions from GL transactions
-        $query = DB::table('gl_transactions')
+        $query = GlTransactionReportFilter::apply(DB::table('gl_transactions'))
             ->join('chart_accounts', 'gl_transactions.chart_account_id', '=', 'chart_accounts.id')
             ->join('account_class_groups', 'chart_accounts.account_class_group_id', '=', 'account_class_groups.id')
             ->where('account_class_groups.company_id', $company->id)

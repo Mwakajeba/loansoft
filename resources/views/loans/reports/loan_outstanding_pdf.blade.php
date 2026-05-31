@@ -14,7 +14,7 @@
         .report-title { font-size: 12px; font-weight: bold; color: #000; margin: 8px 0 3px 0; text-transform: uppercase; }
         .report-info { font-size: 9px; color: #000; margin: 2px 0; }
         table { width: 100%; border-collapse: collapse; margin-top: 8px; }
-        th, td { border: 1px solid #000; padding: 3px 2px; text-align: left; font-size: 7px; color: #000; }
+        th, td { border: 1px solid #000; padding: 2px 1px; text-align: left; font-size: 6px; color: #000; }
         th { background-color: #000; color: #fff; font-weight: bold; text-align: center; }
         .text-right { text-align: right; }
         .text-center { text-align: center; }
@@ -63,94 +63,67 @@
     <table>
         <thead>
             <tr>
-                <th style="width: 2%;">S/N</th>
-                <th style="width: 8%;">Customer</th>
-                <th style="width: 5%;">Cust No</th>
-                <th style="width: 5%;">Phone</th>
-                <th style="width: 5%;">Loan No</th>
-                <th style="width: 6%;">Disbursed</th>
-                <th style="width: 6%;">Interest</th>
-                <th style="width: 5%;">Disb Date</th>
-                <th style="width: 5%;">Expiry</th>
-                <th style="width: 6%;">Branch</th>
-                <th style="width: 6%;">Officer</th>
-                <th style="width: 6%;">Principal Paid</th>
-                <th style="width: 5%;">Int Paid</th>
-                <th style="width: 6%;">Out Principal</th>
-                <th style="width: 5%;">Out Interest</th>
-                <th style="width: 5%;">Accrued Int</th>
-                <th style="width: 5%;">Not Due Int</th>
-                <th style="width: 6%;">Out Balance</th>
+                <th>Customer</th><th>Cust No</th><th>Phone</th><th>Loan No</th><th>Expires</th>
+                <th>Branch</th><th>Officer</th><th>Disb Date</th><th>Disb Amt</th><th>Tot Int</th>
+                <th>Tot P+I</th><th>Exp Fees</th><th>Tot Pen</th>
+                <th>Princ Paid</th><th>Int Paid</th><th>Fees Paid</th><th>Pen Paid</th>
+                <th>O/s Princ</th><th>O/s Int</th><th>O/s Fees</th><th>O/s Pen</th><th>Other</th><th>O/s Bal</th>
             </tr>
         </thead>
         <tbody>
-            @php
-                $totalDisbursed = 0;
-                $totalInterest = 0;
-                $totalPrincipalPaid = 0;
-                $totalInterestPaid = 0;
-                $totalOutPrincipal = 0;
-                $totalOutInterest = 0;
-                $totalAccrued = 0;
-                $totalNotDue = 0;
-                $totalOutBalance = 0;
-                $count = 0;
-            @endphp
+            @php $count = 0; @endphp
             @forelse($outstandingData as $index => $row)
-                @php
-                    $count++;
-                    $totalDisbursed += $row['amount'] ?? 0;
-                    $totalInterest += $row['interest'] ?? 0;
-                    $totalPrincipalPaid += $row['principal_paid'] ?? 0;
-                    $totalInterestPaid += $row['interest_paid'] ?? 0;
-                    $outPrincipal = ($row['amount'] ?? 0) - ($row['principal_paid'] ?? 0);
-                    $totalOutPrincipal += $outPrincipal;
-                    $totalOutInterest += $row['outstanding_interest'] ?? 0;
-                    $totalAccrued += $row['accrued_interest'] ?? 0;
-                    $totalNotDue += $row['not_due_interest'] ?? 0;
-                    $totalOutBalance += $row['outstanding_balance'] ?? 0;
-                @endphp
+                @php $count++; @endphp
                 <tr>
-                    <td class="text-center">{{ $index + 1 }}</td>
                     <td>{{ $row['customer'] }}</td>
                     <td class="text-center">{{ $row['customer_no'] }}</td>
                     <td class="text-center">{{ $row['phone'] }}</td>
                     <td class="text-center">{{ $row['loan_no'] }}</td>
-                    <td class="text-right">{{ number_format($row['amount'], 0) }}</td>
-                    <td class="text-right">{{ number_format($row['interest'], 0) }}</td>
-                    <td class="text-center">{{ $row['disbursed_no'] }}</td>
-                    <td class="text-center">{{ $row['expiry'] }}</td>
+                    <td class="text-center">{{ $row['expires'] }}</td>
                     <td>{{ $row['branch'] }}</td>
                     <td>{{ $row['loan_officer'] }}</td>
-                    <td class="text-right">{{ number_format($row['principal_paid'], 0) }}</td>
-                    <td class="text-right">{{ number_format($row['interest_paid'], 0) }}</td>
-                    <td class="text-right">{{ number_format($outPrincipal, 0) }}</td>
-                    <td class="text-right">{{ number_format($row['outstanding_interest'], 0) }}</td>
-                    <td class="text-right">{{ number_format($row['accrued_interest'], 0) }}</td>
-                    <td class="text-right">{{ number_format($row['not_due_interest'], 0) }}</td>
-                    <td class="text-right">{{ number_format($row['outstanding_balance'], 0) }}</td>
+                    <td class="text-center">{{ $row['disbursed_date'] }}</td>
+                    <td class="text-right">{{ number_format($row['disbursed_amount'], 2) }}</td>
+                    <td class="text-right">{{ number_format($row['total_interest'], 2) }}</td>
+                    <td class="text-right">{{ number_format($row['total_principal_interest'], 2) }}</td>
+                    <td class="text-right">{{ number_format($row['expected_fees'] ?? 0, 2) }}</td>
+                    <td class="text-right">{{ number_format($row['total_penalties'] ?? 0, 2) }}</td>
+                    <td class="text-right">{{ number_format($row['principal_paid'], 2) }}</td>
+                    <td class="text-right">{{ number_format($row['interest_paid'], 2) }}</td>
+                    <td class="text-right">{{ number_format($row['fees_paid'] ?? 0, 2) }}</td>
+                    <td class="text-right">{{ number_format($row['penalty_paid'] ?? 0, 2) }}</td>
+                    <td class="text-right">{{ number_format($row['outstanding_principal'], 2) }}</td>
+                    <td class="text-right">{{ number_format($row['outstanding_interest'], 2) }}</td>
+                    <td class="text-right">{{ number_format($row['outstanding_fees'] ?? 0, 2) }}</td>
+                    <td class="text-right">{{ number_format($row['outstanding_penalty'] ?? 0, 2) }}</td>
+                    <td class="text-right">{{ number_format($row['other_outstanding'] ?? 0, 2) }}</td>
+                    <td class="text-right">{{ number_format($row['outstanding_balance'], 2) }}</td>
                 </tr>
             @empty
-                <tr><td colspan="18" class="text-center">No records found</td></tr>
+                <tr><td colspan="23" class="text-center">No records found</td></tr>
             @endforelse
-            <!-- Total Row -->
+            @if(!empty($outstandingData))
             <tr class="total-row">
-                <td class="text-center" colspan="2"><strong>TOTAL</strong></td>
-                <td colspan="3" class="text-right"><strong>{{ number_format($count) }} Records</strong></td>
-                <td class="text-right"><strong>{{ number_format($totalDisbursed, 0) }}</strong></td>
-                <td class="text-right"><strong>{{ number_format($totalInterest, 0) }}</strong></td>
-                <td colspan="4"></td>
-                <td class="text-right"><strong>{{ number_format($totalPrincipalPaid, 0) }}</strong></td>
-                <td class="text-right"><strong>{{ number_format($totalInterestPaid, 0) }}</strong></td>
-                <td class="text-right"><strong>{{ number_format($totalOutPrincipal, 0) }}</strong></td>
-                <td class="text-right"><strong>{{ number_format($totalOutInterest, 0) }}</strong></td>
-                <td class="text-right"><strong>{{ number_format($totalAccrued, 0) }}</strong></td>
-                <td class="text-right"><strong>{{ number_format($totalNotDue, 0) }}</strong></td>
-                <td class="text-right"><strong>{{ number_format($totalOutBalance, 0) }}</strong></td>
+                <td colspan="8" class="text-center"><strong>TOTALS</strong></td>
+                <td class="text-right"><strong>{{ number_format($summary['total_disbursed'] ?? 0, 2) }}</strong></td>
+                <td class="text-right"><strong>{{ number_format($summary['total_interest'] ?? 0, 2) }}</strong></td>
+                <td class="text-right"><strong>{{ number_format($summary['total_principal_interest'] ?? 0, 2) }}</strong></td>
+                <td class="text-right"><strong>{{ number_format($summary['total_expected_fees'] ?? 0, 2) }}</strong></td>
+                <td class="text-right"><strong>{{ number_format($summary['total_penalties'] ?? 0, 2) }}</strong></td>
+                <td class="text-right"><strong>{{ number_format($summary['total_principal_paid'] ?? 0, 2) }}</strong></td>
+                <td class="text-right"><strong>{{ number_format($summary['total_interest_paid'] ?? 0, 2) }}</strong></td>
+                <td class="text-right"><strong>{{ number_format($summary['total_fees_paid'] ?? 0, 2) }}</strong></td>
+                <td class="text-right"><strong>{{ number_format($summary['total_penalty_paid'] ?? 0, 2) }}</strong></td>
+                <td class="text-right"><strong>{{ number_format($summary['total_outstanding_principal'] ?? 0, 2) }}</strong></td>
+                <td class="text-right"><strong>{{ number_format($summary['total_outstanding_interest'] ?? 0, 2) }}</strong></td>
+                <td class="text-right"><strong>{{ number_format($summary['total_outstanding_fees'] ?? 0, 2) }}</strong></td>
+                <td class="text-right"><strong>{{ number_format($summary['total_outstanding_penalty'] ?? 0, 2) }}</strong></td>
+                <td class="text-right"><strong>0.00</strong></td>
+                <td class="text-right"><strong>{{ number_format($summary['total_outstanding_balance'] ?? 0, 2) }}</strong></td>
             </tr>
+            @endif
         </tbody>
     </table>
-
     <!-- Footer -->
     <div class="footer">
         <p><strong>&copy; {{ date('Y') }} {{ $company->name ?? config('app.name', 'SmartFinance') }}. All Rights Reserved.</strong></p>

@@ -165,10 +165,13 @@
                                 <th>Branch</th>
                                 <th>Group</th>
                                 <th>Loan Officer</th>
-                                <th>Arrears Amount</th>
+                                <th style="background:#ffa500;">Loan Fees</th>
+                                <th style="background:#8b4513;">Penalties</th>
+                                <th style="background:#808000;color:#fff;">Instalment in Arrears</th>
+                                <th style="background:#ff0000;color:#fff;">Total Balance in Arrears</th>
                                 <th>Days in Arrears</th>
-                                <th>First Overdue</th>
-                                <th>Overdue Items</th>
+                                <th>First Overdue Date</th>
+                                <th>No of Instalments</th>
                                 <th>Severity</th>
                             </tr>
                         </thead>
@@ -186,16 +189,13 @@
                                     <td>{{ $arrears['branch'] }}</td>
                                     <td>{{ $arrears['group'] }}</td>
                                     <td>{{ $arrears['loan_officer'] }}</td>
-                                    <td class="text-end">
-                                        <span class="fw-bold text-danger">TZS {{ number_format($arrears['arrears_amount'], 2) }}</span>
-                                    </td>
-                                    <td class="text-center">
-                                        <span class="badge bg-warning text-dark">{{ $arrears['days_in_arrears'] }} days</span>
-                                    </td>
+                                    <td class="text-end">{{ number_format($arrears['loan_fees'] ?? 0, 2) }}</td>
+                                    <td class="text-end">{{ number_format($arrears['penalties'] ?? 0, 2) }}</td>
+                                    <td class="text-end fw-bold">{{ number_format($arrears['instalment_in_arrears'] ?? 0, 2) }}</td>
+                                    <td class="text-end fw-bold text-danger">{{ number_format($arrears['total_balance_in_arrears'] ?? 0, 2) }}</td>
+                                    <td class="text-center">{{ $arrears['days_in_arrears'] }}</td>
                                     <td>{{ $arrears['first_overdue_date'] }}</td>
-                                    <td class="text-center">
-                                        <span class="badge bg-info">{{ $arrears['overdue_schedules_count'] }}</span>
-                                    </td>
+                                    <td class="text-center">{{ $arrears['no_of_instalments'] ?? 0 }}</td>
                                     <td class="text-center">
                                         @php
                                             $badgeClass = match($arrears['arrears_severity']) {
@@ -212,12 +212,24 @@
                                 @endforeach
                             @else
                                 <tr>
-                                    <td colspan="15" class="text-center text-muted py-4">
+                                    <td colspan="18" class="text-center text-muted py-4">
                                         <i class="bx bx-info-circle me-2"></i>No loans in arrears found
                                     </td>
                                 </tr>
                             @endif
                         </tbody>
+                        @if(isset($arrearsData) && count($arrearsData) > 0)
+                        <tfoot class="table-dark">
+                            <tr>
+                                <th colspan="10" class="text-center">TOTALS</th>
+                                <th class="text-end">{{ number_format(array_sum(array_column($arrearsData, 'loan_fees')), 2) }}</th>
+                                <th class="text-end">{{ number_format(array_sum(array_column($arrearsData, 'penalties')), 2) }}</th>
+                                <th class="text-end">{{ number_format(array_sum(array_column($arrearsData, 'instalment_in_arrears')), 2) }}</th>
+                                <th class="text-end">{{ number_format(array_sum(array_column($arrearsData, 'total_balance_in_arrears')), 2) }}</th>
+                                <th colspan="4"></th>
+                            </tr>
+                        </tfoot>
+                        @endif
                     </table>
                 </div>
             </div>
@@ -251,7 +263,7 @@
         
         if (arrearsData.length > 0) {
             let totalLoans = arrearsData.length;
-            let totalArrears = arrearsData.reduce((sum, row) => sum + parseFloat(row.arrears_amount || 0), 0);
+            let totalArrears = arrearsData.reduce((sum, row) => sum + parseFloat(row.total_balance_in_arrears || 0), 0);
             let avgDays = Math.round(arrearsData.reduce((sum, row) => sum + parseInt(row.days_in_arrears || 0), 0) / totalLoans);
             let criticalCases = arrearsData.filter(row => parseInt(row.days_in_arrears || 0) > 90).length;
             
