@@ -24,6 +24,7 @@ use App\Models\Role;
 use App\Models\User;
 use Illuminate\Http\Request;
 use App\Services\LoanRestructuringService;
+use App\Services\LoanRepaymentService;
 use App\Jobs\BulkLoanImportJob;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -2237,11 +2238,7 @@ class LoanController extends Controller
         try {
             DB::transaction(function () use ($loan, $validated, $product, $userId, $branchId) {
                 $loanId = $loan->id;
-                // Check for repayments
-                $repaymentCount = \DB::table('repayments')->where('loan_id', $loanId)->count();
-                if ($repaymentCount > 0) {
-                    throw new \Exception('This loan has repayments. Please delete repayments first before updating the loan.');
-                }
+                (new LoanRepaymentService())->deleteAllRepaymentsForLoan($loanId);
                 // Check for receipts
                 $receiptCount = \DB::table('receipts')
                     ->where('reference_number', $loanId)
@@ -2496,11 +2493,7 @@ class LoanController extends Controller
 
             // If loan is active, perform full cleanup (receipts/journals/etc). Otherwise, delete loan directly
             if ($loan->status === Loan::STATUS_ACTIVE) {
-                // Check for repayments
-                $repaymentCount = \DB::table('repayments')->where('loan_id', $loanId)->count();
-                if ($repaymentCount > 0) {
-                    return redirect()->route('loans.list')->withErrors(['error' => 'This loan has repayments. Please delete repayments first before deleting the loan.']);
-                }
+                (new LoanRepaymentService())->deleteAllRepaymentsForLoan($loanId);
 
                 \DB::transaction(function () use ($loan, $loanId) {
                     // Delete Receipts and Receipt Items related to this loan disbursement
