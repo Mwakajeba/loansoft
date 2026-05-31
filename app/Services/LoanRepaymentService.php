@@ -1794,14 +1794,109 @@ class LoanRepaymentService
     }
 
     /**
+     * Remove all repayments for a loan (including soft-deleted) with receipts, journals, and GL entries.
+     * Used when deleting or fully resetting a loan — does not restore cash deposits.
+     */
+    public function deleteAllRepaymentsForLoan(int $loanId): void
+    {
+        DB::transaction(function () use ($loanId) {
+            $repaymentIds = Repayment::withTrashed()
+                ->where('loan_id', $loanId)
+                ->pluck('id')
+                ->all();
+
+            $receiptIds = Repayment::withTrashed()
+                ->where('loan_id', $loanId)
+                ->whereNotNull('receipt_id')
+                ->pluck('receipt_id')
+                ->unique()
+                ->values()
+                ->all();
+
+            $loanReceiptIds = Receipt::withTrashed()
+                ->where('reference', $loanId)
+                ->whereIn('reference_type', ['loan_repayment', 'Repayment'])
+                ->pluck('id')
+                ->all();
+
+            if (!empty($repaymentIds)) {
+                $repaymentReceiptIds = Receipt::withTrashed()
+                    ->whereIn('reference', $repaymentIds)
+                    ->where('reference_type', 'loan_repayment')
+                    ->pluck('id')
+                    ->all();
+                $receiptIds = array_values(array_unique(array_merge($receiptIds, $loanReceiptIds, $repaymentReceiptIds)));
+            } else {
+                $receiptIds = array_values(array_unique(array_merge($receiptIds, $loanReceiptIds)));
+            }
+
+            foreach ($receiptIds as $receiptId) {
+                $receipt = Receipt::withTrashed()->find($receiptId);
+                if ($receipt) {
+                    $this->permanentlyDeleteReceipt($receipt);
+                }
+            }
+
+            if (!empty($repaymentIds)) {
+                $journalIds = Journal::whereIn('reference', $repaymentIds)
+                    ->where('reference_type', 'Withdrawal')
+                    ->pluck('id')
+                    ->all();
+
+                if (!empty($journalIds)) {
+                    JournalItem::whereIn('journal_id', $journalIds)->delete();
+                    GlTransaction::whereIn('transaction_id', $journalIds)
+                        ->where('transaction_type', 'journal repayment')
+                        ->delete();
+                    Journal::whereIn('id', $journalIds)->delete();
+                }
+
+                GlTransaction::whereIn('transaction_id', $repaymentIds)
+                    ->whereIn('transaction_type', ['receipt', 'journal repayment', 'Settle Interest', 'Settle Principal'])
+                    ->delete();
+
+                Repayment::withTrashed()->where('loan_id', $loanId)->forceDelete();
+            }
+
+            Log::info('All repayments removed for loan', [
+                'loan_id' => $loanId,
+                'repayment_count' => count($repaymentIds),
+                'receipt_count' => count($receiptIds),
+            ]);
+        });
+    }
+
+    /**
      * Delete receipt and all associated records for a repayment
      */
     private function deleteRepaymentReceipt($repayment)
     {
-        // Find receipt by reference (repayment ID) and reference_type
-        $receipt = Receipt::where('reference', $repayment->id)
-            ->where('reference_type', 'loan_repayment')
-            ->first();
+        $receipt = null;
+
+        if ($repayment->receipt_id) {
+            $receipt = Receipt::find($repayment->receipt_id);
+        }
+
+        if (!$receipt) {
+            $receipt = Receipt::where('reference', $repayment->id)
+                ->where('reference_type', 'loan_repayment')
+                ->first();
+        }
+
+        if (!$receipt && $repayment->loan_id) {
+            $receipt = Receipt::where('reference', $repayment->loan_id)
+                ->where('reference_type', 'loan_repayment')
+                ->first();
+
+            if ($receipt) {
+                $othersOnReceipt = Repayment::where('receipt_id', $receipt->id)
+                    ->where('id', '!=', $repayment->id)
+                    ->exists();
+                if ($othersOnReceipt) {
+                    $receipt = null;
+                }
+            }
+        }
 
         if (!$receipt) {
             Log::info('No receipt found for repayment', ['repayment_id' => $repayment->id]);
