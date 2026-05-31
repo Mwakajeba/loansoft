@@ -25,6 +25,7 @@ use App\Models\User;
 use Illuminate\Http\Request;
 use App\Services\LoanRestructuringService;
 use App\Services\LoanRepaymentService;
+use App\Services\LoanDeletionService;
 use App\Jobs\BulkLoanImportJob;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -2477,23 +2478,6 @@ class LoanController extends Controller
     }
 
 
-    /**
-     * Delete child rows that reference loans without ON DELETE CASCADE.
-     */
-    protected function deleteLoanDependentRecords(int $loanId): void
-    {
-        if (\Schema::hasTable('loan_topups')) {
-            \DB::table('loan_topups')
-                ->where('old_loan_id', $loanId)
-                ->orWhere('new_loan_id', $loanId)
-                ->delete();
-        }
-
-        if (\Schema::hasTable('loan_writeoffs')) {
-            \DB::table('loan_writeoffs')->where('loan_id', $loanId)->delete();
-        }
-    }
-
     public function destroy($encodedId)
     {
         try {
@@ -2505,101 +2489,8 @@ class LoanController extends Controller
 
             // Fetch the loan
             $loan = Loan::findOrFail($decoded[0]);
-            Log::info("=== LOAN EDIT METHOD ===", ["encoded_id" => $encodedId, "loan_id" => $loan->id, "loan_data" => ["amount" => $loan->amount, "interest" => $loan->interest, "period" => $loan->period, "interest_cycle" => $loan->interest_cycle, "customer_id" => $loan->customer_id, "group_id" => $loan->group_id, "product_id" => $loan->product_id, "bank_account_id" => $loan->bank_account_id, "loan_officer_id" => $loan->loan_officer_id, "sector" => $loan->sector]]);
-            $loanId = $loan->id;
-
-            // If loan is active, perform full cleanup (receipts/journals/etc). Otherwise, delete loan directly
-            if ($loan->status === Loan::STATUS_ACTIVE) {
-                (new LoanRepaymentService())->deleteAllRepaymentsForLoan($loanId);
-
-                \DB::transaction(function () use ($loan, $loanId) {
-                    // Delete Receipts and Receipt Items related to this loan disbursement
-                    $receiptIds = \DB::table('receipts')
-                        ->where('reference_type', 'Loan Disbursement')
-                        ->where('reference_number', $loanId)
-                        ->pluck('id')
-                        ->toArray();
-                    if (!empty($receiptIds)) {
-                        \DB::table('receipt_items')->whereIn('receipt_id', $receiptIds)->delete();
-                        \DB::table('receipts')->whereIn('id', $receiptIds)->delete();
-                    }
-
-                    // get all the loan schedule ids
-                    $scheduleIds = \DB::table('loan_schedules')->where('loan_id', $loanId)->pluck('id')->toArray();
-
-                    // Delete GL Transactions for this loan
-                    \DB::table('gl_transactions')
-                        ->where('transaction_id', $loanId)
-                        ->where('transaction_type', 'Loan Disbursement')
-                        ->delete();
-
-                    // delete penalty gl transactions
-                    if (!empty($scheduleIds)) {
-                        \DB::table('gl_transactions')
-                            ->whereIn('transaction_id', $scheduleIds)
-                            ->where('transaction_type', 'Penalty')
-                            ->delete();
-
-                        // delete interest gl transactions
-                        \DB::table('gl_transactions')
-                            ->whereIn('transaction_id', $scheduleIds)
-                            ->where('transaction_type', 'Mature Interest')
-                            ->delete();
-                    }
-
-                    // Delete Payments and PaymentItems for this loan
-                    $payments = \DB::table('payments')
-                        ->where('reference_type', 'Loan Payment')
-                        ->where('reference', $loanId)
-                        ->get();
-                    $paymentIds = $payments->pluck('id')->toArray();
-                    if (!empty($paymentIds)) {
-                        \DB::table('payment_items')->whereIn('payment_id', $paymentIds)->delete();
-                    }
-                    \DB::table('payments')
-                        ->where('reference_type', 'Loan Payment')
-                        ->where('reference', $loanId)
-                        ->delete();
-
-                    // Delete Loan Schedule
-                    \DB::table('loan_schedules')->where('loan_id', $loanId)->delete();
-
-                    // Delete Journals and JournalItems if table exists
-                    if (\Schema::hasTable('journals')) {
-                        $journalsQuery = \DB::table('journals')
-                            ->where('reference_type', 'Loan Disbursement')
-                            ->where(function ($query) use ($loanId) {
-                                // force string comparison to avoid numeric coercion errors
-                                $query->where('reference', (string) $loanId);
-                                if (\Schema::hasColumn('journals', 'reference_number')) {
-                                    $query->orWhere('reference_number', (string) $loanId);
-                                }
-                            });
-
-                        $journalIds = $journalsQuery->pluck('id')->toArray();
-
-                        if (!empty($journalIds) && \Schema::hasTable('journal_items')) {
-                            \DB::table('journal_items')->whereIn('journal_id', $journalIds)->delete();
-                        }
-
-                        if (!empty($journalIds)) {
-                            \DB::table('journals')->whereIn('id', $journalIds)->delete();
-                        }
-                    }
-
-                    $this->deleteLoanDependentRecords($loanId);
-
-                    // Finally delete the loan
-                    $loan->delete();
-                });
-            } else {
-                // Non-active loans: just delete the loan and its schedules, leave receipts/journals intact
-                \DB::transaction(function () use ($loan, $loanId) {
-                    \DB::table('loan_schedules')->where('loan_id', $loanId)->delete();
-                    $this->deleteLoanDependentRecords($loanId);
-                    $loan->delete();
-                });
-            }
+            Log::info("=== LOAN DELETE ===", ["encoded_id" => $encodedId, "loan_id" => $loan->id]);
+            (new LoanDeletionService())->deletePermanently($loan->id);
 
             return redirect()->route('loans.by-status', 'applied')->with('success', 'Loan and related records deleted successfully.');
         } catch (\Throwable $e) {
