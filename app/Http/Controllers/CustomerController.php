@@ -13,6 +13,7 @@ use App\Models\Region;
 use App\Models\District;
 use App\Models\User;
 use App\Models\CashCollateralType;
+use App\Models\Receipt;
 use App\Models\Filetype;
 use App\Services\LoanPenaltyService;
 use App\Exports\CustomerBulkUploadSampleExport;
@@ -23,6 +24,7 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Spatie\Permission\Models\Role;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Vinkla\Hashids\Facades\Hashids;
 use Yajra\DataTables\Facades\DataTables;
 use Maatwebsite\Excel\Facades\Excel;
@@ -587,6 +589,135 @@ class CustomerController extends Controller
         }
     }
 
+    /**
+     * Remove financial and activity records for a customer (when they have no loans).
+     */
+    protected function deleteCustomerTransactionalData(int $customerId): void
+    {
+        if (Schema::hasTable('repayments')) {
+            $repaymentIds = DB::table('repayments')->where('customer_id', $customerId)->pluck('id')->all();
+            if (!empty($repaymentIds) && Schema::hasTable('receipts')) {
+                $repaymentReceiptIds = DB::table('receipts')
+                    ->whereIn('reference', $repaymentIds)
+                    ->where('reference_type', 'loan_repayment')
+                    ->pluck('id')
+                    ->all();
+                if (!empty($repaymentReceiptIds)) {
+                    DB::table('gl_transactions')
+                        ->whereIn('transaction_id', $repaymentReceiptIds)
+                        ->whereIn('transaction_type', ['receipt', 'receipt_reversal'])
+                        ->delete();
+                    if (Schema::hasTable('receipt_items')) {
+                        DB::table('receipt_items')->whereIn('receipt_id', $repaymentReceiptIds)->delete();
+                    }
+                    DB::table('receipts')->whereIn('id', $repaymentReceiptIds)->delete();
+                }
+            }
+            DB::table('gl_transactions')
+                ->whereIn('transaction_id', $repaymentIds)
+                ->delete();
+            DB::table('repayments')->where('customer_id', $customerId)->delete();
+        }
+
+        if (Schema::hasTable('receipts')) {
+            $receiptIds = Receipt::withTrashed()
+                ->where(function ($query) use ($customerId) {
+                    $query->where('customer_id', $customerId)
+                        ->orWhere(function ($q) use ($customerId) {
+                            $q->where('payee_type', 'customer')->where('payee_id', $customerId);
+                        });
+                })
+                ->pluck('id')
+                ->all();
+            if (!empty($receiptIds)) {
+                DB::table('gl_transactions')
+                    ->whereIn('transaction_id', $receiptIds)
+                    ->whereIn('transaction_type', ['receipt', 'receipt_reversal'])
+                    ->delete();
+                if (Schema::hasTable('receipt_items')) {
+                    DB::table('receipt_items')->whereIn('receipt_id', $receiptIds)->delete();
+                }
+                Receipt::withTrashed()->whereIn('id', $receiptIds)->forceDelete();
+            }
+        }
+
+        if (Schema::hasTable('payments')) {
+            $paymentQuery = DB::table('payments')->where(function ($query) use ($customerId) {
+                $query->where('customer_id', $customerId)
+                    ->orWhere(function ($q) use ($customerId) {
+                        $q->where('payee_type', 'customer')->where('payee_id', $customerId);
+                    });
+            });
+            $paymentIds = (clone $paymentQuery)->pluck('id')->all();
+            if (!empty($paymentIds)) {
+                DB::table('gl_transactions')
+                    ->whereIn('transaction_id', $paymentIds)
+                    ->where('transaction_type', 'payment')
+                    ->delete();
+                if (Schema::hasTable('payment_items')) {
+                    DB::table('payment_items')->whereIn('payment_id', $paymentIds)->delete();
+                }
+                $paymentQuery->delete();
+            }
+        }
+
+        if (Schema::hasTable('journals')) {
+            $journalIds = DB::table('journals')->where('customer_id', $customerId)->pluck('id')->all();
+            if (!empty($journalIds)) {
+                DB::table('gl_transactions')
+                    ->whereIn('transaction_id', $journalIds)
+                    ->whereIn('transaction_type', ['journal', 'journal repayment', 'Withdrawal'])
+                    ->delete();
+                if (Schema::hasTable('journal_items')) {
+                    DB::table('journal_items')->whereIn('journal_id', $journalIds)->delete();
+                }
+                DB::table('journals')->whereIn('id', $journalIds)->delete();
+            }
+        }
+
+        DB::table('gl_transactions')->where('customer_id', $customerId)->delete();
+
+        if (Schema::hasTable('cash_collaterals')) {
+            DB::table('cash_collaterals')->where('customer_id', $customerId)->delete();
+        }
+
+        if (Schema::hasTable('loan_schedules')) {
+            DB::table('loan_schedules')->where('customer_id', $customerId)->delete();
+        }
+
+        if (Schema::hasTable('loan_writeoffs')) {
+            DB::table('loan_writeoffs')->where('customer_id', $customerId)->delete();
+        }
+
+        if (Schema::hasTable('loan_guarantor')) {
+            DB::table('loan_guarantor')->where('customer_id', $customerId)->delete();
+        }
+
+        if (Schema::hasTable('complains')) {
+            DB::table('complains')->where('customer_id', $customerId)->delete();
+        }
+
+        if (Schema::hasTable('sms_logs')) {
+            DB::table('sms_logs')->where('customer_id', $customerId)->delete();
+        }
+
+        if (Schema::hasTable('customer_file_types')) {
+            DB::table('customer_file_types')->where('customer_id', $customerId)->delete();
+        }
+
+        if (Schema::hasTable('customer_officer')) {
+            DB::table('customer_officer')->where('customer_id', $customerId)->delete();
+        }
+
+        if (Schema::hasTable('group_members')) {
+            DB::table('group_members')->where('customer_id', $customerId)->delete();
+        }
+
+        if (Schema::hasTable('groups')) {
+            DB::table('groups')->where('group_leader', $customerId)->update(['group_leader' => null]);
+        }
+    }
+
     // Delete customer
     public function destroy($id)
     {
@@ -594,35 +725,24 @@ class CustomerController extends Controller
         try {
             $customer = Customer::findOrFail($decoded);
 
-            // Check for existing loans, cash collaterals, or GL transactions
-
             //check if member is in any group then he need to delete that mmeber from that group
             $existingMembership = DB::table('group_members')->where('customer_id', $customer->id)->where('group_id', '!=', 1)->first();
             if ($existingMembership) {
                 return redirect()->route('customers.index')->with('error', 'Customer is a member of a group. Please remove them from the group first.');
             }
-            $hasLoans = $customer->loans()->exists();
-            $hasCollaterals = $customer->collaterals()->exists();
-            $hasGLTransactions = \DB::table('gl_transactions')->where('customer_id', $customer->id)->exists();
 
-            if ($hasLoans || $hasCollaterals || $hasGLTransactions) {
-                $msg = 'Cannot delete customer: ';
-                if ($hasLoans) {
-                    $msg .= 'Customer has existing loans. ';
-                }
-                if ($hasCollaterals) {
-                    $msg .= 'Customer has cash collaterals. ';
-                }
-                if ($hasGLTransactions) {
-                    $msg .= 'Customer has transactions.';
-                }
-                return redirect()->route('customers.index')->with('error', $msg);
+            if ($customer->loans()->exists()) {
+                return redirect()->route('customers.index')->with('error', 'Cannot delete customer: Customer has existing loans.');
             }
 
+            DB::beginTransaction();
+            $this->deleteCustomerTransactionalData($customer->id);
             $customer->delete();
+            DB::commit();
 
             return redirect()->route('customers.index')->with('success', 'Customer deleted successfully.');
         } catch (\Exception $e) {
+            DB::rollBack();
             return back()->with('error', 'Failed to delete customer: ' . $e->getMessage());
         }
     }
