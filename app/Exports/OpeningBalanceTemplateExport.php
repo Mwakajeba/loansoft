@@ -53,6 +53,7 @@ class OpeningBalanceTemplateExport implements FromArray, WithHeadings, WithStyle
         $branchId = auth()->user()->branch_id ?? null;
         $customers = Customer::with('groups')
             ->where('category', 'Borrower')
+            ->whereDoesntHave('loans')
             ->when($branchId, fn ($q) => $q->where('branch_id', $branchId))
             ->orderBy('name')
             ->get(['id', 'name', 'customerNo']);
