@@ -63,39 +63,31 @@ class LoanMessagesController extends Controller
     {
         $dueMessages = [];
         
-        // Get payments due today
-        $dueToday = DB::table('loan_schedules as ls')
-            ->join('loans as l', 'ls.loan_id', '=', 'l.id')
-            ->join('customers as c', 'l.customer_id', '=', 'c.id')
-            ->where('l.branch_id', $branchId)
-            ->where('l.status', 'active')
-            ->whereDate('ls.due_date', $today)
-            ->select(
-                'ls.id',
-                'ls.due_date',
-                'ls.principal',
-                'ls.interest',
-                'ls.fee_amount',
-                'ls.penalty_amount',
-                'l.id as loan_id',
-                'l.amount as loan_amount',
-                'c.id as customer_id',
-                'c.name as customer_name',
-                'c.phone1'
-            )
-            ->get();
-            
-        foreach ($dueToday as $schedule) {
-            $amountDue = $schedule->principal + $schedule->interest + $schedule->fee_amount + $schedule->penalty_amount;
-            
+        $dueTodaySchedules = \App\Models\LoanSchedule::query()
+            ->with(['customer:id,name,phone1', 'repayments', 'loan:id,status,branch_id,amount', 'loan.product'])
+            ->whereHas('loan', function ($query) use ($branchId) {
+                $query->where('branch_id', $branchId)
+                    ->where('status', 'active');
+            })
+            ->whereDate('due_date', $today)
+            ->where(function ($query) {
+                $query->whereNull('loan_schedules.status')
+                    ->orWhereNotIn('loan_schedules.status', ['paid', 'cancelled', 'restructured']);
+            })
+            ->get()
+            ->filter(fn ($schedule) => $schedule->remaining_amount > \App\Models\Loan::OUTSTANDING_CLOSURE_THRESHOLD);
+
+        foreach ($dueTodaySchedules as $schedule) {
+            $amountDue = round((float) $schedule->remaining_amount, 2);
+
             $dueMessages[] = [
                 'id' => 'due_' . $schedule->id,
                 'type' => 'due',
                 'title' => 'Payment Due Today',
-                'message' => "Customer {$schedule->customer_name} has a loan payment due today. Amount: TZS " . number_format($amountDue, 2),
-                'customer' => $schedule->customer_name,
+                'message' => "Customer {$schedule->customer->name} has a loan payment due today. Remaining: TZS " . number_format($amountDue, 2),
+                'customer' => $schedule->customer->name,
                 'customerId' => $schedule->customer_id,
-                'phone' => $schedule->phone1,
+                'phone' => $schedule->customer->phone1,
                 'amount' => $amountDue,
                 'dueDate' => $schedule->due_date,
                 'loanId' => $schedule->loan_id,

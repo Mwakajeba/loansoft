@@ -179,14 +179,7 @@
                             header('Location: ' . route('choose.branch'));
                             exit;
                         }
-                        $today = \Carbon\Carbon::today()->toDateString();
-                        $dueSchedules = \DB::table('loan_schedules')
-                            ->join('loans', 'loan_schedules.loan_id', '=', 'loans.id')
-                            ->join('customers', 'loan_schedules.customer_id', '=', 'customers.id')
-                            ->where('loan_schedules.due_date', $today)
-                            ->where('loans.branch_id', $branchId)
-                            ->select('customers.name', \DB::raw('(loan_schedules.principal + loan_schedules.interest) as amount_due'))
-                            ->get();
+                        $dueSchedules = \App\Models\LoanSchedule::dueTodayNotifications((int) $branchId);
                     @endphp
                     <li class="nav-item dropdown dropdown-large">
                         <a class="nav-link dropdown-toggle dropdown-toggle-nocaret position-relative" href="#"
