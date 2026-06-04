@@ -3567,6 +3567,51 @@
             modal.show();
         }
 
+        function buildTopupChainHtml(summary) {
+            if (!summary || !summary.loans || !summary.loans.length) {
+                return '<p>All loans linked by top-up / restructure will be removed, including repayments, receipts, and GL entries.</p>';
+            }
+            let html = '<p>The following linked loans will be permanently deleted:</p><ul class="text-start mb-0">';
+            summary.loans.forEach(function (loan) {
+                html += '<li><strong>' + loan.loan_no + '</strong> — ' + loan.customer
+                    + ' (' + loan.status + ', TZS ' + loan.amount + ')</li>';
+            });
+            html += '</ul><p class="mt-2 mb-0 text-danger"><small>This cannot be undone.</small></p>';
+            return html;
+        }
+
+        function deleteLoanTopupChain(encodedId, summary) {
+            Swal.fire({
+                title: 'Delete entire top-up chain?',
+                html: buildTopupChainHtml(summary),
+                icon: 'warning',
+                showCancelButton: true,
+                confirmButtonColor: '#d33',
+                cancelButtonColor: '#6c757d',
+                confirmButtonText: 'Yes, delete all linked loans'
+            }).then(function (result) {
+                if (!result.isConfirmed) return;
+                fetch(`/loans/${encodedId}/topup-chain`, {
+                    method: 'DELETE',
+                    headers: {
+                        'X-CSRF-TOKEN': '{{ csrf_token() }}',
+                        'Accept': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                })
+                    .then(r => r.json().then(data => ({ ok: r.ok, data })))
+                    .then(function (res) {
+                        if (res.ok && res.data.success) {
+                            Swal.fire({ icon: 'success', title: 'Deleted', text: res.data.message, timer: 2000, showConfirmButton: false })
+                                .then(() => { window.location.href = '{{ route('loans.list') }}'; });
+                            return;
+                        }
+                        Swal.fire({ icon: 'error', title: 'Delete failed', text: res.data.message || 'Could not delete linked loans.' });
+                    })
+                    .catch(() => Swal.fire({ icon: 'error', title: 'Delete failed', text: 'A network error occurred.' }));
+            });
+        }
+
         function deleteLoan(loanId) {
             Swal.fire({
                 title: 'Are you sure?',
@@ -3576,27 +3621,43 @@
                 confirmButtonColor: '#d33',
                 cancelButtonColor: '#3085d6',
                 confirmButtonText: 'Yes, delete it!'
-            }).then((result) => {
-                if (result.isConfirmed) {
-                    const form = document.createElement('form');
-                    form.method = 'POST';
-                    form.action = `/loans/${loanId}`;
-
-                    const csrfToken = document.createElement('input');
-                    csrfToken.type = 'hidden';
-                    csrfToken.name = '_token';
-                    csrfToken.value = '{{ csrf_token() }}';
-
-                    const methodField = document.createElement('input');
-                    methodField.type = 'hidden';
-                    methodField.name = '_method';
-                    methodField.value = 'DELETE';
-
-                    form.appendChild(csrfToken);
-                    form.appendChild(methodField);
-                    document.body.appendChild(form);
-                    form.submit();
-                }
+            }).then(function (result) {
+                if (!result.isConfirmed) return;
+                fetch(`/loans/${loanId}`, {
+                    method: 'DELETE',
+                    headers: {
+                        'X-CSRF-TOKEN': '{{ csrf_token() }}',
+                        'Accept': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                })
+                    .then(r => r.json().then(data => ({ ok: r.ok, data })).catch(() => ({ ok: r.ok, data: {} })))
+                    .then(function (res) {
+                        if (res.ok && res.data.success) {
+                            Swal.fire({ icon: 'success', title: 'Deleted', text: res.data.message, timer: 2000, showConfirmButton: false })
+                                .then(() => { window.location.href = '{{ route('loans.list') }}'; });
+                            return;
+                        }
+                        const data = res.data || {};
+                        if (data.topup_chain_available && data.encoded_id) {
+                            Swal.fire({
+                                icon: 'error',
+                                title: 'Cannot delete this loan alone',
+                                text: data.message,
+                                showCancelButton: true,
+                                confirmButtonColor: '#d33',
+                                confirmButtonText: 'Delete entire top-up chain',
+                                cancelButtonText: 'Cancel'
+                            }).then(function (chainResult) {
+                                if (chainResult.isConfirmed) {
+                                    deleteLoanTopupChain(data.encoded_id, data.topup_summary);
+                                }
+                            });
+                            return;
+                        }
+                        Swal.fire({ icon: 'error', title: 'Delete failed', text: data.message || 'Could not delete this loan.' });
+                    })
+                    .catch(() => Swal.fire({ icon: 'error', title: 'Delete failed', text: 'A network error occurred.' }));
             });
         }
 
