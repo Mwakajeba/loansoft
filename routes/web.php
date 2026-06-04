@@ -1068,7 +1068,8 @@ Route::middleware(['auth'])->group(function () {
     Route::put('loans/{encodedId}', [LoanController::class, 'update'])->name('loans.update');
     Route::get('loans/{encodedId}/top-up', [LoanTopUpController::class, 'show'])->name('loans.top_up');
     Route::post('loans/{encodedId}/top-up', [LoanTopUpController::class, 'store'])->name('loans.top_up.store');
-    Route::delete('loans/{loan}', [LoanController::class, 'destroy'])->name('loans.destroy');
+    Route::delete('loans/{encodedId}/topup-chain', [LoanController::class, 'destroyWithTopupChain'])->name('loans.destroy-topup-chain');
+    Route::delete('loans/{encodedId}', [LoanController::class, 'destroy'])->name('loans.destroy');
     Route::get('loans/applist', [LoanController::class, 'appList'])->name('loans.applist');
     Route::get('loans/appcreate', [LoanController::class, 'appCreate'])->name('loans.appcreate');
     Route::post('loans/appstore', [LoanController::class, 'appStore'])->name('loans.appstore');

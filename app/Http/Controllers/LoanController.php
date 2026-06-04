@@ -29,6 +29,7 @@ use App\Models\District;
 use Illuminate\Http\Request;
 use App\Services\LoanDisbursementCompletionService;
 use App\Services\LoanDisbursementGlService;
+use App\Services\LoanDeletionService;
 use App\Services\LoanRestructuringService;
 use App\Jobs\BulkLoanImportJob;
 use Illuminate\Support\Facades\DB;
@@ -2209,123 +2210,104 @@ class LoanController extends Controller
     }
 
 
-    public function destroy($encodedId)
+    public function destroy(Request $request, $encodedId)
     {
+        return $this->handleLoanDelete($request, $encodedId, cascadeTopupChain: false);
+    }
+
+    /**
+     * Delete loan plus every loan in the same top-up / restructure chain.
+     */
+    public function destroyWithTopupChain(Request $request, $encodedId)
+    {
+        return $this->handleLoanDelete($request, $encodedId, cascadeTopupChain: true);
+    }
+
+    protected function handleLoanDelete(Request $request, $encodedId, bool $cascadeTopupChain)
+    {
+        $decoded = Hashids::decode($encodedId);
+        if (empty($decoded)) {
+            return $this->loanDeleteErrorResponse($request, 'Loan not found.', $encodedId, false);
+        }
+
+        $loan = Loan::findOrFail($decoded[0]);
+        $loanId = (int) $loan->id;
+        $deletionService = new LoanDeletionService();
+
+        if (!$cascadeTopupChain && !$loan->canBeDeleted()) {
+            return $this->loanDeleteErrorResponse(
+                $request,
+                'This loan cannot be deleted. Completed or restructured loans must be removed using "Delete entire top-up chain" if they are linked to another loan.',
+                $encodedId,
+                $deletionService->hasTopupLinks($loanId)
+            );
+        }
+
         try {
-            // Decode the encoded ID
-            $decoded = Hashids::decode($encodedId);
-            if (empty($decoded)) {
-                return redirect()->route('loans.list')->withErrors(['Loan not found.']);
+            if ($cascadeTopupChain) {
+                $deletionService->deleteTopupChainPermanently($loanId);
+            } else {
+                $deletionService->deletePermanently($loanId);
             }
 
-            // Fetch the loan
-            $loan = Loan::findOrFail($decoded[0]);
-            $loanId = $loan->id;
-
-            if (!$loan->canBeDeleted()) {
-                return redirect()->route('loans.list')->withErrors([
-                    'error' => 'This loan cannot be deleted. Disbursed or completed loans cannot be removed.',
+            if ($request->ajax() || $request->wantsJson()) {
+                return response()->json([
+                    'success' => true,
+                    'message' => $cascadeTopupChain
+                        ? 'Linked loans and all related records were deleted successfully.'
+                        : 'Loan and related records deleted successfully.',
                 ]);
             }
 
-            // If loan is active, perform full cleanup (receipts/journals/etc). Otherwise, delete loan directly
-            if ($loan->status === Loan::STATUS_ACTIVE) {
-                // Only count active repayments; reversed receipts soft-delete rows but leave them in DB
-                $repaymentCount = Repayment::where('loan_id', $loanId)->count();
-                if ($repaymentCount > 0) {
-                    return redirect()->route('loans.list')->withErrors(['error' => 'This loan has repayments. Please delete repayments first before deleting the loan.']);
-                }
-
-                \DB::transaction(function () use ($loan, $loanId) {
-                    // Delete Receipts and Receipt Items related to this loan disbursement
-                    $receiptIds = \DB::table('receipts')
-                        ->where('reference_type', 'Loan Disbursement')
-                        ->where('reference_number', $loanId)
-                        ->pluck('id')
-                        ->toArray();
-                    if (!empty($receiptIds)) {
-                        \DB::table('receipt_items')->whereIn('receipt_id', $receiptIds)->delete();
-                        \DB::table('receipts')->whereIn('id', $receiptIds)->delete();
-                    }
-
-                    // get all the loan schedule ids
-                    $scheduleIds = \DB::table('loan_schedules')->where('loan_id', $loanId)->pluck('id')->toArray();
-
-                    // Delete GL Transactions for this loan
-                    \DB::table('gl_transactions')
-                        ->where('transaction_id', $loanId)
-                        ->where('transaction_type', 'Loan Disbursement')
-                        ->delete();
-
-                    // delete penalty gl transactions
-                    if (!empty($scheduleIds)) {
-                        \DB::table('gl_transactions')
-                            ->whereIn('transaction_id', $scheduleIds)
-                            ->where('transaction_type', 'Penalty')
-                            ->delete();
-
-                        // delete interest gl transactions
-                        \DB::table('gl_transactions')
-                            ->whereIn('transaction_id', $scheduleIds)
-                            ->where('transaction_type', 'Mature Interest')
-                            ->delete();
-                    }
-
-                    // Delete Payments and PaymentItems for this loan
-                    $payments = \DB::table('payments')
-                        ->where('reference_type', 'Loan Payment')
-                        ->where('reference', $loanId)
-                        ->get();
-                    $paymentIds = $payments->pluck('id')->toArray();
-                    if (!empty($paymentIds)) {
-                        \DB::table('payment_items')->whereIn('payment_id', $paymentIds)->delete();
-                    }
-                    \DB::table('payments')
-                        ->where('reference_type', 'Loan Payment')
-                        ->where('reference', $loanId)
-                        ->delete();
-
-                    // Delete Loan Schedule
-                    \DB::table('loan_schedules')->where('loan_id', $loanId)->delete();
-
-                    // Delete Journals and JournalItems if table exists
-                    if (\Schema::hasTable('journals')) {
-                        $journalsQuery = \DB::table('journals')
-                            ->where('reference_type', 'Loan Disbursement')
-                            ->where(function ($query) use ($loanId) {
-                                // force string comparison to avoid numeric coercion errors
-                                $query->where('reference', (string) $loanId);
-                                if (\Schema::hasColumn('journals', 'reference_number')) {
-                                    $query->orWhere('reference_number', (string) $loanId);
-                                }
-                            });
-
-                        $journalIds = $journalsQuery->pluck('id')->toArray();
-
-                        if (!empty($journalIds) && \Schema::hasTable('journal_items')) {
-                            \DB::table('journal_items')->whereIn('journal_id', $journalIds)->delete();
-                        }
-
-                        if (!empty($journalIds)) {
-                            \DB::table('journals')->whereIn('id', $journalIds)->delete();
-                        }
-                    }
-
-                    // Finally delete the loan
-                    $loan->delete();
-                });
-            } else {
-                // Non-active loans: just delete the loan and its schedules, leave receipts/journals intact
-                \DB::transaction(function () use ($loan, $loanId) {
-                    \DB::table('loan_schedules')->where('loan_id', $loanId)->delete();
-                    $loan->delete();
-                });
-            }
-
-            return redirect()->route('loans.by-status', 'applied')->with('success', 'Loan and related records deleted successfully.');
+            return redirect()
+                ->route('loans.by-status', 'applied')
+                ->with('success', $cascadeTopupChain
+                    ? 'Linked loans and all related records deleted successfully.'
+                    : 'Loan and related records deleted successfully.');
         } catch (\Throwable $e) {
-            return redirect()->route('loans.list')->withErrors(['error' => 'Failed to delete loan: ' . $e->getMessage()]);
+            Log::error('Loan delete failed', [
+                'loan_id' => $loanId,
+                'cascade' => $cascadeTopupChain,
+                'error' => $e->getMessage(),
+            ]);
+
+            $humanMessage = LoanDeletionService::humanizeException($e);
+            $offerCascade = $deletionService->hasTopupLinks($loanId)
+                || LoanDeletionService::messageReferencesTopups($e->getMessage());
+
+            return $this->loanDeleteErrorResponse($request, $humanMessage, $encodedId, $offerCascade, $loanId);
         }
+    }
+
+    protected function loanDeleteErrorResponse(
+        Request $request,
+        string $message,
+        string $encodedId,
+        bool $offerTopupCascade,
+        ?int $loanId = null
+    ) {
+        $summary = ($offerTopupCascade && $loanId)
+            ? (new LoanDeletionService())->getTopupChainSummary($loanId)
+            : null;
+
+        if ($request->ajax() || $request->wantsJson()) {
+            return response()->json([
+                'success' => false,
+                'message' => $message,
+                'topup_chain_available' => $offerTopupCascade,
+                'encoded_id' => $encodedId,
+                'topup_summary' => $summary,
+                'destroy_topup_chain_url' => $offerTopupCascade
+                    ? route('loans.destroy-topup-chain', $encodedId)
+                    : null,
+            ], 422);
+        }
+
+        return redirect()
+            ->back()
+            ->withErrors(['error' => $message])
+            ->with('loan_delete_topup_offer', $offerTopupCascade)
+            ->with('loan_delete_encoded_id', $encodedId);
     }
     //////////////////SHOW LOAN DETAIL/////////////////////
     public function show($encodedId)

@@ -51,6 +51,14 @@
                             <li>{{ $error }}</li>
                         @endforeach
                     </ul>
+                    @if(session('loan_delete_topup_offer') && session('loan_delete_encoded_id'))
+                        <div class="mt-2">
+                            <button type="button" class="btn btn-sm btn-danger" id="deleteTopupChainFromAlertBtn"
+                                data-encoded-id="{{ session('loan_delete_encoded_id') }}">
+                                <i class="bx bx-trash"></i> Delete entire top-up chain
+                            </button>
+                        </div>
+                    @endif
                     <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
                 </div>
             @endif
@@ -549,15 +557,37 @@
                 })();
             @endif
 
-            // Show SweetAlert for error messages
+            // Show SweetAlert for error messages (with optional top-up chain delete)
             @if($errors->any())
-                Swal.fire({
-                    icon: 'error',
-                    title: 'Error!',
-                    text: '{{ $errors->first() }}',
-                    timer: 5000,
-                    showConfirmButton: true
-                });
+                (function () {
+                    const offerTopupChain = @json(session('loan_delete_topup_offer', false));
+                    const encodedId = @json(session('loan_delete_encoded_id'));
+                    const errorText = @json($errors->first());
+
+                    if (offerTopupChain && encodedId) {
+                        Swal.fire({
+                            icon: 'error',
+                            title: 'Cannot delete this loan alone',
+                            text: errorText,
+                            showCancelButton: true,
+                            confirmButtonColor: '#d33',
+                            cancelButtonColor: '#6c757d',
+                            confirmButtonText: 'Delete entire top-up chain',
+                            cancelButtonText: 'Cancel'
+                        }).then(function (result) {
+                            if (result.isConfirmed) {
+                                deleteLoanTopupChain(encodedId);
+                            }
+                        });
+                    } else {
+                        Swal.fire({
+                            icon: 'error',
+                            title: 'Error!',
+                            text: errorText,
+                            showConfirmButton: true
+                        });
+                    }
+                })();
             @endif
             const currentStatus = '{{ $status ?? "active" }}';
 
@@ -1250,6 +1280,89 @@
             });
         });
 
+        function buildTopupChainHtml(summary) {
+            if (!summary || !summary.loans || !summary.loans.length) {
+                return '<p>All loans linked by top-up / restructure will be removed, including repayments, receipts, and GL entries.</p>';
+            }
+            let html = '<p>The following linked loans will be permanently deleted:</p><ul class="text-start mb-0">';
+            summary.loans.forEach(function (loan) {
+                html += '<li><strong>' + loan.loan_no + '</strong> — ' + loan.customer
+                    + ' (' + loan.status + ', TZS ' + loan.amount + ')</li>';
+            });
+            html += '</ul><p class="mt-2 mb-0 text-danger"><small>This cannot be undone.</small></p>';
+            return html;
+        }
+
+        function deleteLoanTopupChain(encodedId, summary) {
+            Swal.fire({
+                title: 'Delete entire top-up chain?',
+                html: buildTopupChainHtml(summary),
+                icon: 'warning',
+                showCancelButton: true,
+                confirmButtonColor: '#d33',
+                cancelButtonColor: '#6c757d',
+                confirmButtonText: 'Yes, delete all linked loans'
+            }).then(function (result) {
+                if (!result.isConfirmed) {
+                    return;
+                }
+
+                fetch(`/loans/${encodedId}/topup-chain`, {
+                    method: 'DELETE',
+                    headers: {
+                        'X-CSRF-TOKEN': '{{ csrf_token() }}',
+                        'Accept': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                })
+                    .then(function (response) {
+                        return response.json().then(function (data) {
+                            return { ok: response.ok, data: data };
+                        });
+                    })
+                    .then(function (result) {
+                        if (result.ok && result.data.success) {
+                            Swal.fire({
+                                icon: 'success',
+                                title: 'Deleted',
+                                text: result.data.message,
+                                timer: 2000,
+                                showConfirmButton: false
+                            }).then(function () {
+                                window.location.reload();
+                            });
+                            return;
+                        }
+                        Swal.fire({
+                            icon: 'error',
+                            title: 'Delete failed',
+                            text: (result.data && result.data.message) ? result.data.message : 'Could not delete linked loans.'
+                        });
+                    })
+                    .catch(function () {
+                        Swal.fire({ icon: 'error', title: 'Delete failed', text: 'A network error occurred.' });
+                    });
+            });
+        }
+
+        function submitLoanDelete(encodedId) {
+            return fetch(`/loans/${encodedId}`, {
+                method: 'DELETE',
+                headers: {
+                    'X-CSRF-TOKEN': '{{ csrf_token() }}',
+                    'Accept': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            })
+                .then(function (response) {
+                    return response.json().then(function (data) {
+                        return { ok: response.ok, status: response.status, data: data };
+                    }).catch(function () {
+                        return { ok: response.ok, status: response.status, data: {} };
+                    });
+                });
+        }
+
         function deleteLoan(encodedId, customerName) {
             Swal.fire({
                 title: 'Are you sure?',
@@ -1259,30 +1372,61 @@
                 confirmButtonColor: '#d33',
                 cancelButtonColor: '#3085d6',
                 confirmButtonText: 'Yes, delete it!'
-            }).then((result) => {
-                if (result.isConfirmed) {
-                    // Create form and submit
-                    const form = document.createElement('form');
-                    form.method = 'POST';
-                    form.action = `/loans/${encodedId}`;
-
-                    const csrfToken = document.createElement('input');
-                    csrfToken.type = 'hidden';
-                    csrfToken.name = '_token';
-                    csrfToken.value = '{{ csrf_token() }}';
-
-                    const methodField = document.createElement('input');
-                    methodField.type = 'hidden';
-                    methodField.name = '_method';
-                    methodField.value = 'DELETE';
-
-                    form.appendChild(csrfToken);
-                    form.appendChild(methodField);
-                    document.body.appendChild(form);
-                    form.submit();
+            }).then(function (result) {
+                if (!result.isConfirmed) {
+                    return;
                 }
+
+                submitLoanDelete(encodedId).then(function (res) {
+                    if (res.ok && res.data.success) {
+                        Swal.fire({
+                            icon: 'success',
+                            title: 'Deleted',
+                            text: res.data.message,
+                            timer: 2000,
+                            showConfirmButton: false
+                        }).then(function () {
+                            window.location.reload();
+                        });
+                        return;
+                    }
+
+                    const data = res.data || {};
+                    if (data.topup_chain_available && data.encoded_id) {
+                        Swal.fire({
+                            icon: 'error',
+                            title: 'Cannot delete this loan alone',
+                            text: data.message || 'This loan is linked to a top-up or restructured loan.',
+                            showCancelButton: true,
+                            confirmButtonColor: '#d33',
+                            cancelButtonColor: '#6c757d',
+                            confirmButtonText: 'Delete entire top-up chain',
+                            cancelButtonText: 'Cancel'
+                        }).then(function (chainResult) {
+                            if (chainResult.isConfirmed) {
+                                deleteLoanTopupChain(data.encoded_id, data.topup_summary);
+                            }
+                        });
+                        return;
+                    }
+
+                    Swal.fire({
+                        icon: 'error',
+                        title: 'Delete failed',
+                        text: data.message || 'Could not delete this loan.'
+                    });
+                }).catch(function () {
+                    Swal.fire({ icon: 'error', title: 'Delete failed', text: 'A network error occurred.' });
+                });
             });
         }
+
+        $(document).on('click', '#deleteTopupChainFromAlertBtn', function () {
+            const encodedId = $(this).data('encoded-id');
+            if (encodedId) {
+                deleteLoanTopupChain(encodedId);
+            }
+        });
 
         function openApprovalModal(encodedId, action, level) {
             const modal = new bootstrap.Modal(document.getElementById('approvalModal'));
