@@ -2130,6 +2130,87 @@ class LoanRepaymentService
     }
 
     /**
+     * Remove all repayments for a loan (including soft-deleted) with receipts, journals, and GL entries.
+     * Used when deleting a loan — does not restore cash deposits.
+     */
+    public function deleteAllRepaymentsForLoan(int $loanId): void
+    {
+        $repaymentIds = Repayment::withTrashed()
+            ->where('loan_id', $loanId)
+            ->pluck('id')
+            ->all();
+
+        $receiptIds = Repayment::withTrashed()
+            ->where('loan_id', $loanId)
+            ->whereNotNull('receipt_id')
+            ->pluck('receipt_id')
+            ->unique()
+            ->values()
+            ->all();
+
+        $loanReceiptIds = Receipt::withTrashed()
+            ->where('reference', $loanId)
+            ->whereIn('reference_type', ['loan_repayment', 'Repayment', 'loan'])
+            ->pluck('id')
+            ->all();
+
+        if (!empty($repaymentIds)) {
+            $repaymentReceiptIds = Receipt::withTrashed()
+                ->whereIn('reference', $repaymentIds)
+                ->whereIn('reference_type', ['loan_repayment', 'Repayment'])
+                ->pluck('id')
+                ->all();
+            $receiptIds = array_values(array_unique(array_merge($receiptIds, $loanReceiptIds, $repaymentReceiptIds)));
+        } else {
+            $receiptIds = array_values(array_unique(array_merge($receiptIds, $loanReceiptIds)));
+        }
+
+        foreach ($receiptIds as $receiptId) {
+            $receipt = Receipt::withTrashed()->find($receiptId);
+            if (!$receipt) {
+                continue;
+            }
+
+            GlTransaction::where('transaction_id', $receipt->id)
+                ->whereIn('transaction_type', ['receipt', 'receipt_reversal'])
+                ->delete();
+
+            ReceiptItem::where('receipt_id', $receipt->id)->delete();
+
+            Repayment::withTrashed()->where('receipt_id', $receipt->id)->forceDelete();
+
+            $receipt->forceDelete();
+        }
+
+        if (!empty($repaymentIds)) {
+            $journalIds = Journal::whereIn('reference', $repaymentIds)
+                ->where('reference_type', 'Withdrawal')
+                ->pluck('id')
+                ->all();
+
+            if (!empty($journalIds)) {
+                JournalItem::whereIn('journal_id', $journalIds)->delete();
+                GlTransaction::whereIn('transaction_id', $journalIds)
+                    ->where('transaction_type', 'journal repayment')
+                    ->delete();
+                Journal::whereIn('id', $journalIds)->delete();
+            }
+
+            GlTransaction::whereIn('transaction_id', $repaymentIds)
+                ->whereIn('transaction_type', ['receipt', 'journal repayment', 'Settle Interest', 'Settle Principal'])
+                ->delete();
+
+            Repayment::withTrashed()->where('loan_id', $loanId)->forceDelete();
+        }
+
+        Log::info('All repayments removed for loan', [
+            'loan_id' => $loanId,
+            'repayment_count' => count($repaymentIds),
+            'receipt_count' => count($receiptIds),
+        ]);
+    }
+
+    /**
      * Delete repayment and all associated records
      * This method deletes all related data created during repayment processing
      */

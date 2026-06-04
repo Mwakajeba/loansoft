@@ -1413,7 +1413,8 @@
                     Swal.fire({
                         icon: 'error',
                         title: 'Delete failed',
-                        text: data.message || 'Could not delete this loan.'
+                        text: data.message || 'Could not delete this loan.',
+                        showConfirmButton: true
                     });
                 }).catch(function () {
                     Swal.fire({ icon: 'error', title: 'Delete failed', text: 'A network error occurred.' });

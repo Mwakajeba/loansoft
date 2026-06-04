@@ -2235,12 +2235,12 @@ class LoanController extends Controller
         $deletionService = new LoanDeletionService();
 
         if (!$cascadeTopupChain && !$loan->canBeDeleted()) {
-            return $this->loanDeleteErrorResponse(
-                $request,
-                'This loan cannot be deleted. Completed or restructured loans must be removed using "Delete entire top-up chain" if they are linked to another loan.',
-                $encodedId,
-                $deletionService->hasTopupLinks($loanId)
-            );
+            $hasTopupLinks = $deletionService->hasTopupLinks($loanId);
+            $blockMessage = $hasTopupLinks
+                ? 'This loan cannot be deleted on its own because it is linked to a top-up or restructure. Use "Delete entire top-up chain" to remove all related loans.'
+                : 'This loan cannot be deleted in its current status (for example completed or restructured without a top-up link).';
+
+            return $this->loanDeleteErrorResponse($request, $blockMessage, $encodedId, $hasTopupLinks);
         }
 
         try {
@@ -2271,8 +2271,9 @@ class LoanController extends Controller
                 'error' => $e->getMessage(),
             ]);
 
-            $humanMessage = LoanDeletionService::humanizeException($e);
-            $offerCascade = $deletionService->hasTopupLinks($loanId)
+            $hasTopupLinks = $deletionService->hasTopupLinks($loanId);
+            $humanMessage = LoanDeletionService::humanizeException($e, $hasTopupLinks);
+            $offerCascade = $hasTopupLinks
                 || LoanDeletionService::messageReferencesTopups($e->getMessage());
 
             return $this->loanDeleteErrorResponse($request, $humanMessage, $encodedId, $offerCascade, $loanId);
