@@ -3,8 +3,10 @@
 namespace App\Models;
 
 use App\Traits\LogsActivity;
+use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Collection;
 
 class LoanSchedule extends Model
 {
@@ -233,5 +235,35 @@ class LoanSchedule extends Model
     {
         $penaltyPaidAmount = $this->repayments ? $this->repayments->sum('penalt_amount') : 0;
         return $penaltyPaidAmount < $this->penalty_amount;
+    }
+
+    /**
+     * Schedules due today with unpaid balance (for navbar / notifications).
+     *
+     * @return Collection<int, object{name: string, amount_due: float}>
+     */
+    public static function dueTodayNotifications(int $branchId, ?string $date = null): Collection
+    {
+        $dueDate = $date ?? Carbon::today()->toDateString();
+        $threshold = Loan::OUTSTANDING_CLOSURE_THRESHOLD;
+
+        return static::query()
+            ->with(['customer:id,name', 'repayments', 'loan:id,status,branch_id', 'loan.product'])
+            ->whereHas('loan', function ($query) use ($branchId) {
+                $query->where('branch_id', $branchId)
+                    ->where('status', Loan::STATUS_ACTIVE);
+            })
+            ->whereDate('due_date', $dueDate)
+            ->where(function ($query) {
+                $query->whereNull('loan_schedules.status')
+                    ->orWhereNotIn('loan_schedules.status', ['paid', 'cancelled', 'restructured']);
+            })
+            ->get()
+            ->filter(fn (self $schedule) => $schedule->remaining_amount > $threshold)
+            ->map(fn (self $schedule) => (object) [
+                'name' => $schedule->customer->name ?? 'Unknown',
+                'amount_due' => round((float) $schedule->remaining_amount, 2),
+            ])
+            ->values();
     }
 }
