@@ -138,33 +138,41 @@ class LoanDeletionService
         ];
     }
 
-    public static function humanizeException(\Throwable $e): string
+    public static function humanizeException(\Throwable $e, bool $hasTopupLinks = false): string
     {
         $message = $e->getMessage();
 
+        if (str_contains($message, 'deleteAllRepaymentsForLoan') || str_contains($message, 'undefined method')) {
+            return 'Loan deletion is misconfigured on the server. Please contact support.';
+        }
+
         if ($e instanceof QueryException && self::messageReferencesTopups($message)) {
-            return 'This loan is linked to a top-up or restructured loan. You can delete the entire linked group (all related loans, repayments, receipts, and ledger entries) using the button below.';
+            return 'This loan is linked to a top-up or restructured loan. Use "Delete entire top-up chain" to remove all related loans and their transactions.';
         }
 
         if (str_contains($message, 'Integrity constraint violation') || str_contains($message, '1451')) {
             if (self::messageReferencesTopups($message)) {
-                return 'This loan is part of a top-up / restructure record and cannot be removed on its own. Use "Delete entire top-up chain" to remove all linked loans and their transactions.';
+                return 'This loan is part of a top-up / restructure record. Use "Delete entire top-up chain" to remove all linked loans and their transactions.';
             }
 
             if (preg_match('/`([^`]+)`\.`([^`]+)`/', $message, $matches)) {
-                $table = $matches[2] ?? 'related records';
+                $table = str_replace('_', ' ', $matches[2] ?? 'related records');
 
-                return 'This loan still has linked ' . str_replace('_', ' ', $table) . '. Remove those records first, or delete the entire top-up chain if this was a restructured loan.';
+                return 'This loan still has linked ' . $table . '. Remove those records first, then try again.';
             }
 
             return 'This loan cannot be deleted because other records in the system still reference it.';
         }
 
-        if (str_contains($message, 'repayments')) {
-            return 'This loan still has repayment records. Delete repayments first, or use "Delete entire top-up chain" to remove everything linked to this loan.';
+        if (str_contains(strtolower($message), 'repayment')) {
+            return 'This loan still has repayment records that could not be removed automatically. Delete repayments from the loan page first, then try again.';
         }
 
-        return 'Could not delete this loan. Please try again or delete the entire top-up chain if this loan was restructured.';
+        if ($hasTopupLinks) {
+            return 'This loan could not be deleted. It is linked to a top-up or restructure — try "Delete entire top-up chain".';
+        }
+
+        return 'Could not delete this loan. ' . (config('app.debug') ? $message : 'Please try again or contact support.');
     }
 
     public static function messageReferencesTopups(string $message): bool
@@ -195,16 +203,11 @@ class LoanDeletionService
 
         $scheduleIds = DB::table('loan_schedules')->where('loan_id', $loanId)->pluck('id')->all();
 
-        DB::table('gl_transactions')
-            ->where('transaction_id', $loanId)
-            ->where('transaction_type', 'Loan Disbursement')
-            ->delete();
+        // Remove all GL rows keyed by this loan id (disbursement, fees, etc.)
+        DB::table('gl_transactions')->where('transaction_id', $loanId)->delete();
 
         if (!empty($scheduleIds)) {
-            DB::table('gl_transactions')
-                ->whereIn('transaction_id', $scheduleIds)
-                ->whereIn('transaction_type', ['Penalty', 'Mature Interest'])
-                ->delete();
+            DB::table('gl_transactions')->whereIn('transaction_id', $scheduleIds)->delete();
         }
 
         $paymentIds = DB::table('payments')
