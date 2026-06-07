@@ -58,11 +58,14 @@ class RepaymentReportBuilder
             }
 
             $paymentDate = Carbon::parse($receipt->date ?? $receipt->created_at)->toDateString();
+            $entryType = in_array($receipt->reference_type ?? '', ['loan_repayment', 'Repayment'], true)
+                ? 'repayment'
+                : 'fee_receipt';
 
             return self::makeRow(
                 $loan,
                 [
-                    'entry_type' => 'fee_receipt',
+                    'entry_type' => $entryType,
                     'payment_date' => $paymentDate,
                     'payment_method' => data_get($receipt, 'bankAccount.chartAccount.account_name')
                         ?? data_get($receipt, 'bankAccount.name', 'N/A'),

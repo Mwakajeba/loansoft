@@ -612,17 +612,49 @@ class LoanReportController extends Controller
         }
 
         $loanIds = $loans->keys()->map(fn ($id) => (int) $id)->values();
+        $loanReferences = RepaymentReportBuilder::loanReferenceValues($loanIds);
 
-        $feeReceipts = Receipt::with(['receiptItems', 'bankAccount.chartAccount', 'repayments'])
-            ->where('reference_type', 'loan')
-            ->whereIn('reference', RepaymentReportBuilder::loanReferenceValues($loanIds))
+        $receipts = Receipt::with(['receiptItems', 'bankAccount.chartAccount', 'repayments'])
             ->whereDate('date', '>=', $startDate)
             ->whereDate('date', '<=', $endDate)
+            ->where(function ($query) use ($loanReferences) {
+                $query->where(function ($inner) use ($loanReferences) {
+                    $inner->where('reference_type', 'loan')
+                        ->whereIn('reference', $loanReferences);
+                })->orWhere(function ($inner) use ($loanReferences) {
+                    $inner->whereIn('reference_type', ['loan_repayment', 'Repayment'])
+                        ->whereIn('reference', $loanReferences);
+                });
+            })
             ->get();
 
-        $rows = RepaymentReportBuilder::sortRows(
-            RepaymentReportBuilder::makeFeeReceiptRows($feeReceipts, $loans)
-        );
+        $receiptRows = RepaymentReportBuilder::makeFeeReceiptRows($receipts, $loans);
+
+        $receiptIdsInReport = $receipts->pluck('id')->filter()->map(fn ($id) => (int) $id)->values();
+
+        $standaloneRepayments = Repayment::with(['chartAccount'])
+            ->whereIn('loan_id', $loanIds)
+            ->whereDate('payment_date', '>=', $startDate)
+            ->whereDate('payment_date', '<=', $endDate)
+            ->when($receiptIdsInReport->isNotEmpty(), function ($query) use ($receiptIdsInReport) {
+                $query->where(function ($inner) use ($receiptIdsInReport) {
+                    $inner->whereNull('receipt_id')
+                        ->orWhereNotIn('receipt_id', $receiptIdsInReport);
+                });
+            })
+            ->get()
+            ->map(function ($repayment) use ($loans) {
+                $loan = $loans->get($repayment->loan_id);
+                if ($loan) {
+                    $repayment->setRelation('loan', $loan);
+                }
+
+                return $repayment;
+            });
+
+        $repaymentRows = RepaymentReportBuilder::makeRepaymentRows($standaloneRepayments);
+
+        $rows = RepaymentReportBuilder::sortRows($receiptRows->merge($repaymentRows));
 
         return [
             'rows' => $rows,
@@ -638,10 +670,10 @@ class LoanReportController extends Controller
             ->when($branchId && $branchId !== 'all', function ($query) use ($branchId) {
                 $query->where('branch_id', $branchId);
             })
-            ->when($groupId, function ($query) use ($groupId) {
+            ->when($groupId && $groupId !== 'all', function ($query) use ($groupId) {
                 $query->where('group_id', $groupId);
             })
-            ->when($loanOfficerId, function ($query) use ($loanOfficerId) {
+            ->when($loanOfficerId && $loanOfficerId !== 'all', function ($query) use ($loanOfficerId) {
                 $query->where('loan_officer_id', $loanOfficerId);
             });
     }
