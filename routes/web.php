@@ -300,6 +300,7 @@ Route::prefix('settings')->name('settings.')->middleware(['auth', 'company.scope
     Route::put('/system', [SettingsController::class, 'updateSystemSettings'])->name('system.update');
     Route::post('/system/reset', [SettingsController::class, 'resetSystemSettings'])->name('system.reset');
     Route::post('/system/test-email', [SettingsController::class, 'testEmailConfig'])->name('system.test-email');
+    Route::get('/system/sms-reminder-logs/data', [SettingsController::class, 'smsReminderLogsData'])->name('system.sms-reminder-logs.data');
 
     // Backup Settings
     Route::get('/backup', [SettingsController::class, 'backupSettings'])->name('backup');

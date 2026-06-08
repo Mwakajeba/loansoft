@@ -2,18 +2,13 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\ArrearsClassification;
+use App\Models\Complain;
+use App\Models\Loan;
+use App\Services\LoanPenaltyService;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
-use App\Models\ChartAccount;
-use App\Models\AccountClassGroup;
-use App\Models\GlTransaction;
-use App\Models\BankReconciliation;
-use App\Models\Journal;
-use App\Models\Payment;
-use App\Models\Penalty;
-use App\Models\Receipt;
-use App\Models\Complain;
-use App\Services\LoanPenaltyService;
 
 class DashboardController extends Controller
 {
@@ -37,57 +32,58 @@ class DashboardController extends Controller
             $userBranchIds = \App\Models\Branch::where('company_id', $company->id)->pluck('id')->toArray();
         }
 
+        $scheduleForMonth = function ($m) use ($year, $company, $selectedBranchId, $userBranchIds) {
+            $q = \App\Models\LoanSchedule::query()
+                ->whereYear('loan_schedules.due_date', $year)
+                ->whereMonth('loan_schedules.due_date', $m)
+                ->join('loans', 'loan_schedules.loan_id', '=', 'loans.id')
+                ->join('branches', 'loans.branch_id', '=', 'branches.id')
+                ->where('branches.company_id', $company->id);
+
+            if ($selectedBranchId) {
+                $q->where('loans.branch_id', $selectedBranchId);
+            } elseif (! empty($userBranchIds)) {
+                $q->whereIn('loans.branch_id', $userBranchIds);
+            }
+
+            return $q;
+        };
+
         $months = [];
         $expected = [];
         $collected = [];
         $arrears = [];
         for ($m = 1; $m <= 12; $m++) {
-            $monthLabel = date('M', mktime(0, 0, 0, $m, 1));
-            $months[] = $monthLabel;
+            $months[] = date('M', mktime(0, 0, 0, $m, 1));
 
-            // Expected: sum of schedules due in this month (company + branch filtered)
-            $expectedQuery = DB::table('loan_schedules')
-                ->join('loans', 'loan_schedules.loan_id', '=', 'loans.id')
-                ->join('branches', 'loans.branch_id', '=', 'branches.id')
-                ->where('branches.company_id', $company->id)
-                ->whereYear('loan_schedules.due_date', $year)
-                ->whereMonth('loan_schedules.due_date', $m);
-
-            if ($selectedBranchId) {
-                $expectedQuery->where('loans.branch_id', $selectedBranchId);
-            } else {
-                $expectedQuery->whereIn('loans.branch_id', $userBranchIds);
-            }
-
-            $exp = (float) $expectedQuery->sum(DB::raw('COALESCE(loan_schedules.principal,0) + COALESCE(loan_schedules.interest,0)'));
+            $exp = (clone $scheduleForMonth($m))->sum(DB::raw('loan_schedules.principal + loan_schedules.interest'));
             $expected[] = $exp;
 
-            // Collected: sum of repayments for schedules due in this month (company + branch filtered)
-            $repaymentsQuery = DB::table('repayments')
+            $repayments = DB::table('repayments')
                 ->join('loan_schedules', 'repayments.loan_schedule_id', '=', 'loan_schedules.id')
                 ->join('loans', 'loan_schedules.loan_id', '=', 'loans.id')
                 ->join('branches', 'loans.branch_id', '=', 'branches.id')
+                ->whereNull('repayments.deleted_at')
                 ->where('branches.company_id', $company->id)
                 ->whereYear('loan_schedules.due_date', $year)
                 ->whereMonth('loan_schedules.due_date', $m);
 
             if ($selectedBranchId) {
-                $repaymentsQuery->where('loans.branch_id', $selectedBranchId);
-            } else {
-                $repaymentsQuery->whereIn('loans.branch_id', $userBranchIds);
+                $repayments->where('loans.branch_id', $selectedBranchId);
+            } elseif (! empty($userBranchIds)) {
+                $repayments->whereIn('loans.branch_id', $userBranchIds);
             }
 
-            $repayments = (float) $repaymentsQuery->sum(DB::raw('COALESCE(repayments.principal,0) + COALESCE(repayments.interest,0)'));
-            $collected[] = $repayments;
-
-            // Arrears: expected - collected
-            $arrears[] = max(0, $exp - $repayments);
+            $collectedSum = (float) $repayments->sum(DB::raw('repayments.principal + repayments.interest'));
+            $collected[] = $collectedSum;
+            $arrears[] = max(0, $exp - $collectedSum);
         }
+
         return response()->json([
             'months' => $months,
             'expected' => $expected,
             'collected' => $collected,
-            'arrears' => $arrears
+            'arrears' => $arrears,
         ]);
     }
     /**
@@ -222,65 +218,10 @@ class DashboardController extends Controller
             $userBranchIds = \App\Models\Branch::where('company_id', $company->id)->pluck('id')->toArray();
         }
         
-        // Get balance sheet data
-        $balanceSheetData = $this->getBalanceSheetData($selectedBranchId, $userBranchIds);
-        
         // Get comprehensive financial report data
         $financialReportData = $this->getFinancialReportData($selectedBranchId, $userBranchIds);
-        
-        // Get current month
-        $currentMonth = now()->format('Y-m');
 
-        // Get recent activities - filter by company through branch and current month
-        $recentJournals = Journal::whereHas('branch', function($query) use ($company) {
-            $query->where('company_id', $company->id);
-        })->when($selectedBranchId, function($query) use ($selectedBranchId) {
-            return $query->where('branch_id', $selectedBranchId);
-        }, function($query) use ($userBranchIds) {
-            return $query->whereIn('branch_id', $userBranchIds);
-        })
-        ->whereRaw("DATE_FORMAT(date, '%Y-%m') = ?", [$currentMonth])
-        ->with(['user', 'branch'])
-        ->latest()
-        ->take(5)
-        ->get();
-        
-        $paymentsMonthQuery = Payment::whereHas('branch', function ($query) use ($company) {
-            $query->where('company_id', $company->id);
-        })->when($selectedBranchId, function ($query) use ($selectedBranchId) {
-            return $query->where('branch_id', $selectedBranchId);
-        }, function ($query) use ($userBranchIds) {
-            return $query->whereIn('branch_id', $userBranchIds);
-        })
-            ->whereRaw("DATE_FORMAT(date, '%Y-%m') = ?", [$currentMonth]);
-
-        // Full month totals (must not use take(5) — that was only for the recent list)
-        $totalPaymentsThisMonth = (clone $paymentsMonthQuery)->sum('amount');
-
-        $recentPayments = (clone $paymentsMonthQuery)
-            ->with(['user', 'branch'])
-            ->latest()
-            ->take(5)
-            ->get();
-
-        $receiptsMonthQuery = Receipt::whereHas('branch', function ($query) use ($company) {
-            $query->where('company_id', $company->id);
-        })->when($selectedBranchId, function ($query) use ($selectedBranchId) {
-            return $query->where('branch_id', $selectedBranchId);
-        }, function ($query) use ($userBranchIds) {
-            return $query->whereIn('branch_id', $userBranchIds);
-        })
-            ->whereRaw("DATE_FORMAT(date, '%Y-%m') = ?", [$currentMonth]);
-
-        $totalReceiptsThisMonth = (clone $receiptsMonthQuery)->sum('amount');
-
-        $recentReceipts = (clone $receiptsMonthQuery)
-            ->with(['user', 'branch', 'customer'])
-            ->latest()
-            ->take(5)
-            ->get();
-        
-        $loans_status_stats = ['active', 'written_off', 'defaulted', 'completed','complete_topup'];
+        $loans_status_stats = ['active', 'written_off', 'defaulted', 'completed', 'complete_topup'];
         // Loan statistics for Total Loan Amount (only active and completed)
         $loansForTotalAmount = \App\Models\Loan::whereHas('branch', function($query) use ($company) {
             $query->where('company_id', $company->id);
@@ -437,14 +378,53 @@ class DashboardController extends Controller
         $pendingComplaintsCount = (clone $complaintsQuery)->where('status', 'pending')->count();
         $totalComplaintsCount = $complaintsQuery->count();
 
+        // Active-loan KPIs (dashboard stat cards)
+        $activeLoansForKpi = Loan::with(['schedule.repayments', 'repayments'])
+            ->whereHas('branch', function ($query) use ($company) {
+                $query->where('company_id', $company->id);
+            })
+            ->when($selectedBranchId, function ($query) use ($selectedBranchId) {
+                return $query->where('branch_id', $selectedBranchId);
+            }, function ($query) use ($userBranchIds) {
+                return $query->whereIn('branch_id', $userBranchIds);
+            })
+            ->where('status', 'active')
+            ->get();
+
+        $principalDisbursed = (float) $activeLoansForKpi->sum('amount');
+        $interestExpected = 0.0;
+        $principalCollected = 0.0;
+        $interestCollected = 0.0;
+        $outstandingPrincipalActive = 0.0;
+        $outstandingInterestActive = 0.0;
+
+        foreach ($activeLoansForKpi as $loan) {
+            if ($loan->schedule && $loan->schedule->isNotEmpty()) {
+                foreach ($loan->schedule as $schedule) {
+                    $interestExpected += (float) ($schedule->interest ?? 0);
+                    $principalCollected += (float) $schedule->repayments->sum('principal');
+                    $interestCollected += (float) $schedule->repayments->sum('interest');
+                    $prPaid = (float) $schedule->repayments->sum('principal');
+                    $intPaid = (float) $schedule->repayments->sum('interest');
+                    $outstandingPrincipalActive += max(0, (float) ($schedule->principal ?? 0) - $prPaid);
+                    $outstandingInterestActive += max(0, (float) ($schedule->interest ?? 0) - $intPaid);
+                }
+            } else {
+                $interestExpected += (float) ($loan->interest_amount ?? 0);
+                $principalCollected += (float) $loan->total_principal_paid;
+                $interestCollected += (float) $loan->total_interest_paid;
+                $outstandingPrincipalActive += max(0, (float) ($loan->amount ?? 0) - (float) $loan->total_principal_paid);
+                $outstandingInterestActive += max(0, (float) ($loan->interest_amount ?? 0) - (float) $loan->total_interest_paid);
+            }
+        }
+
+        $totalLoansExpected = $principalDisbursed + $interestExpected;
+        $totalOutstanding = $outstandingPrincipalActive + $outstandingInterestActive + (float) $penaltyBalance;
+
+        $arrearsBucketStats = $this->buildArrearsBucketLoanCounts($activeLoansForKpi);
+
         return view('dashboard', compact(
-            'balanceSheetData',
             'financialReportData',
-            'recentJournals',
-            'recentPayments',
-            'recentReceipts',
-            'totalPaymentsThisMonth',
-            'totalReceiptsThisMonth',
             'penaltyBalance',
             'previousYearData',
             'totalLoanAmount',
@@ -463,80 +443,113 @@ class DashboardController extends Controller
             'branches',
             'selectedBranchId',
             'pendingComplaintsCount',
-            'totalComplaintsCount'
+            'totalComplaintsCount',
+            'principalDisbursed',
+            'interestExpected',
+            'totalLoansExpected',
+            'principalCollected',
+            'interestCollected',
+            'outstandingPrincipalActive',
+            'outstandingInterestActive',
+            'totalOutstanding',
+            'arrearsBucketStats'
         ));
     }
-    
-    private function getBalanceSheetData($selectedBranchId = null, $userBranchIds = [])
+
+    private function buildArrearsBucketLoanCounts($activeLoans): array
     {
-        $company = auth()->user()->company;
-        
-        // Get balance sheet data directly from gl_transactions
-        $query = DB::table('gl_transactions')
-            ->join('chart_accounts', 'gl_transactions.chart_account_id', '=', 'chart_accounts.id')
-            ->join('account_class_groups', 'chart_accounts.account_class_group_id', '=', 'account_class_groups.id')
-            ->join('account_class', 'account_class_groups.class_id', '=', 'account_class.id')
-            ->where('account_class_groups.company_id', $company->id);
-        
-        // Apply branch filter
-        if ($selectedBranchId) {
-            $query->where('gl_transactions.branch_id', $selectedBranchId);
-        } else {
-            // If no specific branch selected, filter by user's assigned branches
-            $query->whereIn('gl_transactions.branch_id', $userBranchIds);
+        $classifications = ArrearsClassification::query()
+            ->forCompany()
+            ->where('is_active', true)
+            ->orderBy('sort_order')
+            ->orderBy('id')
+            ->get();
+
+        if ($classifications->isEmpty()) {
+            return [];
         }
-        
-        $balanceSheetData = $query
-            ->select(
-                'account_class.name as class_name',
-                'account_class_groups.group_code as class_code',
-                DB::raw('SUM(CASE WHEN gl_transactions.nature = "debit" THEN gl_transactions.amount ELSE 0 END) as total_debit'),
-                DB::raw('SUM(CASE WHEN gl_transactions.nature = "credit" THEN gl_transactions.amount ELSE 0 END) as total_credit'),
-                DB::raw('COUNT(DISTINCT chart_accounts.id) as account_count')
-            )
-            ->groupBy('account_class.id', 'account_class.name', 'account_class_groups.group_code')
-            ->get()
-            ->map(function ($item) {
-                // Calculate balance based on account class
-                $balance = 0;
-                switch (strtolower($item->class_name)) {
-                    case 'assets':
-                        $balance = $item->total_debit - $item->total_credit; // Assets: debit increases
-                        break;
-                    case 'liabilities':
-                        $balance = $item->total_credit - $item->total_debit; // Liabilities: credit increases
-                        break;
-                    case 'equity':
-                        $balance = $item->total_credit - $item->total_debit; // Equity: credit increases
-                        break;
-                    case 'income':
-                    case 'revenue':
-                        $balance = $item->total_credit - $item->total_debit; // Revenue: credit increases
-                        break;
-                    case 'expenses':
-                    case 'expense':
-                        $balance = $item->total_debit - $item->total_credit; // Expenses: debit increases
-                        break;
-                    default:
-                        $balance = $item->total_debit - $item->total_credit;
+
+        $stats = [];
+        foreach ($classifications as $c) {
+            $stats[$c->id] = [
+                'bucket_label' => $c->bucket_label,
+                'status' => $c->status,
+                'days_from' => (int) $c->days_from,
+                'days_to' => $c->days_to !== null ? (int) $c->days_to : null,
+                'provision_percentage' => (float) $c->provision_percentage,
+                'loan_count' => 0,
+                'provision_amount' => 0.0,
+                'arrears_principal' => 0.0,
+                'arrears_interest' => 0.0,
+                'arrears_total' => 0.0,
+            ];
+        }
+
+        foreach ($activeLoans as $loan) {
+            $dpd = (int) $loan->days_in_arrears;
+            $arrearsSplit = $this->loanArrearsPrincipalInterestSplit($loan);
+            foreach ($classifications as $c) {
+                if ($this->arrearsDpdMatchesBucket(
+                    $dpd,
+                    (int) $c->days_from,
+                    $c->days_to !== null ? (int) $c->days_to : null
+                )) {
+                    $stats[$c->id]['loan_count']++;
+                    $rate = (float) $c->provision_percentage / 100.0;
+                    $stats[$c->id]['provision_amount'] += $arrearsSplit['principal'] * $rate;
+                    $stats[$c->id]['arrears_principal'] += $arrearsSplit['principal'];
+                    $stats[$c->id]['arrears_interest'] += $arrearsSplit['interest'];
+                    $stats[$c->id]['arrears_total'] += $arrearsSplit['total'];
+                    break;
                 }
-                
-                return [
-                    'class_name' => $item->class_name,
-                    'class_code' => $item->class_code,
-                    'balance' => $balance,
-                    'account_count' => $item->account_count
-                ];
-            })
-            ->sortByDesc(function ($item) {
-                return abs($item['balance']);
-            })
-            ->values()
-            ->toArray();
-            
-        return $balanceSheetData;
+            }
+        }
+
+        return $classifications->map(fn ($c) => $stats[$c->id])->values()->all();
     }
-    
+
+    private function arrearsDpdMatchesBucket(int $dpd, int $daysFrom, ?int $daysTo): bool
+    {
+        if ($daysTo === null) {
+            return $dpd >= $daysFrom;
+        }
+
+        return $dpd >= $daysFrom && $dpd <= $daysTo;
+    }
+
+    private function loanArrearsPrincipalInterestSplit(Loan $loan): array
+    {
+        if ($loan->status === 'restructured') {
+            return ['principal' => 0.0, 'interest' => 0.0, 'total' => 0.0];
+        }
+
+        $today = Carbon::now();
+        $principal = 0.0;
+        $interest = 0.0;
+
+        foreach ($loan->schedule ?? [] as $scheduleItem) {
+            if (($scheduleItem->status ?? null) === 'restructured') {
+                continue;
+            }
+
+            $dueDate = Carbon::parse($scheduleItem->due_date);
+            if (! $dueDate->lt($today) || (float) $scheduleItem->remaining_amount <= 0) {
+                continue;
+            }
+
+            $prPaid = (float) $scheduleItem->repayments->sum('principal');
+            $intPaid = (float) $scheduleItem->repayments->sum('interest');
+            $principal += max(0.0, (float) ($scheduleItem->principal ?? 0) - $prPaid);
+            $interest += max(0.0, (float) ($scheduleItem->interest ?? 0) - $intPaid);
+        }
+
+        return [
+            'principal' => $principal,
+            'interest' => $interest,
+            'total' => (float) $loan->arrears_amount,
+        ];
+    }
+
     private function getFinancialReportData($selectedBranchId = null, $userBranchIds = [])
     {
         $company = auth()->user()->company;

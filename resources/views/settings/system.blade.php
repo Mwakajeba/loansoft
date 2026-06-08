@@ -254,6 +254,33 @@
                                                 </div>
                                             @endforeach
                                         </div>
+
+                                        @if($groupKey === 'notifications')
+                                            <hr class="my-4">
+                                            <h5 class="mb-3">
+                                                <i class="bx bx-list-ul me-1"></i> Reminder SMS Log
+                                            </h5>
+                                            <p class="text-muted small mb-3">
+                                                Customers reminded by the automated repayment reminder job (runs daily at 08:00).
+                                            </p>
+                                            <div class="table-responsive">
+                                                <table id="smsReminderLogsTable" class="table table-striped table-bordered w-100">
+                                                    <thead>
+                                                        <tr>
+                                                            <th>Sent At</th>
+                                                            <th>Customer</th>
+                                                            <th>Phone</th>
+                                                            <th>Loan No</th>
+                                                            <th>Amount Due</th>
+                                                            <th>Reminder</th>
+                                                            <th>Due Date</th>
+                                                            <th>Status</th>
+                                                            <th>Source</th>
+                                                        </tr>
+                                                    </thead>
+                                                </table>
+                                            </div>
+                                        @endif
                                     </div>
                                 @endforeach
                             </div>
@@ -367,6 +394,55 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
     // ── END SMS Reminder master toggle ──────────────────────────────────────
+
+    // SMS Reminder logs DataTable (lazy-init when tab is shown)
+    var smsLogsTableInitialized = false;
+    function initSmsReminderLogsTable() {
+        if (smsLogsTableInitialized || typeof $ === 'undefined' || !$.fn.DataTable) {
+            return;
+        }
+        var tableEl = document.getElementById('smsReminderLogsTable');
+        if (!tableEl) {
+            return;
+        }
+        smsLogsTableInitialized = true;
+        $('#smsReminderLogsTable').DataTable({
+            processing: true,
+            serverSide: true,
+            ajax: {
+                url: '{{ route("settings.system.sms-reminder-logs.data") }}',
+                type: 'GET',
+                headers: { 'X-Requested-With': 'XMLHttpRequest' }
+            },
+            columns: [
+                { data: 'sent_at_fmt', name: 'sent_at', orderable: true, searchable: false },
+                { data: 'customer_name', name: 'customer_name', orderable: false, searchable: true },
+                { data: 'phone_number', name: 'phone_number', orderable: true, searchable: true },
+                { data: 'loan_no', name: 'loan_no', orderable: false, searchable: true },
+                { data: 'amount_due', name: 'amount_due', orderable: false, searchable: false },
+                { data: 'reminder_type', name: 'reminder_type', orderable: false, searchable: false },
+                { data: 'due_date_fmt', name: 'due_date_fmt', orderable: false, searchable: false },
+                { data: 'status_badge', name: 'status_badge', orderable: false, searchable: false },
+                { data: 'source_label', name: 'source_label', orderable: false, searchable: false }
+            ],
+            order: [[0, 'desc']],
+            pageLength: 15,
+            lengthMenu: [[10, 15, 25, 50], [10, 15, 25, 50]],
+            language: {
+                processing: '<div class="spinner-border text-primary" role="status"></div>',
+                emptyTable: 'No reminder SMS sent yet.',
+                zeroRecords: 'No matching reminder logs found.'
+            }
+        });
+    }
+
+    var notificationsTab = document.getElementById('notifications-tab');
+    if (notificationsTab) {
+        notificationsTab.addEventListener('shown.bs.tab', initSmsReminderLogsTable);
+        if (notificationsTab.classList.contains('active')) {
+            initSmsReminderLogsTable();
+        }
+    }
 
     // Show password requirements for security settings
     showPasswordRequirements();
