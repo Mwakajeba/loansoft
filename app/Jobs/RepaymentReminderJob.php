@@ -12,7 +12,9 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use App\Models\SmsLog;
 
 class RepaymentReminderJob implements ShouldQueue
 {
@@ -169,8 +171,33 @@ class RepaymentReminderJob implements ShouldQueue
             $message = preg_replace('/\(leo\s+zijazo\)/u', '(leo)', $message);
 
             $phone = normalize_phone_number($customer->phone1);
-            SmsHelper::send($phone, $message, 'loan_arrears_reminder');
-            Log::info("Reminder SMS sent to customer {$customer->id} for loan {$loan->loanNo}, schedule {$schedule->id}: TZS {$amount} ({$reminderType})");
+            $smsResult = SmsHelper::send($phone, $message, 'loan_arrears_reminder');
+
+            $logResponse = is_array($smsResult) ? $smsResult : ['raw' => $smsResult];
+            $logResponse['reminder_meta'] = [
+                'loan_id' => $loan->id,
+                'loan_no' => $loan->loanNo,
+                'schedule_id' => $schedule->id,
+                'reminder_type' => $reminderType,
+                'amount_due' => $amount,
+                'due_date' => $schedule->due_date,
+                'days_until' => $daysUntil,
+            ];
+
+            DB::table('sms_logs')->insert([
+                'customer_id' => $customer->id,
+                'phone_number' => $phone,
+                'message' => $message,
+                'sms_type' => SmsLog::TYPE_REPAYMENT_REMINDER,
+                'response' => json_encode($logResponse),
+                'sent_by' => null,
+                'sent_at' => now(),
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+
+            $status = !empty($logResponse['success']) ? 'sent' : 'failed';
+            Log::info("Reminder SMS {$status} to customer {$customer->id} for loan {$loan->loanNo}, schedule {$schedule->id}: TZS {$amount} ({$reminderType})");
         } catch (\Throwable $e) {
             Log::error("Failed to send repayment reminder SMS for loan {$loan->loanNo}: " . $e->getMessage());
         }

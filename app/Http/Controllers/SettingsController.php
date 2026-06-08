@@ -21,6 +21,7 @@ use App\Jobs\AccruePenaltyJob;
 use App\Jobs\CalculateDailyInterestJob;
 use Barryvdh\DomPDF\Facade\Pdf;
 use App\Models\ArrearsClassification;
+use App\Models\SmsLog;
 
 class SettingsController extends Controller
 {
@@ -633,6 +634,87 @@ class SettingsController extends Controller
                 return $m > 0 ? "{$m}m {$s}s" : "{$s}s";
             })
             ->rawColumns(['status_badge', 'type_badge'])
+            ->make(true);
+    }
+
+    /**
+     * DataTables AJAX: SMS repayment reminder logs for System Settings.
+     */
+    public function smsReminderLogsData(Request $request)
+    {
+        if (!$request->ajax()) {
+            return response()->json([], 400);
+        }
+
+        if (!auth()->user()->can('view system configurations')
+            && !auth()->user()->can('manage system settings')
+            && !auth()->user()->hasRole('admin')) {
+            abort(403);
+        }
+
+        $companyId = current_company_id();
+
+        $query = SmsLog::query()
+            ->with('customer')
+            ->where('sms_type', SmsLog::TYPE_REPAYMENT_REMINDER)
+            ->whereHas('customer', function ($q) use ($companyId) {
+                $q->where('company_id', $companyId);
+            })
+            ->orderByDesc('sent_at');
+
+        return DataTables::eloquent($query)
+            ->addColumn('customer_name', function (SmsLog $log) {
+                return e($log->customer?->name ?? '—');
+            })
+            ->addColumn('loan_no', function (SmsLog $log) {
+                return e($log->reminderMeta()['loan_no'] ?? '—');
+            })
+            ->addColumn('amount_due', function (SmsLog $log) {
+                $amount = $log->reminderMeta()['amount_due'] ?? null;
+                return $amount !== null ? number_format((float) str_replace(',', '', (string) $amount), 2) : '—';
+            })
+            ->addColumn('reminder_type', function (SmsLog $log) {
+                return e($log->reminderMeta()['reminder_type'] ?? '—');
+            })
+            ->addColumn('due_date_fmt', function (SmsLog $log) {
+                $dueDate = $log->reminderMeta()['due_date'] ?? null;
+                if (!$dueDate) {
+                    return '—';
+                }
+                try {
+                    return \Carbon\Carbon::parse($dueDate)->format('d/m/Y');
+                } catch (\Throwable) {
+                    return e((string) $dueDate);
+                }
+            })
+            ->addColumn('sent_at_fmt', function (SmsLog $log) {
+                return $log->sent_at ? $log->sent_at->format('d/m/Y H:i') : '—';
+            })
+            ->addColumn('status_badge', function (SmsLog $log) {
+                $status = $log->deliveryStatus();
+                if ($status === 'sent') {
+                    return '<span class="badge bg-success">Sent</span>';
+                }
+                if ($status === 'failed') {
+                    return '<span class="badge bg-danger">Failed</span>';
+                }
+                if ($status === 'skipped') {
+                    return '<span class="badge bg-secondary">Skipped</span>';
+                }
+                return '<span class="badge bg-light text-dark">Unknown</span>';
+            })
+            ->addColumn('source_label', function () {
+                return '<span class="badge bg-info">System</span>';
+            })
+            ->filterColumn('customer_name', function ($query, $keyword) {
+                $query->whereHas('customer', function ($q) use ($keyword) {
+                    $q->where('name', 'like', "%{$keyword}%");
+                });
+            })
+            ->filterColumn('loan_no', function ($query, $keyword) {
+                $query->where('response', 'like', '%"loan_no":"' . addcslashes($keyword, '"\\') . '%');
+            })
+            ->rawColumns(['status_badge', 'source_label'])
             ->make(true);
     }
 
