@@ -198,7 +198,7 @@ use Vinkla\Hashids\Facades\Hashids;
                                         <th>Total</th>
                                         <th>Period</th>
                                         <th>Status</th>
-                                        <th>Days in Arrears</th>
+                                        <th>Arrears (Days / Amount)</th>
                                         <th>Branch</th>
                                         <th>Date Applied</th>
                                         <th class="text-center">Actions</th>

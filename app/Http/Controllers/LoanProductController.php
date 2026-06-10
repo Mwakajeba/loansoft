@@ -700,19 +700,26 @@ class LoanProductController extends Controller
             ->addColumn('status_badge', fn ($loan) => $this->loanStatusBadge($loan->status))
             ->addColumn('days_in_arrears_display', function ($loan) {
                 $days = (int) $loan->days_in_arrears;
-                if ($days <= 0) {
+                $amount = (float) $loan->arrears_amount;
+
+                if ($days <= 0 && $amount <= 0) {
                     return '<span class="text-muted">—</span>';
                 }
 
                 $badgeClass = match (true) {
+                    $days <= 0 => 'bg-secondary',
                     $days <= 30 => 'bg-warning text-dark',
                     $days <= 90 => 'bg-danger',
                     default => 'bg-dark',
                 };
 
-                $label = $days === 1 ? '1 day' : $days . ' days';
+                $daysLabel = $days === 1 ? '1 day' : $days . ' days';
+                $amountLabel = 'TZS ' . number_format($amount, 2);
 
-                return '<span class="badge ' . $badgeClass . '">' . e($label) . '</span>';
+                return '<div class="text-nowrap">'
+                    . '<span class="badge ' . $badgeClass . '">' . e($daysLabel) . '</span>'
+                    . '<br><small class="text-danger fw-semibold">' . e($amountLabel) . '</small>'
+                    . '</div>';
             })
             ->addColumn('branch_name', fn ($loan) => e(optional($loan->branch)->name ?? 'N/A'))
             ->addColumn('formatted_date', function ($loan) {
