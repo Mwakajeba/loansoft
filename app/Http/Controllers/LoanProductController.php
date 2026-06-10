@@ -663,6 +663,7 @@ class LoanProductController extends Controller
             'branch:id,name',
             'group:id,name',
             'loanOfficer:id,name',
+            'schedule.repayments',
         ])
             ->where('product_id', $productId)
             ->where('branch_id', $branchId)
@@ -697,6 +698,22 @@ class LoanProductController extends Controller
             ->addColumn('formatted_total', fn ($loan) => number_format($loan->amount_total, 2))
             ->addColumn('interest_display', fn ($loan) => round($loan->interest, 2) . '%')
             ->addColumn('status_badge', fn ($loan) => $this->loanStatusBadge($loan->status))
+            ->addColumn('days_in_arrears_display', function ($loan) {
+                $days = (int) $loan->days_in_arrears;
+                if ($days <= 0) {
+                    return '<span class="text-muted">—</span>';
+                }
+
+                $badgeClass = match (true) {
+                    $days <= 30 => 'bg-warning text-dark',
+                    $days <= 90 => 'bg-danger',
+                    default => 'bg-dark',
+                };
+
+                $label = $days === 1 ? '1 day' : $days . ' days';
+
+                return '<span class="badge ' . $badgeClass . '">' . e($label) . '</span>';
+            })
             ->addColumn('branch_name', fn ($loan) => e(optional($loan->branch)->name ?? 'N/A'))
             ->addColumn('formatted_date', function ($loan) {
                 return $loan->date_applied
@@ -730,7 +747,7 @@ class LoanProductController extends Controller
             ->filterColumn('status_badge', function ($query, $keyword) {
                 $query->whereRaw('LOWER(status) LIKE LOWER(?)', ["%{$keyword}%"]);
             })
-            ->rawColumns(['customer_name', 'status_badge', 'actions'])
+            ->rawColumns(['customer_name', 'status_badge', 'days_in_arrears_display', 'actions'])
             ->make(true);
     }
 
