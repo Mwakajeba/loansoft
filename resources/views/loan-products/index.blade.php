@@ -198,6 +198,7 @@ use Vinkla\Hashids\Facades\Hashids;
                                         <th>Total</th>
                                         <th>Period</th>
                                         <th>Status</th>
+                                        <th>Days in Arrears</th>
                                         <th>Branch</th>
                                         <th>Date Applied</th>
                                         <th class="text-center">Actions</th>
@@ -314,11 +315,12 @@ use Vinkla\Hashids\Facades\Hashids;
                     { data: 'formatted_total', name: 'amount_total', orderable: true, searchable: true },
                     { data: 'period', name: 'period', orderable: true, searchable: true },
                     { data: 'status_badge', name: 'status', orderable: true, searchable: true },
+                    { data: 'days_in_arrears_display', name: 'days_in_arrears', orderable: false, searchable: false },
                     { data: 'branch_name', name: 'branch_name', orderable: true, searchable: true },
                     { data: 'formatted_date', name: 'date_applied', orderable: true, searchable: true },
                     { data: 'actions', name: 'actions', orderable: false, searchable: false, className: 'text-center' }
                 ],
-                order: [[8, 'desc']],
+                order: [[9, 'desc']],
                 pageLength: 25,
                 lengthMenu: [[10, 25, 50, 100], [10, 25, 50, 100]],
                 language: {
