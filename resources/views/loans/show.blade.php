@@ -774,6 +774,14 @@
                                                                 <i class="bx bx-x-circle me-1"></i>Remove Penalty
                                                             </button>
                                                         @endif
+                                                        @if(!$loanSettled && $item->isAccruedInterestWaiverAllowed())
+                                                            @can('process loan payments')
+                                                            <button type="button" class="btn btn-sm btn-outline-danger ms-1"
+                                                                onclick="waiveAccruedInterest('{{ $item->id }}', '{{ number_format($item->waivable_accrued_interest, 2) }}')">
+                                                                <i class="bx bx-minus-circle me-1"></i>Waive Interest
+                                                            </button>
+                                                            @endcan
+                                                        @endif
                                                     </td>
                                                 </tr>
                                             @endforeach
@@ -3344,6 +3352,94 @@
                         },
                         error: function (xhr) {
                             let errorMessage = 'Failed to remove penalty.';
+                            if (xhr.responseJSON && xhr.responseJSON.message) {
+                                errorMessage = xhr.responseJSON.message;
+                            }
+
+                            Swal.fire({
+                                title: 'Error!',
+                                text: errorMessage,
+                                icon: 'error',
+                                confirmButtonText: 'OK'
+                            });
+                        }
+                    });
+                }
+            });
+        }
+
+        function waiveAccruedInterest(scheduleId, waivableAmount) {
+            Swal.fire({
+                title: 'Waive Accrued Interest',
+                html: `
+                            <div class="text-start">
+                                <p><strong>Unpaid accrued interest:</strong> TZS ${waivableAmount}</p>
+                                <div class="mb-3">
+                                    <label for="interest_waive_amount_input" class="form-label">Amount to Waive</label>
+                                    <input type="number" class="form-control" id="interest_waive_amount_input" step="0.01" min="0" />
+                                    <small class="text-muted">Enter an amount up to the unpaid accrued interest. The loan total will be reduced by the same amount.</small>
+                                </div>
+                                <div class="mb-3">
+                                    <label for="interest_waive_reason" class="form-label">Reason for Waiver (Optional)</label>
+                                    <textarea class="form-control" id="interest_waive_reason" rows="3" placeholder="Enter reason for interest waiver..."></textarea>
+                                </div>
+                            </div>
+                        `,
+                icon: 'warning',
+                showCancelButton: true,
+                confirmButtonText: 'Waive Interest',
+                cancelButtonText: 'Cancel',
+                confirmButtonColor: '#dc3545',
+                cancelButtonColor: '#6c757d',
+                didOpen: (popup) => {
+                    const maxAmount = parseFloat(String(waivableAmount).replace(/[^\d.]/g, '')) || 0;
+                    const amountInput = popup.querySelector('#interest_waive_amount_input');
+                    if (amountInput) {
+                        amountInput.value = maxAmount.toFixed(2);
+                        amountInput.setAttribute('max', maxAmount.toFixed(2));
+                        amountInput.setAttribute('min', '0');
+                        amountInput.setAttribute('step', '0.01');
+                    }
+                },
+                preConfirm: () => {
+                    const maxAmount = parseFloat(String(waivableAmount).replace(/[^\d.]/g, '')) || 0;
+                    const amountInput = document.getElementById('interest_waive_amount_input');
+                    const enteredAmount = parseFloat(String(amountInput.value).replace(/[^\d.]/g, '')) || 0;
+
+                    if (enteredAmount <= 0) {
+                        Swal.showValidationMessage('Amount must be greater than zero');
+                        return false;
+                    }
+                    if (enteredAmount > maxAmount) {
+                        Swal.showValidationMessage(`Amount cannot exceed unpaid accrued interest (TZS ${maxAmount.toFixed(2)})`);
+                        return false;
+                    }
+
+                    return {
+                        reason: document.getElementById('interest_waive_reason').value,
+                        amount: enteredAmount
+                    };
+                }
+            }).then((result) => {
+                if (result.isConfirmed) {
+                    $.ajax({
+                        url: `/repayments/waive-accrued-interest/${scheduleId}`,
+                        method: 'POST',
+                        data: {
+                            amount: result.value.amount,
+                            loan_id: $('#loan_id').val() || window.loanId || '',
+                            schedule_id: scheduleId,
+                            reason: result.value.reason,
+                            _token: $('meta[name="csrf-token"]').attr('content')
+                        },
+                        success: function () {
+                            showToast('Success!', 'Accrued interest waived successfully!', 'success');
+                            setTimeout(() => {
+                                location.reload();
+                            }, 1500);
+                        },
+                        error: function (xhr) {
+                            let errorMessage = 'Failed to waive accrued interest.';
                             if (xhr.responseJSON && xhr.responseJSON.message) {
                                 errorMessage = xhr.responseJSON.message;
                             }

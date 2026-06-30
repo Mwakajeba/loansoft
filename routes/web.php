@@ -1101,6 +1101,7 @@ Route::middleware(['auth'])->group(function () {
     Route::get('/repayments/context/{loanId}', [LoanRepaymentController::class, 'repaymentContext'])->name('repayments.context');
     Route::get('/repayments/schedule/{scheduleId}', [LoanRepaymentController::class, 'getScheduleDetails'])->name('repayments.schedule-details');
     Route::post('/repayments/remove-penalty/{scheduleId}', [LoanRepaymentController::class, 'removePenalty'])->name('repayments.remove-penalty');
+    Route::post('/repayments/waive-accrued-interest/{scheduleId}', [LoanRepaymentController::class, 'waiveAccruedInterest'])->name('repayments.waive-accrued-interest');
     Route::post('/repayments/calculate-schedule/{loanId}', [LoanRepaymentController::class, 'calculateSchedule'])->name('repayments.calculate-schedule');
     Route::post('/repayments/bulk', [LoanRepaymentController::class, 'bulkRepayment'])->name('repayments.bulk');
     Route::delete('/repayments/bulk-delete', [LoanRepaymentController::class, 'bulkDestroy'])->name('repayments.bulk-delete');
