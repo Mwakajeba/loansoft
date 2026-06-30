@@ -1132,6 +1132,89 @@ class LoanRepaymentService
     }
 
     /**
+     * Waive accrued / unpaid interest on a schedule and reduce loan interest totals.
+     */
+    public function waiveAccruedInterest($scheduleId, $reason = null, $amount = null, $loanId = null)
+    {
+        DB::beginTransaction();
+
+        try {
+            $schedule = LoanSchedule::with(['repayments', 'loan.product'])->findOrFail($scheduleId);
+            $loan = $schedule->loan ?? ($loanId ? Loan::with('product')->find($loanId) : null);
+
+            if (! $loan) {
+                throw new \Exception('Loan not found for this schedule.');
+            }
+
+            if (! in_array($loan->status, [Loan::STATUS_ACTIVE, Loan::STATUS_DEFAULTED], true)) {
+                throw new \Exception('Accrued interest can only be waived on active loans.');
+            }
+
+            if (in_array($schedule->status, ['paid', 'cancelled', 'restructured'], true)) {
+                throw new \Exception('Interest cannot be waived on this schedule item.');
+            }
+
+            $interestPaid = (float) $schedule->repayments->sum('interest');
+            $interestDue = (float) $schedule->balance_interest_component;
+            $waivable = max(0, round($interestDue - $interestPaid, 2));
+
+            $waiveAmount = $amount !== null ? round((float) $amount, 2) : $waivable;
+
+            if ($waiveAmount <= 0) {
+                throw new \Exception('Waiver amount must be greater than zero.');
+            }
+            if ($waiveAmount > $waivable + 0.01) {
+                throw new \Exception('Waiver amount cannot exceed unpaid accrued interest on this schedule.');
+            }
+
+            $newInterestDue = max($interestPaid, round($interestDue - $waiveAmount, 2));
+
+            if ($loan->usesDailyInterestAccrual()) {
+                $schedule->update(['accrued_interest' => $newInterestDue]);
+            } else {
+                $newScheduled = max($interestPaid, round((float) $schedule->interest - $waiveAmount, 2));
+                $newAccrued = min((float) ($schedule->accrued_interest ?? 0), $newInterestDue);
+                if ($newAccrued > $newScheduled) {
+                    $newAccrued = $newScheduled;
+                }
+
+                $schedule->update([
+                    'interest' => $newScheduled,
+                    'accrued_interest' => $newAccrued,
+                ]);
+            }
+
+            $loan->interest_amount = max(0, round((float) $loan->interest_amount - $waiveAmount, 2));
+            $loan->amount_total = max((float) $loan->amount, round((float) $loan->amount_total - $waiveAmount, 2));
+            $loan->save();
+
+            Log::info("Waived accrued interest for schedule ID: {$scheduleId}", [
+                'loan_id' => $loan->id,
+                'waive_amount' => $waiveAmount,
+                'new_interest_due' => $newInterestDue,
+                'reason' => $reason,
+                'user_id' => auth()->id(),
+            ]);
+
+            DB::commit();
+
+            return [
+                'success' => true,
+                'message' => 'Accrued interest waived successfully. Schedule and loan totals have been updated.',
+                'waived_amount' => $waiveAmount,
+                'new_interest_due' => $newInterestDue,
+            ];
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error("Failed to waive accrued interest for schedule ID: {$scheduleId}", [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            throw $e;
+        }
+    }
+
+    /**
      * Reverse Accrued Penalty rows (and their GL) for a schedule, newest first.
      */
     private function reverseAccruedPenaltiesForSchedule(LoanSchedule $schedule, float $amountToReverse, ?string $reason): float

@@ -238,6 +238,32 @@ class LoanSchedule extends Model
     }
 
     /**
+     * Unpaid interest on this schedule that can be waived (accrued/scheduled minus interest already paid).
+     */
+    public function getWaivableAccruedInterestAttribute(): float
+    {
+        $interestPaid = $this->repayments
+            ? (float) $this->repayments->sum('interest')
+            : 0.0;
+        $interestDue = (float) $this->balance_interest_component;
+
+        return max(0, round($interestDue - $interestPaid, 2));
+    }
+
+    public function isAccruedInterestWaiverAllowed(): bool
+    {
+        if (in_array($this->status, ['paid', 'cancelled', 'restructured'], true)) {
+            return false;
+        }
+
+        if ($this->loan && ! in_array($this->loan->status, [Loan::STATUS_ACTIVE, Loan::STATUS_DEFAULTED], true)) {
+            return false;
+        }
+
+        return $this->waivable_accrued_interest > 0.009;
+    }
+
+    /**
      * Schedules due today with unpaid balance (for navbar / notifications).
      *
      * @return Collection<int, object{name: string, amount_due: float}>

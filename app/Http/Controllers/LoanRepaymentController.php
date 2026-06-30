@@ -524,6 +524,50 @@ class LoanRepaymentController extends Controller
     }
 
     /**
+     * Waive accrued interest on a schedule item.
+     */
+    public function waiveAccruedInterest(Request $request, $scheduleId)
+    {
+        try {
+            $request->validate([
+                'amount' => 'required|numeric|min:0',
+                'loan_id' => 'required|exists:loans,id',
+                'schedule_id' => 'required|exists:loan_schedules,id',
+                'reason' => 'nullable|string|max:500',
+            ]);
+
+            $schedule = LoanSchedule::with(['repayments', 'loan.product'])->findOrFail($request->schedule_id);
+            $interestPaid = (float) $schedule->repayments->sum('interest');
+            $interestDue = (float) $schedule->balance_interest_component;
+            $waivable = max(0, round($interestDue - $interestPaid, 2));
+            $requestedAmount = (float) $request->amount;
+
+            if ($requestedAmount > $waivable + 0.01) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Amount cannot exceed unpaid accrued interest on this schedule.',
+                ], 422);
+            }
+
+            $result = $this->repaymentService->waiveAccruedInterest(
+                $request->schedule_id,
+                $request->reason,
+                $request->amount,
+                $request->loan_id
+            );
+
+            return response()->json($result);
+        } catch (\Exception $e) {
+            Log::error('Accrued interest waiver error: ' . $e->getMessage());
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to waive accrued interest: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
      * Calculate loan schedule
      */
     public function calculateSchedule(Request $request, $loanId)
