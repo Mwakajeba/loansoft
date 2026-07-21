@@ -163,7 +163,6 @@
                                                 </a>
                                                 @endcan
 
-                                                @can('edit loan')
                                                 @if($application->canBeEdited() && $application->usesApplicationEditForm())
                                                 <a href="{{ route('loans.application.edit', Hashids::encode($application->id)) }}"
                                                     class="btn btn-sm btn-outline-warning"
@@ -176,9 +175,7 @@
                                                 </a>
                                                 @endif
                                                 @endif
-                                                @endcan
-                                                
-                                                @can('delete loan')
+
                                                 @if($application->canBeDeleted())
                                                 <button type="button"
                                                     class="btn btn-sm btn-outline-dark"
@@ -187,7 +184,6 @@
                                                     Delete
                                                 </button>
                                                 @endif
-                                                @endcan
                                             </div>
                                         </td>
                                     </tr>
@@ -275,8 +271,14 @@
                 methodField.name = '_method';
                 methodField.value = 'DELETE';
 
+                const returnStatusField = document.createElement('input');
+                returnStatusField.type = 'hidden';
+                returnStatusField.name = 'return_status';
+                returnStatusField.value = '{{ $status ?? "applied" }}';
+
                 form.appendChild(csrfToken);
                 form.appendChild(methodField);
+                form.appendChild(returnStatusField);
                 document.body.appendChild(form);
                 form.submit();
             }

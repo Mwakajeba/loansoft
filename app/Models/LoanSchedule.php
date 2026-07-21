@@ -87,13 +87,13 @@ class LoanSchedule extends Model
      */
     public function getRemainingAmountAttribute()
     {
-        if (in_array($this->status, ['paid', 'cancelled', 'restructured'], true)) {
+        if (in_array($this->status, ['cancelled', 'restructured'], true)) {
             return 0.0;
         }
 
         $totalDue = $this->principal + $this->balance_interest_component + $this->fee_amount + $this->penalty_amount;
 
-        return max(0, $totalDue - $this->paid_amount);
+        return round(max(0, $totalDue - $this->paid_amount), 2);
     }
 
     /**
@@ -143,7 +143,7 @@ class LoanSchedule extends Model
             ->get();
 
         return $siblingSchedules->filter(function ($schedule) {
-            return $schedule->remaining_amount > 0;
+            return Loan::hasCollectibleBalance((float) $schedule->remaining_amount);
         })->count();
     }
 
@@ -167,7 +167,7 @@ class LoanSchedule extends Model
      */
     public function getIsFullyPaidAttribute()
     {
-        return $this->remaining_amount <= 0;
+        return Loan::isNegligibleBalance((float) $this->remaining_amount);
     }
 
     /**
@@ -183,7 +183,7 @@ class LoanSchedule extends Model
      */
     public function getPaymentPercentageAttribute()
     {
-        if (in_array($this->status, ['paid', 'cancelled', 'restructured'], true)) {
+        if (in_array($this->status, ['cancelled', 'restructured'], true)) {
             return 100;
         }
 

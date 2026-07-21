@@ -882,4 +882,61 @@ class DashboardController extends Controller
             ]
         ]);
     }
+    private function resolveDashboardBranchContext(Request $request): array
+    {
+        $user = auth()->user();
+        $company = $user->company;
+        $branchParam = $request->input('branch_id');
+        $selectedBranchId = ($branchParam === null || $branchParam === '') ? null : (int) $branchParam;
+        $branches = $user->branches()->where('company_id', $company->id)->get();
+        $userBranchIds = $branches->pluck('id')->toArray();
+        if (empty($userBranchIds)) {
+            $userBranchIds = \App\Models\Branch::where('company_id', $company->id)->pluck('id')->toArray();
+        }
+
+        return compact('user', 'company', 'selectedBranchId', 'userBranchIds', 'branches');
+    }
+
+    private function dashboardPrincipalLoansQuery($company, $selectedBranchId, $userBranchIds)
+    {
+        $statuses = ['active', 'written_off', 'defaulted', 'completed', 'complete_topup'];
+
+        return \App\Models\Loan::with(['customer', 'product', 'branch', 'bankAccount'])
+            ->whereHas('branch', function ($query) use ($company) {
+                $query->where('company_id', $company->id);
+            })
+            ->when($selectedBranchId, function ($query) use ($selectedBranchId) {
+                return $query->where('branch_id', $selectedBranchId);
+            }, function ($query) use ($userBranchIds) {
+                return $query->whereIn('branch_id', $userBranchIds);
+            })
+            ->whereIn('status', $statuses)
+            ->orderByDesc('disbursed_on')
+            ->orderByDesc('id');
+    }
+
+    /**
+     * Loans that make up the dashboard "Total Principal" figure.
+     */
+    public function principalLoans(Request $request)
+    {
+        ['company' => $company, 'selectedBranchId' => $selectedBranchId, 'userBranchIds' => $userBranchIds, 'branches' => $branches] = $this->resolveDashboardBranchContext($request);
+
+        $loans = $this->dashboardPrincipalLoansQuery($company, $selectedBranchId, $userBranchIds)->get();
+
+        $totalPrincipal = $loans->sum('amount');
+        $totalInterest = $loans->sum('interest_amount');
+        $branchName = $selectedBranchId
+            ? ($branches->firstWhere('id', $selectedBranchId)?->name ?? 'Selected branch')
+            : 'All branches';
+
+        return view('dashboard.principal-loans', compact(
+            'loans',
+            'totalPrincipal',
+            'totalInterest',
+            'selectedBranchId',
+            'branchName',
+            'branches'
+        ));
+    }
 }

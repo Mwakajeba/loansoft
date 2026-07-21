@@ -67,6 +67,7 @@ Route::post('/dcb/callback', [DcbGatewayController::class, 'callback'])->name('d
 Route::get('/dashboard/loan-product-disbursement', [DashboardController::class, 'loanProductDisbursement'])->middleware('auth');
 Route::get('/dashboard/delinquency-loan-buckets', [DashboardController::class, 'delinquencyLoanBuckets'])->middleware('auth');
 Route::get('/dashboard/monthly-collections', [DashboardController::class, 'monthlyCollections'])->middleware('auth');
+Route::get('/dashboard/principal-loans', [DashboardController::class, 'principalLoans'])->middleware(['auth', 'can:view loans'])->name('dashboard.principal-loans');
 // API route for bank accounts
 Route::get('/api/bank-accounts', [\App\Http\Controllers\Api\BankAccountController::class, 'index']);
 
@@ -163,6 +164,9 @@ Route::get('/reports/loans', [App\Http\Controllers\ReportsController::class, 'lo
 Route::get('/reports/loans/portfolio-classification', [App\Http\Controllers\LoanReportController::class, 'portfolioClassificationReport'])->middleware('auth')->name('reports.loans.portfolio_classification');
 Route::get('/reports/loans/portfolio-classification/export-excel', [App\Http\Controllers\LoanReportController::class, 'exportPortfolioClassificationToExcel'])->middleware('auth')->name('reports.loans.portfolio_classification.export_excel');
 Route::get('/reports/loans/portfolio-classification/export-pdf', [App\Http\Controllers\LoanReportController::class, 'exportPortfolioClassificationToPdf'])->middleware('auth')->name('reports.loans.portfolio_classification.export_pdf');
+Route::get('/reports/loans/customer-statement', [App\Http\Controllers\LoanReportController::class, 'customerLoanStatementReport'])->middleware('auth')->name('reports.loans.customer_statement');
+Route::get('/reports/loans/customer-statement/export-excel', [App\Http\Controllers\LoanReportController::class, 'exportCustomerLoanStatementToExcel'])->middleware('auth')->name('reports.loans.customer_statement.export_excel');
+Route::get('/reports/loans/customer-statement/export-pdf', [App\Http\Controllers\LoanReportController::class, 'exportCustomerLoanStatementToPdf'])->middleware('auth')->name('reports.loans.customer_statement.export_pdf');
 Route::get('/reports/customers', [App\Http\Controllers\ReportsController::class, 'customers'])->middleware('auth')->name('reports.customers');
 Route::get("/reports/customers/list", [App\Http\Controllers\Reports\CustomerListReportController::class, "index"])->middleware("auth")->name("reports.customers.list");
 Route::get("/reports/customers/list/export", [App\Http\Controllers\Reports\CustomerListReportController::class, "export"])->middleware("auth")->name("reports.customers.list.export");
@@ -773,6 +777,10 @@ Route::name('loans.reports.')->group(function () {
     Route::get('/expected-vs-collected/export-excel', [LoanReportController::class, 'exportExpectedVsCollectedToExcel'])->name('expected_vs_collected.export_excel');
     Route::get('/expected-vs-collected/export-pdf', [LoanReportController::class, 'exportExpectedVsCollectedToPdf'])->name('expected_vs_collected.export_pdf');
 
+    // Group Repayment Schedule Card
+    Route::get('/group-repayment-schedule', [LoanReportController::class, 'groupRepaymentScheduleReport'])->name('group_repayment_schedule');
+    Route::get('/group-repayment-schedule/export-pdf', [LoanReportController::class, 'exportGroupRepaymentScheduleToPdf'])->name('group_repayment_schedule.export_pdf');
+
     // Portfolio at Risk (PAR) Report
     Route::get('/portfolio-at-risk', [LoanReportController::class, 'portfolioAtRiskReport'])->name('portfolio_at_risk');
     Route::get('/portfolio-at-risk/export-excel', [LoanReportController::class, 'exportPortfolioAtRiskToExcel'])->name('portfolio_at_risk.export_excel');
@@ -867,6 +875,10 @@ Route::prefix('accounting/loans/reports')->name('accounting.loans.reports.')->mi
     Route::get('/expected-vs-collected', [LoanReportController::class, 'expectedVsCollectedReport'])->name('expected_vs_collected');
     Route::get('/expected-vs-collected/export-excel', [LoanReportController::class, 'exportExpectedVsCollectedToExcel'])->name('expected_vs_collected.export_excel');
     Route::get('/expected-vs-collected/export-pdf', [LoanReportController::class, 'exportExpectedVsCollectedToPdf'])->name('expected_vs_collected.export_pdf');
+
+    // Group Repayment Schedule Card
+    Route::get('/group-repayment-schedule', [LoanReportController::class, 'groupRepaymentScheduleReport'])->name('group_repayment_schedule');
+    Route::get('/group-repayment-schedule/export-pdf', [LoanReportController::class, 'exportGroupRepaymentScheduleToPdf'])->name('group_repayment_schedule.export_pdf');
 
     // Portfolio at Risk (PAR) Report
     Route::get('/portfolio-at-risk', [LoanReportController::class, 'portfolioAtRiskReport'])->name('portfolio_at_risk');
@@ -1151,6 +1163,13 @@ Route::middleware(['auth'])->prefix('cash_collaterals')->group(function () {
     Route::get('/', [CashCollateralController::class, 'index'])->name('cash_collaterals.index');
     Route::get('/create', [CashCollateralController::class, 'create'])->name('cash_collaterals.create');
     Route::post('/', [CashCollateralController::class, 'store'])->name('cash_collaterals.store');
+
+    // Bulk deposit (RMW) — must be before parameterized routes
+    Route::get('/rmw/deposit', [CashCollateralController::class, 'rmwDeposit'])->name('cash_collaterals.rmw.deposit');
+    Route::post('/rmw/deposit', [CashCollateralController::class, 'rmwDepositStore'])->name('cash_collaterals.rmw.deposit.store');
+    Route::get('/rmw/deposit/progress', [CashCollateralController::class, 'rmwDepositProgress'])->name('cash_collaterals.rmw.deposit.progress');
+    Route::get('/rmw/deposit/sample', [CashCollateralController::class, 'rmwDepositSample'])->name('cash_collaterals.rmw.deposit.sample');
+
     Route::get('/{cashcollateral}', [CashCollateralController::class, 'show'])->name('cash_collaterals.show');
     Route::get('/{cashcollateral}/edit', [CashCollateralController::class, 'edit'])->name('cash_collaterals.edit');
     Route::delete('/{cashcollateral}/delete', [CashCollateralController::class, 'destroy'])->name('cash_collaterals.destroy');

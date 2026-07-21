@@ -115,6 +115,16 @@ class LoanDisbursementGlService
             return;
         }
 
+        if ($branchId === null || (int) $branchId <= 0) {
+            $branchId = $loan->branch_id ?: $loan->bankAccount?->branch_id;
+        }
+
+        if ($branchId === null || (int) $branchId <= 0) {
+            throw new \Exception('Branch is required for loan disbursement accounting.');
+        }
+
+        $branchId = (int) $branchId;
+
         $product = $loan->product;
         $principalReceivable = optional($product->principalReceivableAccount)->id;
 
@@ -130,6 +140,14 @@ class LoanDisbursementGlService
         $principalAmount = round((float) $loan->amount, 2);
         $releaseFeeTotal = $this->calculateReleaseFeeTotal($loan);
         $disbursementAmount = round($principalAmount - $releaseFeeTotal, 2);
+
+        if ($disbursementAmount < 0) {
+            throw new \Exception(
+                'Release-date fees (' . number_format($releaseFeeTotal, 2)
+                . ' TZS) exceed loan principal (' . number_format($principalAmount, 2)
+                . ' TZS). Reduce fees or increase the loan amount.'
+            );
+        }
 
         if (!$this->hasLoanPayment($loan->id)) {
             $payment = Payment::create([

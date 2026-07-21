@@ -14,8 +14,14 @@ use App\Models\GlTransaction;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Str;
 use Vinkla\Hashids\Facades\Hashids;
 use App\Helpers\SmsHelper;
+use App\Jobs\BulkCashCollateralDepositJob;
+use App\Exports\GenericArrayExport;
+use Maatwebsite\Excel\Facades\Excel;
+use PhpOffice\PhpSpreadsheet\IOFactory;
 
 class CashCollateralController extends Controller
 {
@@ -1056,5 +1062,318 @@ class CashCollateralController extends Controller
         } catch (\Exception $e) {
             abort(404, 'Withdrawal receipt not found: ' . $e->getMessage());
         }
+    }
+    /**
+     * Bulk deposit upload page (RMW).
+     */
+    public function rmwDeposit()
+    {
+        $this->authorizeBulkDeposit();
+
+        $bankAccounts = BankAccount::forUserBranches()->orderBy('name')->get();
+        $customerCount = CashCollateral::where('branch_id', Auth::user()->branch_id)
+            ->where('company_id', Auth::user()->company_id)
+            ->count();
+
+        return view('cash_collaterals.rmw_deposit', compact('bankAccounts', 'customerCount'));
+    }
+
+    /**
+     * Download sample Excel with all deposit accounts in the branch.
+     */
+    public function rmwDepositSample()
+    {
+        $this->authorizeBulkDeposit();
+
+        $user = Auth::user();
+        $collaterals = CashCollateral::with(['customer', 'type'])
+            ->where('branch_id', $user->branch_id)
+            ->where('company_id', $user->company_id)
+            ->orderBy('id')
+            ->get();
+
+        $rows = $collaterals->map(function (CashCollateral $collateral) {
+            return [
+                $collateral->customer->customerNo ?? '',
+                $collateral->customer->name ?? '',
+                $collateral->type->name ?? '',
+                '',
+            ];
+        })->all();
+
+        return Excel::download(
+            new GenericArrayExport($rows, ['customer_no', 'customer_name', 'deposit_type', 'amount']),
+            'bulk_deposit_template_'.date('Y-m-d').'.xlsx'
+        );
+    }
+
+    /**
+     * Process bulk deposit upload — chunked queue jobs with progress tracking.
+     */
+    public function rmwDepositStore(Request $request)
+    {
+        $this->authorizeBulkDeposit();
+
+        $validated = $request->validate([
+            'bank_account_id' => 'required|exists:bank_accounts,id',
+            'deposit_date' => 'required|date',
+            'upload_file' => 'required|file|mimes:csv,txt,xlsx,xls|max:20480',
+            'notes' => 'nullable|string|max:500',
+        ]);
+
+        try {
+            $file = $request->file('upload_file');
+            $extension = strtolower($file->getClientOriginalExtension());
+            [$headers, $dataRows] = $this->parseBulkDepositSpreadsheet($file->getPathname(), $extension);
+
+            $headerMap = [];
+            foreach ($headers as $index => $header) {
+                $key = strtolower(trim((string) $header));
+                if ($key !== '') {
+                    $headerMap[$key] = $index;
+                }
+            }
+
+            foreach (['customer_no', 'amount'] as $required) {
+                if (! array_key_exists($required, $headerMap)) {
+                    $message = "Missing required column: {$required}. Download the sample template and try again.";
+                    if ($request->ajax()) {
+                        return response()->json(['success' => false, 'message' => $message], 422);
+                    }
+
+                    return redirect()->back()->withErrors(['upload_file' => $message]);
+                }
+            }
+
+            $user = Auth::user();
+            $collateralLookup = $this->buildBranchCollateralLookup($user);
+            $eligibleRows = [];
+            $parseErrors = [];
+
+            foreach ($dataRows as $rowIndex => $row) {
+                if (! is_array($row)) {
+                    continue;
+                }
+
+                $customerNo = trim((string) ($row[$headerMap['customer_no']] ?? ''));
+                $amount = $this->parseSpreadsheetAmount($row[$headerMap['amount']] ?? null);
+
+                if ($customerNo === '' && $amount <= 0) {
+                    continue;
+                }
+
+                if ($customerNo === '') {
+                    $parseErrors[] = 'Row '.($rowIndex + 1).': customer_no is required.';
+                    continue;
+                }
+
+                if ($amount <= 0) {
+                    $parseErrors[] = "Row ".($rowIndex + 1).": amount must be greater than zero for customer {$customerNo}.";
+                    continue;
+                }
+
+                $lookup = $collateralLookup[$customerNo] ?? null;
+                if ($lookup === null) {
+                    $parseErrors[] = "Row ".($rowIndex + 1).": no deposit account found for customer {$customerNo}.";
+                    continue;
+                }
+
+                if ($lookup === 'multiple') {
+                    $parseErrors[] = "Row ".($rowIndex + 1).": customer {$customerNo} has multiple deposit accounts. Use separate single deposits.";
+                    continue;
+                }
+
+                $eligibleRows[] = [
+                    'collateral_id' => $lookup,
+                    'customer_no' => $customerNo,
+                    'amount' => $amount,
+                ];
+            }
+
+            if (empty($eligibleRows)) {
+                $message = 'No valid deposit rows found in the uploaded file.';
+                if ($request->ajax()) {
+                    return response()->json(['success' => false, 'message' => $message, 'errors' => $parseErrors], 422);
+                }
+
+                return redirect()->back()->withErrors(['upload_file' => $message]);
+            }
+
+            $importId = 'ccd_'.Str::uuid();
+            $totalRows = count($eligibleRows);
+            $notes = $validated['notes'] ?? ('Bulk cash deposit on '.$validated['deposit_date']);
+
+            Cache::put($importId, [
+                'status' => 'processing',
+                'current' => 0,
+                'total' => $totalRows,
+                'success' => 0,
+                'failed' => count($parseErrors),
+                'percentage' => 0,
+                'errors' => array_map(fn ($msg) => ['row' => '-', 'customer_no' => '', 'message' => $msg], array_slice($parseErrors, 0, 20)),
+            ], 7200);
+
+            $chunkSize = 25;
+            $chunks = array_chunk($eligibleRows, $chunkSize);
+            $totalChunks = count($chunks);
+            $useSyncQueue = config('queue.default') === 'sync';
+
+            Log::info('Bulk cash collateral deposit queued', [
+                'import_id' => $importId,
+                'total_rows' => $totalRows,
+                'total_chunks' => $totalChunks,
+                'queue' => config('queue.default'),
+            ]);
+
+            foreach ($chunks as $chunkIndex => $chunk) {
+                $job = new BulkCashCollateralDepositJob(
+                    $chunk,
+                    (int) $user->id,
+                    (int) $validated['bank_account_id'],
+                    $validated['deposit_date'],
+                    $notes,
+                    $chunkIndex,
+                    $totalChunks,
+                    $importId
+                );
+
+                if ($useSyncQueue) {
+                    $job->handle(app(CashCollateralDepositService::class));
+                } else {
+                    BulkCashCollateralDepositJob::dispatch(
+                        $chunk,
+                        (int) $user->id,
+                        (int) $validated['bank_account_id'],
+                        $validated['deposit_date'],
+                        $notes,
+                        $chunkIndex,
+                        $totalChunks,
+                        $importId
+                    );
+                }
+            }
+
+            $message = "Bulk deposit started for {$totalRows} record(s).";
+            if ($request->ajax()) {
+                return response()->json([
+                    'success' => true,
+                    'message' => $message,
+                    'import_id' => $importId,
+                    'total' => $totalRows,
+                    'skipped' => count($parseErrors),
+                ]);
+            }
+
+            return redirect()->route('cash_collaterals.rmw.deposit')
+                ->with('success', $message)
+                ->with('import_id', $importId);
+        } catch (\Throwable $e) {
+            Log::error('Bulk cash collateral deposit failed', ['error' => $e->getMessage()]);
+
+            if ($request->ajax()) {
+                return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
+            }
+
+            return redirect()->back()->withErrors(['upload_file' => $e->getMessage()]);
+        }
+    }
+
+    public function rmwDepositProgress(Request $request)
+    {
+        $importId = $request->get('import_id');
+        if (! $importId) {
+            return response()->json(['error' => 'Import ID is required'], 400);
+        }
+
+        $progress = Cache::get($importId);
+        if (! $progress) {
+            return response()->json(['status' => 'not_found', 'message' => 'Import progress not found']);
+        }
+
+        return response()->json($progress);
+    }
+
+    protected function authorizeBulkDeposit(): void
+    {
+        abort_unless(auth()->user()->can('deposit cash collateral'), 403);
+    }
+
+    /**
+     * @return array<string, int|string>
+     */
+    protected function buildBranchCollateralLookup($user): array
+    {
+        $collaterals = CashCollateral::with('customer')
+            ->where('branch_id', $user->branch_id)
+            ->where('company_id', $user->company_id)
+            ->get();
+
+        $lookup = [];
+        foreach ($collaterals as $collateral) {
+            $customerNo = trim((string) ($collateral->customer->customerNo ?? ''));
+            if ($customerNo === '') {
+                continue;
+            }
+
+            if (isset($lookup[$customerNo])) {
+                $lookup[$customerNo] = 'multiple';
+            } else {
+                $lookup[$customerNo] = $collateral->id;
+            }
+        }
+
+        return $lookup;
+    }
+
+    /**
+     * @return array{0: array<int, string>, 1: array<int, array<int, mixed>>}
+     */
+    protected function parseBulkDepositSpreadsheet(string $path, string $extension): array
+    {
+        if (in_array($extension, ['xlsx', 'xls'], true)) {
+            $spreadsheet = IOFactory::load($path);
+            $matrix = $spreadsheet->getActiveSheet()->toArray(null, true, true, false);
+        } else {
+            $lines = file($path, FILE_IGNORE_NEW_LINES);
+            if ($lines === false || count($lines) < 1) {
+                throw new \InvalidArgumentException('File is empty or unreadable.');
+            }
+            $matrix = array_map('str_getcsv', $lines);
+        }
+
+        $headerRowIndex = null;
+        foreach ($matrix as $i => $row) {
+            $normalized = array_map(
+                fn ($h) => strtolower(preg_replace('/^\xEF\xBB\xBF/', '', trim((string) $h))),
+                $row
+            );
+            if (in_array('customer_no', $normalized, true)) {
+                $headerRowIndex = $i;
+                break;
+            }
+        }
+
+        if ($headerRowIndex === null) {
+            throw new \InvalidArgumentException('Could not find header row (customer_no column).');
+        }
+
+        $headers = array_map(fn ($h) => preg_replace('/^\xEF\xBB\xBF/', '', trim((string) $h)), $matrix[$headerRowIndex]);
+
+        return [$headers, array_slice($matrix, $headerRowIndex + 1)];
+    }
+
+    protected function parseSpreadsheetAmount($value): float
+    {
+        if ($value === null || $value === '') {
+            return 0.0;
+        }
+
+        if (is_numeric($value)) {
+            return (float) $value;
+        }
+
+        $clean = preg_replace('/[^0-9.\-]/', '', (string) $value);
+
+        return (float) ($clean !== '' ? $clean : 0);
     }
 }

@@ -9,6 +9,7 @@ use App\Models\Loan;
 use App\Models\LoanSchedule;
 use App\Models\Repayment;
 use App\Models\Customer;
+use App\Services\LoanDueNotificationService;
 
 class LoanMessagesController extends Controller
 {
@@ -61,82 +62,34 @@ class LoanMessagesController extends Controller
     
     private function getDueMessages($branchId, $today)
     {
+        $service = app(LoanDueNotificationService::class);
         $dueMessages = [];
-        
-        $dueTodaySchedules = \App\Models\LoanSchedule::query()
-            ->with(['customer:id,name,phone1', 'repayments', 'loan:id,status,branch_id,amount', 'loan.product'])
-            ->whereHas('loan', function ($query) use ($branchId) {
-                $query->where('branch_id', $branchId)
-                    ->where('status', 'active');
-            })
-            ->whereDate('due_date', $today)
-            ->where(function ($query) {
-                $query->whereNull('loan_schedules.status')
-                    ->orWhereNotIn('loan_schedules.status', ['paid', 'cancelled', 'restructured']);
-            })
-            ->get()
-            ->filter(fn ($schedule) => $schedule->remaining_amount > \App\Models\Loan::OUTSTANDING_CLOSURE_THRESHOLD);
 
-        foreach ($dueTodaySchedules as $schedule) {
-            $amountDue = round((float) $schedule->remaining_amount, 2);
+        $buildMessage = function ($row, string $title, string $whenLabel, string $priority) {
+            return [
+                'id' => 'due_' . $row->schedule_id,
+                'type' => 'due',
+                'title' => $title,
+                'message' => "Customer {$row->name} has a loan payment due {$whenLabel}. Amount: TZS " . number_format($row->amount_due, 2),
+                'customer' => $row->name,
+                'customerId' => $row->customer_id,
+                'phone' => $row->phone1,
+                'amount' => $row->amount_due,
+                'dueDate' => $row->due_date,
+                'loanId' => $row->loan_id,
+                'isRead' => false,
+                'priority' => $priority,
+            ];
+        };
 
-            $dueMessages[] = [
-                'id' => 'due_' . $schedule->id,
-                'type' => 'due',
-                'title' => 'Payment Due Today',
-                'message' => "Customer {$schedule->customer->name} has a loan payment due today. Remaining: TZS " . number_format($amountDue, 2),
-                'customer' => $schedule->customer->name,
-                'customerId' => $schedule->customer_id,
-                'phone' => $schedule->customer->phone1,
-                'amount' => $amountDue,
-                'dueDate' => $schedule->due_date,
-                'loanId' => $schedule->loan_id,
-                'isRead' => false,
-                'priority' => 'high'
-            ];
+        foreach ($service->getDueOnDate((int) $branchId, $today) as $row) {
+            $dueMessages[] = $buildMessage($row, 'Payment Due Today', 'today', 'high');
         }
-        
-        // Get payments due tomorrow
-        $dueTomorrow = DB::table('loan_schedules as ls')
-            ->join('loans as l', 'ls.loan_id', '=', 'l.id')
-            ->join('customers as c', 'l.customer_id', '=', 'c.id')
-            ->where('l.branch_id', $branchId)
-            ->where('l.status', 'active')
-            ->whereDate('ls.due_date', $today->copy()->addDay())
-            ->select(
-                'ls.id',
-                'ls.due_date',
-                'ls.principal',
-                'ls.interest',
-                'ls.fee_amount',
-                'ls.penalty_amount',
-                'l.id as loan_id',
-                'l.amount as loan_amount',
-                'c.id as customer_id',
-                'c.name as customer_name',
-                'c.phone1'
-            )
-            ->get();
-            
-        foreach ($dueTomorrow as $schedule) {
-            $amountDue = $schedule->principal + $schedule->interest + $schedule->fee_amount + $schedule->penalty_amount;
-            
-            $dueMessages[] = [
-                'id' => 'due_' . $schedule->id,
-                'type' => 'due',
-                'title' => 'Payment Due Tomorrow',
-                'message' => "Customer {$schedule->customer_name} has a loan payment due tomorrow. Amount: TZS " . number_format($amountDue, 2),
-                'customer' => $schedule->customer_name,
-                'customerId' => $schedule->customer_id,
-                'phone' => $schedule->phone1,
-                'amount' => $amountDue,
-                'dueDate' => $schedule->due_date,
-                'loanId' => $schedule->loan_id,
-                'isRead' => false,
-                'priority' => 'medium'
-            ];
+
+        foreach ($service->getDueOnDate((int) $branchId, $today->copy()->addDay()) as $row) {
+            $dueMessages[] = $buildMessage($row, 'Payment Due Tomorrow', 'tomorrow', 'medium');
         }
-        
+
         return $dueMessages;
     }
     

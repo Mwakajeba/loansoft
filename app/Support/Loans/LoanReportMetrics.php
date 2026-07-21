@@ -230,7 +230,7 @@ class LoanReportMetrics
             return 0;
         }
 
-        $asOf = Carbon::parse($asOfDate)->startOfDay();
+        $asOf = Carbon::parse($asOfDate)->endOfDay();
         $firstOverdueDate = null;
 
         foreach ($loan->schedule->sortBy('due_date') as $scheduleItem) {
@@ -238,7 +238,7 @@ class LoanReportMetrics
                 continue;
             }
 
-            $dueDate = Carbon::parse($scheduleItem->due_date)->startOfDay();
+            $dueDate = Carbon::parse($scheduleItem->due_date);
             $remaining = self::scheduleRemainingAsOf($scheduleItem, $asOfDate);
 
             if ($dueDate->lt($asOf) && $remaining > 0.009) {
@@ -248,6 +248,31 @@ class LoanReportMetrics
         }
 
         return $firstOverdueDate ? (int) round($firstOverdueDate->diffInDays($asOf)) : 0;
+    }
+
+    /**
+     * Days past due for a single schedule as-of a date.
+     * Mirrors Loan::days_in_arrears (uses end-of-day anchor, same as Carbon::now() on the loan page).
+     */
+    public static function scheduleDaysInArrearsAsOf($scheduleItem, string $asOfDate): int
+    {
+        if (in_array(($scheduleItem->status ?? null), ['restructured', 'paid', 'cancelled'], true)) {
+            return 0;
+        }
+
+        $remaining = self::scheduleRemainingAsOf($scheduleItem, $asOfDate);
+        if ($remaining <= Loan::OUTSTANDING_CLOSURE_THRESHOLD) {
+            return 0;
+        }
+
+        $dueDate = Carbon::parse($scheduleItem->due_date);
+        $asOf = Carbon::parse($asOfDate)->endOfDay();
+
+        if ($dueDate->gte($asOf)) {
+            return 0;
+        }
+
+        return (int) round($dueDate->diffInDays($asOf));
     }
 
     public static function arrearsAmountAsOf(Loan $loan, string $asOfDate): float

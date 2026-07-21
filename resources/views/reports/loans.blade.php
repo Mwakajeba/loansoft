@@ -52,6 +52,22 @@
                                 </div>
                             </div>
 
+                            <!-- Group Repayment Schedule Card -->
+                            <div class="col-lg-4 col-md-6 mb-4">
+                                <div class="card h-100 border-info">
+                                    <div class="card-body text-center">
+                                        <div class="icon-box mb-3">
+                                            <i class="bx bx-grid-alt fs-1 text-info"></i>
+                                        </div>
+                                        <h5 class="card-title">Group Repayment Schedule Card</h5>
+                                        <p class="card-text text-muted">Print a group repayment card with member instalments per due date for a selected period.</p>
+                                        <a href="{{ route('loans.reports.group_repayment_schedule') }}" class="btn btn-info">
+                                            <i class="bx bx-file me-1"></i> View Report
+                                        </a>
+                                    </div>
+                                </div>
+                            </div>
+
                             @can('view loan performance report')
                             <div class="col-md-6 col-lg-4 mb-4">
                                 <div class="card border-success">
@@ -270,6 +286,22 @@
                                         <h5 class="card-title">Portfolio Classification Report</h5>
                                         <p class="card-text">Loan portfolio with arrears aging buckets, provision rates and provision amounts based on days past due.</p>
                                         <a href="{{ route('reports.loans.portfolio_classification') }}" class="btn btn-dark">
+                                            <i class="bx bx-file me-1"></i> Generate Report
+                                        </a>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Customer Loan Statement Report -->
+                            <div class="col-md-6 col-lg-4 mb-4">
+                                <div class="card border-primary">
+                                    <div class="card-body text-center">
+                                        <div class="mb-3">
+                                            <i class="bx bx-receipt fs-1 text-primary"></i>
+                                        </div>
+                                        <h5 class="card-title">Customer Loan Statement</h5>
+                                        <p class="card-text">Per-customer loan statement with summary, repayment schedule, penalties, arrears and settlement amounts.</p>
+                                        <a href="{{ route('reports.loans.customer_statement') }}" class="btn btn-primary">
                                             <i class="bx bx-file me-1"></i> Generate Report
                                         </a>
                                     </div>

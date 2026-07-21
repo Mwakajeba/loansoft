@@ -76,7 +76,7 @@ class ArrearsLoanController extends Controller
             foreach ($loan->schedule->sortBy('due_date') as $schedule) {
                 $dueDate = \Carbon\Carbon::parse($schedule->due_date);
                 
-                if ($dueDate->lt($today) && $schedule->remaining_amount > 0) {
+                if ($dueDate->lt($today) && \App\Models\Loan::hasCollectibleBalance((float) $schedule->remaining_amount)) {
                     $totalArrears += $schedule->remaining_amount;
                     $overdueSchedules[] = $schedule;
                     
@@ -88,7 +88,7 @@ class ArrearsLoanController extends Controller
             }
 
             // Only include loans that have arrears
-            if ($totalArrears > 0) {
+            if (\App\Models\Loan::hasCollectibleBalance((float) $totalArrears)) {
                 $arrearsData[] = [
                     'loan_id' => $loan->id,
                     'customer' => $loan->customer->name ?? 'N/A',

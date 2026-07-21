@@ -33,13 +33,26 @@ class RepaymentReportBuilder
 
     public static function makeFeeReceiptRows(Collection $receipts, Collection $loansById): Collection
     {
-        return $receipts->map(function ($receipt) use ($loansById) {
-            $loanId = self::extractLoanIdFromReference($receipt->reference ?? null);
-            if (!$loanId) {
-                return null;
-            }
+        $loansByReference = $loansById
+            ->mapWithKeys(function ($loan) {
+                $keys = [];
+                $loanId = (int) data_get($loan, 'id', 0);
+                $loanNo = trim((string) data_get($loan, 'loanNo', ''));
 
-            $loan = $loansById->get($loanId);
+                if ($loanId > 0) {
+                    $keys[(string) $loanId] = $loan;
+                    $keys['LOAN-' . $loanId] = $loan;
+                }
+
+                if ($loanNo !== '') {
+                    $keys[$loanNo] = $loan;
+                }
+
+                return $keys;
+            });
+
+        return $receipts->map(function ($receipt) use ($loansById, $loansByReference) {
+            $loan = self::resolveLoanFromReceiptReference($receipt->reference ?? null, $loansById, $loansByReference);
             if (!$loan) {
                 return null;
             }
@@ -53,6 +66,7 @@ class RepaymentReportBuilder
                 && $breakdown['interest'] <= 0
                 && $breakdown['fee_amount'] <= 0
                 && $breakdown['penalty_amount'] <= 0
+                && $breakdown['unclassified_amount'] <= 0
             ) {
                 return null;
             }
@@ -72,7 +86,11 @@ class RepaymentReportBuilder
                     'amount_paid' => $receiptAmount > 0
                         ? $receiptAmount
                         : round(
-                            $breakdown['principal'] + $breakdown['interest'] + $breakdown['fee_amount'] + $breakdown['penalty_amount'],
+                            $breakdown['principal']
+                            + $breakdown['interest']
+                            + $breakdown['fee_amount']
+                            + $breakdown['penalty_amount']
+                            + $breakdown['unclassified_amount'],
                             2
                         ),
                     'principal' => $breakdown['principal'],
@@ -82,6 +100,144 @@ class RepaymentReportBuilder
                 ]
             );
         })->filter()->values();
+    }
+
+    /**
+     * Build rows for direct customer receipts that settle loan penalties without repayment rows.
+     */
+    public static function makeCustomerPenaltyReceiptRows(Collection $receipts, Collection $loansById): Collection
+    {
+        $loansByReference = $loansById
+            ->mapWithKeys(function ($loan) {
+                $keys = [];
+                $loanId = (int) data_get($loan, 'id', 0);
+                $loanNo = trim((string) data_get($loan, 'loanNo', ''));
+
+                if ($loanId > 0) {
+                    $keys[(string) $loanId] = $loan;
+                    $keys['LOAN-' . $loanId] = $loan;
+                }
+
+                if ($loanNo !== '') {
+                    $keys[$loanNo] = $loan;
+                }
+
+                return $keys;
+            });
+
+        $loansByCustomerId = $loansById
+            ->groupBy(function ($loan) {
+                return (int) data_get($loan, 'customer_id', 0);
+            });
+
+        return $receipts->map(function ($receipt) use ($loansById, $loansByReference, $loansByCustomerId) {
+            $loan = self::resolveLoanForCustomerReceipt($receipt, $loansById, $loansByReference, $loansByCustomerId);
+            if (!$loan) {
+                return null;
+            }
+
+            $penaltyChartAccountIds = collect(data_get($loan, 'report_penalty_chart_account_ids', []))
+                ->filter()
+                ->map(fn ($id) => (int) $id)
+                ->unique()
+                ->values();
+
+            if ($penaltyChartAccountIds->isEmpty()) {
+                return null;
+            }
+
+            $penaltyAmount = round((float) collect($receipt->receiptItems ?? [])->sum(function ($item) use ($penaltyChartAccountIds) {
+                $amount = round((float) ($item->amount ?? 0), 2);
+                if ($amount <= 0) {
+                    return 0;
+                }
+
+                $chartAccountId = $item->chart_account_id ? (int) $item->chart_account_id : null;
+
+                return ($chartAccountId && $penaltyChartAccountIds->contains($chartAccountId)) ? $amount : 0;
+            }), 2);
+
+            if ($penaltyAmount <= 0) {
+                return null;
+            }
+
+            $paymentDate = Carbon::parse($receipt->date ?? $receipt->created_at)->toDateString();
+
+            return self::makeRow(
+                $loan,
+                [
+                    'entry_type' => 'customer_penalty_receipt',
+                    'payment_date' => $paymentDate,
+                    'payment_method' => data_get($receipt, 'bankAccount.chartAccount.account_name')
+                        ?? data_get($receipt, 'bankAccount.name', 'N/A'),
+                    'amount_paid' => $penaltyAmount,
+                    'principal' => 0,
+                    'interest' => 0,
+                    'fee_amount' => 0,
+                    'penalty_amount' => $penaltyAmount,
+                ]
+            );
+        })->filter()->values();
+    }
+
+    private static function resolveLoanFromReceiptReference($reference, Collection $loansById, Collection $loansByReference)
+    {
+        $loanId = self::extractLoanIdFromReference($reference);
+        if ($loanId) {
+            $loan = $loansById->get($loanId);
+            if ($loan) {
+                return $loan;
+            }
+        }
+
+        $normalizedReference = trim((string) $reference);
+        if ($normalizedReference === '') {
+            return null;
+        }
+
+        return $loansByReference->get($normalizedReference);
+    }
+
+    private static function resolveLoanForCustomerReceipt($receipt, Collection $loansById, Collection $loansByReference, Collection $loansByCustomerId)
+    {
+        $loan = self::resolveLoanFromReceiptReference($receipt->reference ?? null, $loansById, $loansByReference);
+        if ($loan) {
+            return $loan;
+        }
+
+        $customerId = (int) (
+            data_get($receipt, 'customer_id')
+            ?: (data_get($receipt, 'payee_type') === 'customer' ? data_get($receipt, 'payee_id') : 0)
+        );
+
+        if ($customerId <= 0) {
+            return null;
+        }
+
+        $candidateLoans = collect($loansByCustomerId->get($customerId, []))->values();
+        if ($candidateLoans->isEmpty()) {
+            return null;
+        }
+
+        if ($candidateLoans->count() === 1) {
+            return $candidateLoans->first();
+        }
+
+        $receiptDate = Carbon::parse($receipt->date ?? $receipt->created_at)->toDateString();
+
+        // Deterministic fallback when customer has multiple filtered loans.
+        return $candidateLoans
+            ->sortByDesc(function ($candidate) use ($receiptDate) {
+                $disbursedOn = data_get($candidate, 'disbursed_on');
+                if (!$disbursedOn) {
+                    return '0000-00-00';
+                }
+
+                $date = Carbon::parse($disbursedOn)->toDateString();
+
+                return $date <= $receiptDate ? $date : '0000-00-00';
+            })
+            ->first();
     }
 
     public static function summarize(Collection $rows): array
@@ -360,6 +516,7 @@ class RepaymentReportBuilder
             'interest' => 0.0,
             'fee_amount' => 0.0,
             'penalty_amount' => 0.0,
+            'unclassified_amount' => 0.0,
         ];
 
         foreach (collect($receipt->receiptItems ?? [])->values() as $item) {
@@ -396,8 +553,8 @@ class RepaymentReportBuilder
                 continue;
             }
 
-            // Keep entire receipt represented in the report even when item account is not explicitly mapped.
-            $breakdown['fee_amount'] += $amount;
+            // Keep row totals represented, but do not distort fee/penalty metrics.
+            $breakdown['unclassified_amount'] += $amount;
         }
 
         return [
@@ -405,6 +562,7 @@ class RepaymentReportBuilder
             'interest' => round($breakdown['interest'], 2),
             'fee_amount' => round($breakdown['fee_amount'], 2),
             'penalty_amount' => round($breakdown['penalty_amount'], 2),
+            'unclassified_amount' => round($breakdown['unclassified_amount'], 2),
         ];
     }
 
@@ -412,27 +570,49 @@ class RepaymentReportBuilder
     {
         $itemsBreakdown = self::configuredReceiptBreakdownForLoan($receipt, $loan);
         $repaymentBreakdown = self::breakdownFromRepayments($receipt, $loan);
-        $receiptAmount = round((float) ($receipt->amount ?? 0), 2);
+        $preferRepaymentBreakdown = self::shouldPreferRepaymentBreakdown($itemsBreakdown, $repaymentBreakdown);
 
         $combined = [
             // Prefer receipt-item classification (GL aligned); fallback to repayment allocation when needed.
-            'principal' => $itemsBreakdown['principal'] > 0 ? $itemsBreakdown['principal'] : $repaymentBreakdown['principal'],
-            'interest' => $itemsBreakdown['interest'] > 0 ? $itemsBreakdown['interest'] : $repaymentBreakdown['interest'],
-            'fee_amount' => $itemsBreakdown['fee_amount'] > 0 ? $itemsBreakdown['fee_amount'] : $repaymentBreakdown['fee_amount'],
-            'penalty_amount' => $itemsBreakdown['penalty_amount'] > 0 ? $itemsBreakdown['penalty_amount'] : $repaymentBreakdown['penalty_amount'],
+            'principal' => $preferRepaymentBreakdown
+                ? $repaymentBreakdown['principal']
+                : ($itemsBreakdown['principal'] > 0 ? $itemsBreakdown['principal'] : $repaymentBreakdown['principal']),
+            'interest' => $preferRepaymentBreakdown
+                ? $repaymentBreakdown['interest']
+                : ($itemsBreakdown['interest'] > 0 ? $itemsBreakdown['interest'] : $repaymentBreakdown['interest']),
+            'fee_amount' => $preferRepaymentBreakdown
+                ? $repaymentBreakdown['fee_amount']
+                : ($itemsBreakdown['fee_amount'] > 0 ? $itemsBreakdown['fee_amount'] : $repaymentBreakdown['fee_amount']),
+            'penalty_amount' => $preferRepaymentBreakdown
+                ? $repaymentBreakdown['penalty_amount']
+                : ($itemsBreakdown['penalty_amount'] > 0 ? $itemsBreakdown['penalty_amount'] : $repaymentBreakdown['penalty_amount']),
+            'unclassified_amount' => $itemsBreakdown['unclassified_amount'],
         ];
 
         foreach ($combined as $key => $value) {
             $combined[$key] = round((float) $value, 2);
         }
 
-        $combinedTotal = round($combined['principal'] + $combined['interest'] + $combined['fee_amount'] + $combined['penalty_amount'], 2);
-        if ($receiptAmount > 0 && abs($combinedTotal - $receiptAmount) > 0.02) {
-            // Keep row totals in sync with voucher total to avoid reconciliation drift.
-            $combined['fee_amount'] = round($combined['fee_amount'] + ($receiptAmount - $combinedTotal), 2);
-        }
-
         return $combined;
+    }
+
+    private static function shouldPreferRepaymentBreakdown(array $itemsBreakdown, array $repaymentBreakdown): bool
+    {
+        $itemComponentCount = collect([
+            $itemsBreakdown['principal'] ?? 0,
+            $itemsBreakdown['interest'] ?? 0,
+            $itemsBreakdown['fee_amount'] ?? 0,
+            $itemsBreakdown['penalty_amount'] ?? 0,
+        ])->filter(fn ($amount) => round((float) $amount, 2) > 0)->count();
+
+        $repaymentComponentCount = collect([
+            $repaymentBreakdown['principal'] ?? 0,
+            $repaymentBreakdown['interest'] ?? 0,
+            $repaymentBreakdown['fee_amount'] ?? 0,
+            $repaymentBreakdown['penalty_amount'] ?? 0,
+        ])->filter(fn ($amount) => round((float) $amount, 2) > 0)->count();
+
+        return $itemComponentCount <= 1 && $repaymentComponentCount > 1;
     }
 
     private static function breakdownFromRepayments($receipt, $loan): array
@@ -444,6 +624,7 @@ class RepaymentReportBuilder
                 'interest' => 0.0,
                 'fee_amount' => 0.0,
                 'penalty_amount' => 0.0,
+                'unclassified_amount' => 0.0,
             ];
         }
 
@@ -467,6 +648,7 @@ class RepaymentReportBuilder
                 'interest' => 0.0,
                 'fee_amount' => 0.0,
                 'penalty_amount' => 0.0,
+                'unclassified_amount' => 0.0,
             ];
         }
 
@@ -475,6 +657,7 @@ class RepaymentReportBuilder
             'interest' => round((float) $repayments->sum('interest'), 2),
             'fee_amount' => round((float) $repayments->sum('fee_amount'), 2),
             'penalty_amount' => round((float) $repayments->sum('penalt_amount'), 2),
+            'unclassified_amount' => 0.0,
         ];
     }
 

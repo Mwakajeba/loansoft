@@ -238,6 +238,24 @@
                                 </div>
                                 @endcan
 
+                                <!-- DCB Transactions Report -->
+                                @can('view dcb transactions report')
+                                <div class="col-md-6 col-lg-4 mb-4">
+                                    <div class="card border-primary">
+                                        <div class="card-body text-center">
+                                            <div class="mb-3">
+                                                <i class="bx bx-transfer fs-1 text-primary"></i>
+                                            </div>
+                                            <h5 class="card-title">DCB Transactions Report</h5>
+                                            <p class="card-text">View all DCB payment transactions with net amounts, charges, and totals by date, branch, and type.</p>
+                                            <a href="{{ route('accounting.reports.dcb-transactions') }}" class="btn btn-primary">
+                                                <i class="bx bx-file me-1"></i> Generate Report
+                                            </a>
+                                        </div>
+                                    </div>
+                                </div>
+                                @endcan
+
                                 <!-- Other Income Report -->
                                 @can('view other income report')
                                 <div class="col-md-6 col-lg-4 mb-4">

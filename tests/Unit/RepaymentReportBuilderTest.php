@@ -59,6 +59,52 @@ class RepaymentReportBuilderTest extends TestCase
         $this->assertSame(10.0, $rows[0]->penalty_amount);
     }
 
+    public function test_fee_receipts_support_loan_number_references(): void
+    {
+        $loan = (object) [
+            'id' => 13,
+            'loanNo' => 'SF-10000042',
+            'customer' => (object) ['name' => 'Jane Doe'],
+            'product' => (object) ['name' => 'Biashara'],
+            'branch' => (object) ['name' => 'HQ'],
+            'group' => (object) ['name' => 'Alpha'],
+            'loanOfficer' => (object) ['name' => 'Officer One'],
+            'balance' => 1250,
+            'report_receipt_fee_ids' => [1],
+            'report_receipt_chart_account_ids' => [16],
+            'report_penalty_chart_account_ids' => [22],
+            'report_principal_account_id' => 10,
+            'report_interest_account_ids' => [11],
+        ];
+
+        $receipt = (object) [
+            'reference' => 'SF-10000042',
+            'date' => '2026-05-12',
+            'amount' => 120,
+            'bankAccount' => (object) [
+                'chartAccount' => (object) ['account_name' => 'NBC Collection'],
+            ],
+            'receiptItems' => collect([
+                (object) ['fee_id' => null, 'chart_account_id' => 10, 'amount' => 70],
+                (object) ['fee_id' => null, 'chart_account_id' => 11, 'amount' => 20],
+                (object) ['fee_id' => null, 'chart_account_id' => 16, 'amount' => 20],
+                (object) ['fee_id' => null, 'chart_account_id' => 22, 'amount' => 10],
+            ]),
+        ];
+
+        $rows = RepaymentReportBuilder::makeFeeReceiptRows(
+            collect([$receipt]),
+            collect([$loan])->keyBy('id')
+        );
+
+        $this->assertCount(1, $rows);
+        $this->assertSame('SF-10000042', $rows[0]->loan_no);
+        $this->assertSame(70.0, $rows[0]->principal);
+        $this->assertSame(20.0, $rows[0]->interest);
+        $this->assertSame(20.0, $rows[0]->fee_amount);
+        $this->assertSame(10.0, $rows[0]->penalty_amount);
+    }
+
     public function test_monthly_groups_include_empty_months_and_grand_totals(): void
     {
         $rows = new Collection([
@@ -98,7 +144,7 @@ class RepaymentReportBuilderTest extends TestCase
         $this->assertSame(10.0, $summary['total_penalty']);
     }
 
-    public function test_unmapped_receipt_items_are_still_included_in_amount_paid(): void
+    public function test_unmapped_receipt_items_are_still_included_without_inflating_fees(): void
     {
         $loan = (object) [
             'id' => 7,
@@ -136,7 +182,8 @@ class RepaymentReportBuilderTest extends TestCase
 
         $this->assertCount(1, $rows);
         $this->assertSame(100.0, $rows[0]->amount_paid);
-        $this->assertSame(100.0, $rows[0]->fee_amount);
+        $this->assertSame(25.0, $rows[0]->fee_amount);
+        $this->assertSame(0.0, $rows[0]->penalty_amount);
     }
 
     public function test_receipt_with_repayments_uses_repayment_component_breakdown(): void
@@ -229,5 +276,50 @@ class RepaymentReportBuilderTest extends TestCase
         $this->assertSame(30.0, $rows[0]->interest);
         $this->assertSame(10.0, $rows[0]->fee_amount);
         $this->assertSame(10.0, $rows[0]->penalty_amount);
+    }
+
+    public function test_customer_penalty_receipts_are_included_for_matching_customer_loan(): void
+    {
+        $loan = (object) [
+            'id' => 31,
+            'customer_id' => 77,
+            'loanNo' => 'SF-31',
+            'customer' => (object) ['name' => 'Asha'],
+            'product' => (object) ['name' => 'Biashara'],
+            'branch' => (object) ['name' => 'HQ'],
+            'group' => (object) ['name' => 'Gamma'],
+            'loanOfficer' => (object) ['name' => 'Officer Three'],
+            'balance' => 2000,
+            'report_penalty_chart_account_ids' => [910],
+        ];
+
+        $receipt = (object) [
+            'reference' => 'MANUAL-77',
+            'customer_id' => 77,
+            'payee_type' => 'customer',
+            'payee_id' => 77,
+            'date' => '2026-08-15',
+            'amount' => 55000,
+            'bankAccount' => (object) [
+                'chartAccount' => (object) ['account_name' => 'NMB Collection'],
+            ],
+            'receiptItems' => collect([
+                (object) ['chart_account_id' => 910, 'amount' => 40000],
+                (object) ['chart_account_id' => 111, 'amount' => 15000],
+            ]),
+        ];
+
+        $rows = RepaymentReportBuilder::makeCustomerPenaltyReceiptRows(
+            collect([$receipt]),
+            collect([$loan])->keyBy('id')
+        );
+
+        $this->assertCount(1, $rows);
+        $this->assertSame('customer_penalty_receipt', $rows[0]->entry_type);
+        $this->assertSame('SF-31', $rows[0]->loan_no);
+        $this->assertSame(40000.0, $rows[0]->penalty_amount);
+        $this->assertSame(40000.0, $rows[0]->amount_paid);
+        $this->assertSame(0.0, $rows[0]->principal);
+        $this->assertSame(0.0, $rows[0]->interest);
     }
 }

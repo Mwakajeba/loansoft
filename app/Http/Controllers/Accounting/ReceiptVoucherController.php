@@ -70,7 +70,7 @@ class ReceiptVoucherController extends Controller
     {
         $user = Auth::user();
 
-        $receipts = Receipt::with(['bankAccount', 'user', 'customer', 'loan'])
+        $receipts = Receipt::with(['bankAccount', 'user', 'customer', 'supplier', 'loan'])
             ->whereHas('bankAccount.chartAccount.accountClassGroup', function ($query) use ($user) {
                 $query->where('company_id', $user->company_id);
             })
@@ -80,6 +80,25 @@ class ReceiptVoucherController extends Controller
             ->select('receipts.*');
 
         return DataTables::eloquent($receipts)
+            ->filter(function ($query) use ($request) {
+                $searchValue = trim((string) data_get($request->input('search', []), 'value', ''));
+                if ($searchValue === '') {
+                    return;
+                }
+
+                $query->where(function ($q) use ($searchValue) {
+                    $q->where('receipts.reference', 'like', "%{$searchValue}%")
+                        ->orWhere('receipts.reference_number', 'like', "%{$searchValue}%")
+                        ->orWhere('receipts.description', 'like', "%{$searchValue}%")
+                        ->orWhere('receipts.payee_name', 'like', "%{$searchValue}%")
+                        ->orWhereHas('customer', function ($customerQuery) use ($searchValue) {
+                            $customerQuery->where('name', 'like', "%{$searchValue}%");
+                        })
+                        ->orWhereHas('supplier', function ($supplierQuery) use ($searchValue) {
+                            $supplierQuery->where('name', 'like', "%{$searchValue}%");
+                        });
+                });
+            })
             ->addColumn('formatted_date', function ($receipt) {
                 return $receipt->date ? $receipt->date->format('M d, Y') : 'N/A';
             })
@@ -858,6 +877,19 @@ class ReceiptVoucherController extends Controller
             return redirect()->back()
                 ->withErrors(['error' => 'Failed to delete receipt voucher: ' . $e->getMessage()]);
         }
+    }
+
+    /**
+     * Fallback destroy endpoint for requests that send receipt_id in payload.
+     * Prevents route mismatch errors when the encoded id is missing from URL.
+     */
+    public function destroyByRequest(Request $request)
+    {
+        $request->validate([
+            'receipt_id' => 'required|string',
+        ]);
+
+        return $this->destroy($request->input('receipt_id'));
     }
 
     /**

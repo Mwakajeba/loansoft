@@ -73,6 +73,51 @@ class LoanSettlementBehaviorTest extends TestCase
         $this->assertSame(0.0, $plan['future_principal_payments'][0]['interest']);
     }
 
+    public function test_legacy_dust_balance_does_not_show_arrears(): void
+    {
+        Carbon::setTestNow('2026-06-06 09:00:00');
+
+        $loan = new Loan([
+            'status' => Loan::STATUS_ACTIVE,
+            'amount' => 201699.27,
+        ]);
+        $loan->setRelation('product', $this->stubProduct());
+
+        $paidSchedule = $this->makeSchedule(
+            $loan,
+            principal: 180000,
+            interest: 21699.27,
+            feeAmount: 0,
+            penaltyAmount: 0,
+            dueDate: '2026-06-02'
+        );
+        $paidSchedule->setRelation('repayments', new Collection([
+            (object) [
+                'principal' => 180000,
+                'interest' => 21699.27,
+                'fee_amount' => 0,
+                'penalt_amount' => 0,
+            ],
+        ]));
+
+        $futureSchedule = $this->makeSchedule(
+            $loan,
+            principal: 180000,
+            interest: 21699.27,
+            feeAmount: 0,
+            penaltyAmount: 0,
+            dueDate: '2026-07-02'
+        );
+
+        $loan->setRelation('schedule', new Collection([$paidSchedule, $futureSchedule]));
+
+        $this->assertTrue($paidSchedule->is_fully_paid);
+        $this->assertEquals(0.0, $paidSchedule->remaining_amount);
+        $this->assertFalse($loan->is_in_arrears);
+        $this->assertEquals(0.0, $loan->arrears_amount);
+        $this->assertSame(0, $loan->days_in_arrears);
+    }
+
     public function test_completed_loans_do_not_show_arrears_or_settlement_balance(): void
     {
         Carbon::setTestNow('2026-05-26 09:00:00');
