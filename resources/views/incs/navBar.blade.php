@@ -179,7 +179,8 @@
                             header('Location: ' . route('choose.branch'));
                             exit;
                         }
-                        $dueSchedules = \App\Models\LoanSchedule::dueTodayNotifications((int) $branchId);
+                        // Due Today list is provided by ViewServiceProvider (remaining balance, same as loan schedule).
+                        $dueSchedules = $dueSchedules ?? collect();
                     @endphp
                     <li class="nav-item dropdown dropdown-large">
                         <a class="nav-link dropdown-toggle dropdown-toggle-nocaret position-relative" href="#"

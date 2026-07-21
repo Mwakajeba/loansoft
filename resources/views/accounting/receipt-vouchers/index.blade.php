@@ -185,6 +185,15 @@
             $('#receiptVouchersTable').on('click', '.delete-receipt-btn', function () {
                 const receiptId = $(this).data('receipt-id');
                 const receiptReference = $(this).data('receipt-reference');
+                if (!receiptId) {
+                    Swal.fire({
+                        title: 'Error!',
+                        text: 'Missing receipt identifier. Please refresh and try again.',
+                        icon: 'error',
+                        confirmButtonText: 'OK'
+                    });
+                    return;
+                }
 
                 Swal.fire({
                     title: 'Are you sure?',
@@ -211,10 +220,11 @@
 
                         // Use AJAX instead of form submission to maintain loading state
                         $.ajax({
-                            url: `/accounting/receipt-vouchers/${receiptId}`,
+                            url: '{{ route("accounting.receipt-vouchers.destroy-by-request") }}',
                             type: 'DELETE',
                             data: {
-                                _token: '{{ csrf_token() }}'
+                                _token: '{{ csrf_token() }}',
+                                receipt_id: receiptId
                             },
                             success: function(response) {
                                 Swal.fire({

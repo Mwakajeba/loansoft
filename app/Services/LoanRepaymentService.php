@@ -110,6 +110,12 @@ class LoanRepaymentService
                 throw new \Exception('Repayment not saved');
             }
 
+            if ($schedule->relationLoaded('repayments')) {
+                $schedule->setRelation('repayments', $schedule->repayments->push($repayment));
+            }
+
+            $this->markSchedulePaidIfSettled($schedule);
+
             if (isset($paymentData['cash_deposit_id']) && $paymentData['cash_deposit_id']) {
                 Log::info('Processing cash deposit repayment', ['cash_deposit_id' => $paymentData['cash_deposit_id']]);
                 $this->createJournalEntry($loan, $repayment, $schedulePayment, $paymentData);
@@ -197,6 +203,11 @@ class LoanRepaymentService
 
             $repayment = $this->createRepaymentRecord($loan, $schedule, $schedulePayment, $paymentData, $receipt);
             if ($repayment) {
+                if ($schedule->relationLoaded('repayments')) {
+                    $schedule->setRelation('repayments', $schedule->repayments->push($repayment));
+                }
+
+                $this->markSchedulePaidIfSettled($schedule);
                 $allSchedulePayments[] = ['schedule' => $schedule, 'payment' => $schedulePayment];
                 $totalPaid += $schedulePayment['amount'];
             }
@@ -1905,9 +1916,7 @@ class LoanRepaymentService
                     $schedule->setRelation('repayments', $schedule->repayments->push($repayment));
                 }
 
-                if ($schedule->remaining_amount <= Loan::OUTSTANDING_CLOSURE_THRESHOLD && $schedule->status !== 'restructured') {
-                    $schedule->update(['status' => 'paid']);
-                }
+                $this->markSchedulePaidIfSettled($schedule);
 
                 $totalPrincipalPaid += (float) ($plannedPayment['principal'] ?? 0);
                 $totalInterestPaid += (float) ($plannedPayment['interest'] ?? 0);
@@ -2336,7 +2345,12 @@ class LoanRepaymentService
             $this->updateLoanStatusAfterDeletion($loan, $originalLoanStatus);
 
             // 6. Delete the repayment record
+            $scheduleId = $repayment->loan_schedule_id;
             $repayment->delete();
+
+            if ($scheduleId) {
+                $this->syncSchedulePaymentStatusForScheduleIds([$scheduleId]);
+            }
 
             if ($hasSharedReceipt && $receiptIdForRebuild) {
                 $receipt = Receipt::find($receiptIdForRebuild);
@@ -2676,9 +2690,12 @@ class LoanRepaymentService
             ]);
 
             $repayments = Repayment::where('receipt_id', $receipt->id)->get();
+            $scheduleIds = $repayments->pluck('loan_schedule_id');
             foreach ($repayments as $repayment) {
                 $repayment->delete();
             }
+
+            $this->syncSchedulePaymentStatusForScheduleIds($scheduleIds);
 
             Log::info('Repayments soft-deleted', [
                 'receipt_id' => $receipt->id,
@@ -2819,9 +2836,15 @@ class LoanRepaymentService
             ReceiptItem::where('receipt_id', $receipt->id)->delete();
 
             if ($this->isLoanRepaymentReceipt($receipt)) {
+                $scheduleIds = Repayment::withTrashed()
+                    ->where('receipt_id', $receipt->id)
+                    ->pluck('loan_schedule_id');
+
                 Repayment::withTrashed()
                     ->where('receipt_id', $receipt->id)
                     ->forceDelete();
+
+                $this->syncSchedulePaymentStatusForScheduleIds($scheduleIds);
             }
 
             $receipt = Receipt::withTrashed()->findOrFail($receipt->id);
@@ -2842,6 +2865,132 @@ class LoanRepaymentService
             Log::error('Failed to permanently delete receipt', [
                 'receipt_id' => $receipt->id,
                 'error' => $e->getMessage(),
+            ]);
+            throw $e;
+        }
+    }
+    private function paymentContextUserId(array $paymentData): ?int
+    {
+        if (isset($paymentData['user_id'])) {
+            return (int) $paymentData['user_id'];
+        }
+
+        return auth()->id();
+    }
+
+    private function paymentContextBranchId(Loan $loan, array $paymentData): int
+    {
+        if (isset($paymentData['branch_id'])) {
+            return (int) $paymentData['branch_id'];
+        }
+
+        return (int) (auth()->user()?->branch_id ?? $loan->branch_id ?? 1);
+    }
+
+    private function markSchedulePaidIfSettled(LoanSchedule $schedule): void
+    {
+        $this->syncSchedulePaymentStatus($schedule);
+    }
+
+    /**
+     * Align schedule status with actual repayment totals (paid vs active).
+     */
+    private function syncSchedulePaymentStatus(LoanSchedule $schedule): void
+    {
+        if (in_array($schedule->status, ['restructured', 'cancelled'], true)) {
+            return;
+        }
+
+        $schedule->loadMissing(['repayments', 'loan.product']);
+
+        $remaining = round(max(0, (float) $schedule->total_due - (float) $schedule->paid_amount), 2);
+
+        if (Loan::isNegligibleBalance($remaining)) {
+            if ($schedule->status !== 'paid') {
+                $schedule->update(['status' => 'paid']);
+            }
+
+            return;
+        }
+
+        if ($schedule->status === 'paid') {
+            $schedule->update(['status' => 'active']);
+        }
+    }
+
+    /**
+     * @param  iterable<int|string|null>  $scheduleIds
+     */
+    private function syncSchedulePaymentStatusForScheduleIds(iterable $scheduleIds): void
+    {
+        foreach (collect($scheduleIds)->filter()->unique() as $scheduleId) {
+            $schedule = LoanSchedule::with(['repayments', 'loan.product'])->find($scheduleId);
+            if ($schedule) {
+                $this->syncSchedulePaymentStatus($schedule);
+            }
+        }
+    }
+
+    /**
+     * Add/adjust penalty on a schedule and post matching accounting entries.
+     */
+    public function adjustPenalty($scheduleId, $amount, $reason = null, $loanId = null)
+    {
+        DB::beginTransaction();
+
+        try {
+            $schedule = LoanSchedule::with(['loan.product'])->findOrFail($scheduleId);
+            $loan = $schedule->loan ?? ($loanId ? Loan::with('product')->find($loanId) : null);
+
+            if (!$loan) {
+                throw new \Exception('Loan not found for penalty adjustment.');
+            }
+
+            $adjustAmount = round((float) $amount, 2);
+            if ($adjustAmount <= 0) {
+                throw new \Exception('Adjustment amount must be greater than zero.');
+            }
+
+            $accrualService = PenaltyAccrualService::forDate(now()->toDateString());
+            $penalty = $accrualService->resolvePenaltyForLoan($loan);
+
+            if (!$penalty) {
+                throw new \Exception('No active penalty configuration found for this loan product.');
+            }
+
+            $accrualService->postAccrual($loan, $schedule, $penalty, [
+                'base_amount' => 0.0,
+                'penalty_amount' => $adjustAmount,
+                'days_overdue' => 0,
+                'deduction_type' => 'manual_adjustment',
+                'charge_frequency' => 'manual',
+            ]);
+
+            if ($reason) {
+                AccruedPenalty::where('loan_schedule_id', $schedule->id)
+                    ->whereNull('reversed_at')
+                    ->latest('id')
+                    ->limit(1)
+                    ->update([
+                        'description' => trim("Manual penalty adjustment for schedule #{$schedule->id}: {$reason}"),
+                    ]);
+            }
+
+            $schedule->refresh();
+
+            DB::commit();
+
+            return [
+                'success' => true,
+                'message' => 'Penalty adjusted successfully. Schedule and accounting records updated.',
+                'adjusted_amount' => $adjustAmount,
+                'new_penalty_amount' => (float) $schedule->penalty_amount,
+            ];
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error("Failed to adjust penalty for schedule ID: {$scheduleId}", [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
             ]);
             throw $e;
         }

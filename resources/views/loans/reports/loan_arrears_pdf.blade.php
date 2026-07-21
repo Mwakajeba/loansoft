@@ -1,25 +1,19 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title>Loan Arrears Report</title>
-    <style>
-        @page { size: A3 landscape; margin: 10mm; }
-        body { font-family: Arial, sans-serif; font-size: 8px; }
-        table { width: 100%; border-collapse: collapse; margin-top: 8px; }
-        th, td { border: 1px solid #000; padding: 3px 2px; }
-        th { background: #4472C4; color: #fff; text-align: center; }
-        .text-right { text-align: right; }
-        .text-center { text-align: center; }
-        .header { text-align: center; margin-bottom: 10px; border-bottom: 2px solid #000; padding-bottom: 8px; }
-    </style>
-</head>
-<body>
-    <div class="header">
-        <div style="font-size:14px;font-weight:bold;">Loan Arrears Report</div>
-        <div><strong>Branch:</strong> {{ $branch_name ?? 'All' }} | <strong>Group:</strong> {{ $group_name ?? 'All' }} | <strong>Officer:</strong> {{ $loan_officer_name ?? 'All' }}</div>
-        <div><strong>Generated:</strong> {{ $generated_date ?? now()->format('d-m-Y H:i:s') }}</div>
-    </div>
+@php
+    $reportInfo = '<strong>Branch:</strong> ' . ($branch_name ?? 'All');
+    $reportInfo .= ' | <strong>Group:</strong> ' . ($group_name ?? 'All');
+    $reportInfo .= ' | <strong>Officer:</strong> ' . ($loan_officer_name ?? 'All');
+    $reportInfo .= '<br><strong>Generated:</strong> ' . ($generated_date ?? now()->format('d-m-Y H:i:s'));
+    $extraStyles = 'body { font-size: 8px; } th { background: #4472C4; color: #fff; text-align: center; }';
+@endphp
+
+@include('loans.reports.partials.pdf_report_layout_open', [
+    'company' => $company,
+    'reportTitle' => 'Loan Arrears Report',
+    'reportInfo' => $reportInfo,
+    'pageSize' => 'A3 landscape',
+    'extraStyles' => $extraStyles,
+])
+
     <table>
         <thead>
             <tr>
@@ -65,5 +59,11 @@
             @endif
         </tbody>
     </table>
-</body>
-</html>
+
+    <div class="footer">
+        <p><strong>&copy; {{ date('Y') }} {{ $company->name ?? config('app.name', 'SmartFinance') }}. All Rights Reserved.</strong></p>
+        <p class="digital-signature">This is a digitally generated document from {{ $company->name ?? config('app.name', 'SmartFinance') }} System. No signature required.</p>
+        <p class="digital-signature">Generated on: {{ \Carbon\Carbon::now()->format('d/m/Y H:i:s') }} | Document ID: {{ strtoupper(uniqid('DOC-')) }}</p>
+    </div>
+
+@include('loans.reports.partials.pdf_report_layout_close')

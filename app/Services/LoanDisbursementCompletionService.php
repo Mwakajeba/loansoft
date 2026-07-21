@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\Loan;
 use App\Models\LoanApproval;
+use App\Models\User;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 
@@ -39,8 +40,9 @@ class LoanDisbursementCompletionService
 
         $disburseDate = $disbursementDate ? Carbon::parse($disbursementDate) : now();
         $userId = $userId ?? auth()->id();
+        $branchId = $this->resolveBranchId($loan, $userId);
 
-        DB::transaction(function () use ($loan, $disburseDate, $userId, $approvalComments, $createApprovalRecord) {
+        DB::transaction(function () use ($loan, $disburseDate, $userId, $branchId, $approvalComments, $createApprovalRecord) {
             $loan->update([
                 'status' => Loan::STATUS_ACTIVE,
                 'disbursed_on' => $disburseDate,
@@ -67,7 +69,7 @@ class LoanDisbursementCompletionService
                 $loan,
                 $disburseDate,
                 $userId,
-                auth()->user()?->branch_id
+                $branchId
             );
 
             if ($createApprovalRecord && $userId) {
@@ -97,5 +99,28 @@ class LoanDisbursementCompletionService
         $releaseFeeTotal = $this->disbursementGlService->calculateReleaseFeeTotal($loan);
 
         return (int) round((float) $loan->amount - $releaseFeeTotal);
+    }
+
+    /**
+     * Branch for GL/payment rows (DCB callbacks have no auth session).
+     */
+    private function resolveBranchId(Loan $loan, ?int $userId): int
+    {
+        $loan->loadMissing('bankAccount');
+
+        $candidates = [
+            $loan->branch_id,
+            $userId ? User::query()->whereKey($userId)->value('branch_id') : null,
+            auth()->user()?->branch_id,
+            $loan->bankAccount?->branch_id,
+        ];
+
+        foreach ($candidates as $id) {
+            if ($id !== null && (int) $id > 0) {
+                return (int) $id;
+            }
+        }
+
+        throw new \RuntimeException('Cannot determine branch for loan disbursement.');
     }
 }

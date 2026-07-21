@@ -59,7 +59,7 @@
                                                 <label class="text-muted small d-block mb-1">Account Name</label>
                                                 <h6 class="mb-0 fw-bold">
                                                     <i class="bx bx-user me-2 text-primary"></i>
-                                                    STEP AHEAD FINANCIAL CONS
+                                                    SAFCO FINTECH LIMITED
                                                 </h6>
                                             </div>
                                             <hr class="my-3">
@@ -67,7 +67,7 @@
                                                 <label class="text-muted small d-block mb-1">Account Number</label>
                                                 <h4 class="mb-0 fw-bold text-success">
                                                     <i class="bx bx-hash me-2"></i>
-                                                    015C448187900
+                                                    10313170565
                                                 </h4>
                                             </div>
                                         </div>

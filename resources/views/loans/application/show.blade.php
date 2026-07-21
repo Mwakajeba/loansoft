@@ -22,7 +22,6 @@
                     <h4 class="mb-1">Loan Application #{{ $loanApplication->id }}</h4>
                     <p class="text-muted mb-0">{{ $loanApplication->customer->name ?? 'Unknown Customer' }}</p>
                 </div>
-                @can('edit loan')
                 <div class="d-flex gap-2">
                     <a href="{{ route('loans.application.index') }}" class="btn btn-secondary">
                         <i class="bx bx-arrow-back me-1"></i> Back
@@ -32,15 +31,12 @@
                             <i class="bx bx-edit me-1"></i> Edit
                         </a>
                     @endif
-                    @can('delete loan')
                     @if($loanApplication->canBeDeleted())
                         <button type="button" class="btn btn-danger" onclick="deleteApplication('{{ Hashids::encode($loanApplication->id) }}')">
                             <i class="bx bx-trash me-1"></i> Delete
                         </button>
                     @endif
-                    @endcan
                 </div>
-                @endcan
             </div>
 
             <!-- Status Card -->
@@ -535,8 +531,14 @@
                 methodField.name = '_method';
                 methodField.value = 'DELETE';
 
+                const returnStatusField = document.createElement('input');
+                returnStatusField.type = 'hidden';
+                returnStatusField.name = 'return_status';
+                returnStatusField.value = '{{ $loanApplication->status }}';
+
                 form.appendChild(csrfToken);
                 form.appendChild(methodField);
+                form.appendChild(returnStatusField);
                 document.body.appendChild(form);
                 form.submit();
             }

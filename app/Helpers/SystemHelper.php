@@ -97,39 +97,7 @@ if (!function_exists('format_datetime')) {
     }
 }
 
-if (!function_exists('dcb_gateway_configured')) {
-    /**
-     * DCB API credentials are present (settings saved).
-     */
-    function dcb_gateway_configured(): bool
-    {
-        return app(\App\Services\DcbGatewayService::class)->isConfigured();
-    }
-}
-
-if (!function_exists('dcb_payments_enabled')) {
-    /**
-     * DCB is turned on and ready to process payments.
-     */
-    function dcb_payments_enabled(): bool
-    {
-        return app(\App\Services\DcbPaymentService::class)->isEnabled();
-    }
-}
-
-if (!function_exists('dcb_show_on_loans_ui')) {
-    /**
-     * Show DCB options on loan screens (configured or explicitly enabled).
-     */
-    function dcb_show_on_loans_ui(): bool
-    {
-        if (dcb_payments_enabled()) {
-            return true;
-        }
-
-        return dcb_gateway_configured();
-    }
-}
+// DCB Gateway helpers removed (system uses direct-to-bank DCB EPG only).
 
 if (!function_exists('update_env_file')) {
     /**

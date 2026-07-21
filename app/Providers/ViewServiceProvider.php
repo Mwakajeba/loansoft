@@ -50,6 +50,21 @@ class ViewServiceProvider extends ServiceProvider
 
             $view->with('arrearsLoans', $arrearsLoans);
             $view->with('arrearsLoansCount', $arrearsLoans->count());
+
+            $dueSchedules = collect();
+            if ($selectedBranchId) {
+                $dueSchedules = app(\App\Services\LoanDueNotificationService::class)
+                    ->getDueOnDate((int) $selectedBranchId);
+            } elseif (!empty($branchIds)) {
+                foreach ($branchIds as $bid) {
+                    $dueSchedules = $dueSchedules->merge(
+                        app(\App\Services\LoanDueNotificationService::class)->getDueOnDate((int) $bid)
+                    );
+                }
+                $dueSchedules = $dueSchedules->sortByDesc('amount_due')->values();
+            }
+
+            $view->with('dueSchedules', $dueSchedules);
         });
 
         View::composer('incs.sideMenu', function ($view) {
@@ -111,7 +126,7 @@ class ViewServiceProvider extends ServiceProvider
             foreach ($loan->schedule->sortBy('due_date') as $schedule) {
                 $dueDate = \Carbon\Carbon::parse($schedule->due_date);
                 
-                if ($dueDate->lt($today) && $schedule->remaining_amount > 0) {
+                if ($dueDate->lt($today) && \App\Models\Loan::hasCollectibleBalance((float) $schedule->remaining_amount)) {
                     $totalArrears += $schedule->remaining_amount;
                     $overdueSchedules[] = $schedule;
                     
@@ -123,7 +138,7 @@ class ViewServiceProvider extends ServiceProvider
             }
 
             // Only include loans that have arrears
-            if ($totalArrears > 0) {
+            if (\App\Models\Loan::hasCollectibleBalance((float) $totalArrears)) {
                 $arrearsData[] = [
                     'loan_id' => $loan->id,
                     'customer' => $loan->customer->name ?? 'N/A',

@@ -45,8 +45,8 @@ $initialCustomFeeAmounts = old('custom_fee_amounts', ($isEdit && isset($loan->cu
                 <input type="text" id="group_name" class="form-control" value="" readonly>
             </div>
 
-            <!-- Hidden Group ID for form submission -->
-            <input type="hidden" name="group_id" id="group_id" value="{{ old('group_id', $loan->group_id ?? '') }}">
+            <!-- Hidden Group ID for form submission (edit: default to Individual/1 when missing) -->
+            <input type="hidden" name="group_id" id="group_id" value="{{ old('group_id', $loan->group_id ?? ($isEdit ? \App\Models\Group::getIndividualGroupId() : '')) }}">
         </div>
         <!-- Loan Officer -->
         <div class="col-md-6 mb-3">
@@ -509,10 +509,13 @@ $initialCustomFeeAmounts = old('custom_fee_amounts', ($isEdit && isset($loan->cu
             }
         }
 
-        // On edit, set group from $loan if available
+        // On edit, set group from $loan if available; otherwise Individual (1)
         @if($isEdit && isset($loan) && isset($loan->group))
             groupIdInput.value = '{{ $loan->group_id }}';
             groupNameDisplay.value = '{{ $loan->group->name }}';
+        @elseif($isEdit)
+            groupIdInput.value = '{{ \App\Models\Group::getIndividualGroupId() }}';
+            groupNameDisplay.value = 'Individual';
         @else
             // Otherwise, use customer selection logic
             if (window.jQuery) {

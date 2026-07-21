@@ -149,7 +149,7 @@
                                                     <i class="bx bx-error fs-1 text-danger"></i>
                                                 </div>
                                                 <h5 class="card-title">Defaulted Loans</h5>
-                                                <p class="card-text">Manage all defaulted loans.</p>
+                                                <p class="card-text">Active loans with arrears greater than 90 days.</p>
                                                 <a href="{{ route('loans.by-status', 'defaulted') }}"
                                                     class="btn btn-danger position-relative">
                                                     <i class="bx bx-error me-1"></i> View Loans

@@ -4635,4 +4635,212 @@ class LoanReportController extends Controller
         $filename = 'crb_report_' . $reportingDate . '.pdf';
         return $pdf->download($filename);
     }
+    /**
+     * Group repayment schedule card — members with loans and instalments per due date in range.
+     */
+    public function groupRepaymentScheduleReport(Request $request)
+    {
+        $user = auth()->user();
+        $company = $user->company;
+
+        $startDate = $request->input('start_date', Carbon::now()->startOfMonth()->toDateString());
+        $endDate = $request->input('end_date', Carbon::now()->toDateString());
+        $groupId = $request->input('group_id');
+        $branchId = $request->input('branch_id');
+
+        $assignedBranchIds = $user->branches()
+            ->where('branches.company_id', $company->id)
+            ->pluck('branches.id')
+            ->toArray();
+
+        $branches = $user->branches()
+            ->where('branches.company_id', $company->id)
+            ->select('branches.id', 'branches.name')
+            ->get();
+
+        if (($branches->count() ?? 0) === 1) {
+            $branchId = $branches->first()->id;
+        }
+
+        $groups = Group::query()
+            ->where('id', '!=', Group::getIndividualGroupId())
+            ->when($branchId, fn ($q) => $q->where('branch_id', $branchId))
+            ->when(! empty($assignedBranchIds), fn ($q) => $q->whereIn('branch_id', $assignedBranchIds))
+            ->orderBy('name')
+            ->get();
+
+        $showData = $request->filled('group_id');
+        $reportData = $showData
+            ? GroupRepaymentScheduleCardBuilder::build((int) $groupId, $startDate, $endDate)
+            : ['group' => null, 'schedule_dates' => [], 'date_keys' => [], 'rows' => [], 'column_totals' => []];
+
+        $company = Company::first();
+
+        return view('loans.reports.group_repayment_schedule', compact(
+            'branches', 'groups', 'startDate', 'endDate', 'groupId', 'branchId',
+            'showData', 'reportData', 'company'
+        ));
+    }
+
+    /**
+     * Export group repayment schedule card to PDF.
+     */
+    public function exportGroupRepaymentScheduleToPdf(Request $request)
+    {
+        $request->validate([
+            'group_id' => 'required|exists:groups,id',
+            'start_date' => 'required|date',
+            'end_date' => 'required|date|after_or_equal:start_date',
+        ]);
+
+        $startDate = $request->input('start_date');
+        $endDate = $request->input('end_date');
+        $groupId = (int) $request->input('group_id');
+
+        $reportData = GroupRepaymentScheduleCardBuilder::build($groupId, $startDate, $endDate);
+        $company = Company::first();
+
+        $pdf = PDF::loadView('loans.reports.group_repayment_schedule_pdf', compact(
+            'reportData', 'company', 'startDate', 'endDate'
+        ));
+        $this->configureLoanReportPdf($pdf, 'A3', 'landscape');
+
+        $groupName = $reportData['group']->name ?? 'group';
+        $safeName = preg_replace('/[^a-zA-Z0-9_-]+/', '_', $groupName);
+
+        return $pdf->download('group_repayment_schedule_' . $safeName . '_' . $startDate . '_to_' . $endDate . '.pdf');
+    }
+
+    public function customerLoanStatementReport(Request $request)
+    {
+        $user = auth()->user();
+        $company = $user->company;
+
+        $asOfDate = $request->get('as_of_date') ?? now()->format('Y-m-d');
+        $branchId = $request->get('branch_id') ?: null;
+        $loanId = $request->get('loan_id') ?: null;
+
+        $branches = $user->branches()
+            ->where('branches.company_id', $company->id)
+            ->select('branches.id', 'branches.name')
+            ->get();
+
+        if (($branches->count() ?? 0) === 1) {
+            $branchId = $branches->first()->id;
+        }
+
+        $assignedBranchIds = $branches->pluck('id')->toArray();
+        $loans = $this->getCustomerStatementLoanOptions($assignedBranchIds, $branchId);
+        $showData = $request->filled('loan_id');
+        $reportData = null;
+
+        if ($showData) {
+            $loan = $this->findCustomerStatementLoan((int) $loanId, $assignedBranchIds);
+            if ($loan) {
+                $reportData = CustomerLoanStatementBuilder::build($loan, $asOfDate);
+            }
+        }
+
+        return view('loans.reports.customer_loan_statement', compact(
+            'reportData', 'branches', 'loans', 'asOfDate', 'branchId', 'loanId', 'showData'
+        ));
+    }
+
+    public function exportCustomerLoanStatementToExcel(Request $request)
+    {
+        $loan = $this->resolveCustomerStatementLoan($request);
+        $asOfDate = $request->get('as_of_date') ?? now()->format('Y-m-d');
+        $reportData = CustomerLoanStatementBuilder::build($loan, $asOfDate);
+
+        $filename = 'customer_loan_statement_' . ($loan->loanNo ?? $loan->id) . '_' . $asOfDate . '.xlsx';
+
+        return Excel::download(new CustomerLoanStatementExport($reportData), $filename);
+    }
+
+    public function exportCustomerLoanStatementToPdf(Request $request)
+    {
+        $loan = $this->resolveCustomerStatementLoan($request);
+        $asOfDate = $request->get('as_of_date') ?? now()->format('Y-m-d');
+        $reportData = CustomerLoanStatementBuilder::build($loan, $asOfDate);
+
+        $company = Company::first();
+        $branch = $loan->branch;
+        $customer = $loan->customer;
+        $user = auth()->user();
+        if ($user) {
+            $user->load('roles');
+        }
+
+        $pdf = PDF::loadView('loans.reports.customer_loan_statement_pdf', compact(
+            'reportData', 'loan', 'company', 'branch', 'customer', 'asOfDate', 'user'
+        ));
+        $this->configureLoanReportPdf($pdf, 'A4', 'landscape');
+
+        $filename = 'customer_loan_statement_' . ($loan->loanNo ?? $loan->id) . '_' . $asOfDate . '.pdf';
+
+        return $pdf->download($filename);
+    }
+
+    private function getCustomerStatementLoanOptions(array $assignedBranchIds, ?int $branchId)
+    {
+        return Loan::query()
+            ->with('customer:id,name')
+            ->whereIn('status', [
+                Loan::STATUS_ACTIVE,
+                Loan::STATUS_COMPLETE,
+                Loan::STATUS_DEFAULTED,
+            ])
+            ->when(! empty($assignedBranchIds), fn ($q) => $q->whereIn('branch_id', $assignedBranchIds))
+            ->when($branchId, fn ($q) => $q->where('branch_id', $branchId))
+            ->orderByDesc('disbursed_on')
+            ->orderByDesc('id')
+            ->limit(500)
+            ->get(['id', 'loanNo', 'amount', 'customer_id', 'branch_id', 'disbursed_on']);
+    }
+
+    private function findCustomerStatementLoan(int $loanId, array $assignedBranchIds): ?Loan
+    {
+        return Loan::query()
+            ->with(LoanReportMetrics::eagerLoads())
+            ->where('id', $loanId)
+            ->when(! empty($assignedBranchIds), fn ($q) => $q->whereIn('branch_id', $assignedBranchIds))
+            ->first();
+    }
+
+    private function resolveCustomerStatementLoan(Request $request): Loan
+    {
+        $user = auth()->user();
+        $assignedBranchIds = $user->branches()
+            ->where('branches.company_id', $user->company->id)
+            ->pluck('branches.id')
+            ->toArray();
+
+        $loanId = (int) $request->get('loan_id');
+        abort_unless($loanId > 0, 422, 'Loan is required.');
+
+        $loan = $this->findCustomerStatementLoan($loanId, $assignedBranchIds);
+        abort_unless($loan, 404, 'Loan not found or not accessible.');
+
+        return $loan;
+    }
+
+    private function configureLoanReportPdf($pdf, $paper = 'A3', $orientation = 'landscape')
+    {
+        $pdf->setPaper($paper, $orientation);
+        $pdf->setOptions($this->loanReportPdfDomOptions());
+
+        return $pdf;
+    }
+
+    private function loanReportPdfDomOptions(): array
+    {
+        return [
+            'margin-left' => 10,
+            'margin-right' => 10,
+            'margin-top' => 10,
+            'margin-bottom' => 10,
+            'isHtml5ParserEnabled' => true,
+            'isRemoteEnabled' => true,
+        ];
+    }
 }

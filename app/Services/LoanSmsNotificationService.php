@@ -6,6 +6,7 @@ use App\Helpers\SmsHelper;
 use App\Models\Branch;
 use App\Models\Company;
 use App\Models\Loan;
+use App\Services\DcbEpgAuthService;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Log;
 
@@ -49,6 +50,8 @@ class LoanSmsNotificationService
                 $loan->product->repayment_cycle ?? $loan->interest_cycle ?? 'monthly'
             );
 
+            $dcbPaymentNote = $this->dcbLoanPaymentNote($loan);
+
             $templateVars = [
                 'customer_name' => $customer->name,
                 'amount' => number_format((float) $loan->amount, 0),
@@ -59,7 +62,10 @@ class LoanSmsNotificationService
                 'company_name' => $companyName,
                 'company_phone' => $companyPhone,
                 'loan_no' => $loan->loanNo ?? (string) $loan->id,
+                'dcb_payment_note' => $dcbPaymentNote,
             ];
+
+            $configuredTemplate = (string) config('services.sms.templates.loan_disbursement', '');
 
             $customerMessage = SmsHelper::resolveTemplate('loan_disbursement', $templateVars);
             if ($customerMessage === null) {
@@ -68,6 +74,13 @@ class LoanSmsNotificationService
                     $customerMessage .= " kwa mawasiliano piga {$companyPhone}";
                 }
             }
+
+            // .env / settings custom templates: auto-append DCB pay instruction unless template uses {dcb_payment_note}
+            $customerMessage = $this->appendDcbNoteToDisbursementMessage(
+                $customerMessage,
+                $dcbPaymentNote,
+                $configuredTemplate
+            );
 
             $companyTemplateVars = $templateVars;
             $companyMessage = SmsHelper::resolveTemplate('loan_disbursement_company', $companyTemplateVars);
@@ -275,6 +288,47 @@ class LoanSmsNotificationService
             'next_schedule_amount' => number_format($nextScheduleAmount, 0),
             'outstanding_amount' => number_format($outstanding, 0),
         ];
+    }
+
+    /**
+     * Append DCB payment line for custom .env/UI templates that omit {dcb_payment_note}.
+     */
+    private function appendDcbNoteToDisbursementMessage(
+        string $message,
+        string $dcbPaymentNote,
+        string $configuredTemplate
+    ): string {
+        if ($dcbPaymentNote === '') {
+            return $message;
+        }
+
+        if ($configuredTemplate !== '' && str_contains($configuredTemplate, '{dcb_payment_note}')) {
+            return $message;
+        }
+
+        if (preg_match('/namba\s+(\S+)/u', trim($dcbPaymentNote), $matches)
+            && str_contains($message, $matches[1])) {
+            return $message;
+        }
+
+        return $message.$dcbPaymentNote;
+    }
+
+    /**
+     * Swahili payment instruction when DCB EPG is enabled (loan number as control no).
+     */
+    private function dcbLoanPaymentNote(Loan $loan): string
+    {
+        if (! app(DcbEpgAuthService::class)->isEnabled()) {
+            return '';
+        }
+
+        $loanNo = trim((string) ($loan->loanNo ?? $loan->id));
+        if ($loanNo === '' || str_starts_with($loanNo, 'TMP-')) {
+            return '';
+        }
+
+        return " Lipa kwa kutumia namba {$loanNo} kupitia benki zote au mitandao ya simu.";
     }
 
     private function shouldNotifyCompanyOnDisbursement(): bool

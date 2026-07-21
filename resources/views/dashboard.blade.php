@@ -164,17 +164,20 @@ use Vinkla\Hashids\Facades\Hashids;
             <!-- Loan KPIs (Active loans only) -->
             @can('view loans')
             <div class="col">
-                <div class="card radius-10">
-                    <div class="card-body">
-                        <div class="d-flex align-items-center">
-                            <div class="flex-grow-1">
-                                <p class="mb-0 text-muted">Principal Disbursed</p>
-                                <h4 class="font-weight-bold">TZS {{ number_format($principalDisbursed ?? 0, 2) }}</h4>
+                <a href="{{ route('dashboard.principal-loans', array_filter(['branch_id' => $selectedBranchId ?? null])) }}"
+                    class="text-decoration-none">
+                    <div class="card radius-10 h-100">
+                        <div class="card-body">
+                            <div class="d-flex align-items-center">
+                                <div class="flex-grow-1">
+                                    <p class="mb-0 text-muted">Principal Disbursed <i class="bx bx-link-external ms-1" style="font-size: 0.85rem;"></i></p>
+                                    <h4 class="font-weight-bold text-dark">TZS {{ number_format($principalDisbursed ?? 0, 2) }}</h4>
+                                </div>
+                                <div class="widgets-icons bg-gradient-blues text-white"><i class='bx bx-wallet'></i></div>
                             </div>
-                            <div class="widgets-icons bg-gradient-blues text-white"><i class='bx bx-wallet'></i></div>
                         </div>
                     </div>
-                </div>
+                </a>
             </div>
 
             <div class="col">

@@ -69,12 +69,31 @@ class Loan extends Model
     /** Outstanding balance below this amount (TZS) means the loan is fully settled. */
     public const OUTSTANDING_CLOSURE_THRESHOLD = 20.0;
 
+    /** Days in arrears above this threshold classify a loan as defaulted (portfolio loss bucket). */
+    public const DEFAULTED_ARREARS_DAYS_THRESHOLD = 90;
+
+    public static function isNegligibleBalance(float $amount): bool
+    {
+        return $amount <= self::OUTSTANDING_CLOSURE_THRESHOLD;
+    }
+
+    public static function hasCollectibleBalance(float $amount): bool
+    {
+        return $amount > self::OUTSTANDING_CLOSURE_THRESHOLD;
+    }
+
     /** Statuses that cannot be edited or deleted (disbursed or post-disbursement). */
     const MODIFICATION_LOCKED_STATUSES = [
         self::STATUS_ACTIVE,
         self::STATUS_DEFAULTED,
         self::STATUS_COMPLETE,
         self::STATUS_RESTRUCTURED,
+    ];
+
+    /** Active/defaulted loans may be edited when the user has the "edit loan" permission. */
+    const PERMISSION_EDITABLE_STATUSES = [
+        self::STATUS_ACTIVE,
+        self::STATUS_DEFAULTED,
     ];
 
     /** Application / approval pipeline statuses (before disbursement). */
@@ -143,14 +162,24 @@ class Loan extends Model
         return in_array($this->status, [self::STATUS_COMPLETE, self::STATUS_RESTRUCTURED], true);
     }
 
-    public function canBeEdited(): bool
+    public function canBeEdited(?User $user = null): bool
     {
+        $user = $user ?? auth()->user();
+
+        if (!$user?->can('edit loan')) {
+            return false;
+        }
+
         if ($this->isPermanentlyLocked()) {
             return false;
         }
 
         // Direct loans (create/import) stay editable while active — e.g. fix data before repayments
         if ($this->isDirectLoan()) {
+            return true;
+        }
+
+        if (in_array($this->status, self::PERMISSION_EDITABLE_STATUSES, true)) {
             return true;
         }
 
@@ -161,9 +190,21 @@ class Loan extends Model
         return $this->isApplicationLoan();
     }
 
-    public function canBeDeleted(): bool
+    public function canBeDeleted(?User $user = null): bool
     {
+        $user = $user ?? auth()->user();
+
+        if (!$user?->can('delete loan')) {
+            return false;
+        }
+
         if ($this->isPermanentlyLocked()) {
+            return false;
+        }
+
+        if (! $user->hasRole('super-admin')
+            && $this->status === self::STATUS_ACTIVE
+            && $this->repayments()->exists()) {
             return false;
         }
 
@@ -171,12 +212,21 @@ class Loan extends Model
             return true;
         }
 
+        if ($this->isApplicationLoan() || $this->status === self::STATUS_REJECTED) {
+            return true;
+        }
+
+        // Disbursed application loans (active/defaulted).
+        if ($this->followedApplicationWorkflow()
+            && in_array($this->status, [self::STATUS_ACTIVE, self::STATUS_DEFAULTED], true)) {
+            return true;
+        }
+
         if (in_array($this->status, self::MODIFICATION_LOCKED_STATUSES, true)) {
             return false;
         }
 
-        return $this->isApplicationLoan()
-            || $this->status === self::STATUS_REJECTED;
+        return false;
     }
 
     public function usesApplicationEditForm(): bool
@@ -2011,5 +2061,43 @@ class Loan extends Model
     public function isLoanFullyPaidForSettlement(): bool
     {
         return $this->getTotalAmountToSettle() <= self::OUTSTANDING_CLOSURE_THRESHOLD;
+    }
+    /**
+     * Loan was created through the application approval pipeline (has approval records).
+     */
+    public function followedApplicationWorkflow(): bool
+    {
+        if ($this->relationLoaded('approvals')) {
+            return $this->approvals->isNotEmpty();
+        }
+
+        return $this->approvals()->exists();
+    }
+
+    /**
+     * Bulk opening-balance imports are created without a disbursement bank account
+     * in the same request as schedule generation.
+     */
+    protected function isOpeningBalanceImport(): bool
+    {
+        if ($this->bank_account_id) {
+            return false;
+        }
+
+        if ($this->status !== self::STATUS_ACTIVE || empty($this->loanNo)) {
+            return false;
+        }
+
+        $disbursedAt = $this->disbursed_on ?? $this->date_applied ?? $this->created_at;
+        if (!$this->created_at || !$disbursedAt) {
+            return false;
+        }
+
+        return $this->created_at->diffInSeconds(Carbon::parse($disbursedAt), true) < 5;
+    }
+
+    public function isDefaultedByArrears(int $minDays = self::DEFAULTED_ARREARS_DAYS_THRESHOLD): bool
+    {
+        return $this->is_in_arrears && $this->days_in_arrears > $minDays;
     }
 }

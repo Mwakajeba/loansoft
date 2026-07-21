@@ -36,11 +36,18 @@
             <div class="card-body">
                 <div class="d-flex justify-content-between align-items-center mb-4">
                     <h4 class="card-title mb-0">Cash Deposits List</h4>
+                    <div class="d-flex gap-2">
+                    @can('deposit cash collateral')
+                    <a href="{{ route('cash_collaterals.rmw.deposit') }}" class="btn btn-outline-primary">
+                        <i class="bx bx-upload"></i> Bulk Deposit
+                    </a>
+                    @endcan
                     @can('create cash collateral')
                     <a href="{{ route('cash_collaterals.create') }}" class="btn btn-primary">
                         <i class="bx bx-plus"></i> Add Account
                     </a>
                     @endcan
+                    </div>
                 </div>
 
                 <div class="table-responsive">

@@ -1,135 +1,38 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <title>CRB Report - {{ $reportingDate }}</title>
-    <style>
-        @page {
-            size: A4 landscape;
-            margin: 10mm;
-        }
-        body {
-            font-family: Arial, sans-serif;
-            font-size: 7px;
-            margin: 0;
-            color: #222;
-        }
-        .container {
-            width: 100%;
-        }
-        .header {
-            margin-bottom: 8px;
-            border-bottom: 2px solid #333;
-            padding-bottom: 6px;
-        }
-        .company-name {
-            font-size: 13px;
-            font-weight: bold;
-            color: #333;
-            text-transform: uppercase;
-        }
-        .report-title {
-            font-size: 11px;
-            font-weight: bold;
-            color: #555;
-            margin-top: 2px;
-        }
-        .report-info {
-            font-size: 8px;
-            color: #666;
-            margin-top: 2px;
-        }
-        .summary-section {
-            margin: 8px 0;
-            padding: 6px;
-            background-color: #f8f9fa;
-            border: 1px solid #ddd;
-        }
-        .summary-item {
-            display: inline-block;
-            margin-right: 16px;
-            margin-bottom: 3px;
-        }
-        .summary-label {
-            font-weight: bold;
-            color: #555;
-        }
-        .summary-value {
-            color: #000;
-            font-weight: bold;
-        }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            table-layout: fixed;
-            margin-top: 6px;
-        }
-        th, td {
-            border: 1px solid #ddd;
-            padding: 2px 3px;
-            text-align: left;
-            vertical-align: top;
-            word-wrap: break-word;
-            overflow-wrap: break-word;
-            line-height: 1.2;
-        }
-        th {
-            background-color: #4CAF50;
-            color: white;
-            font-weight: bold;
-            font-size: 6px;
-        }
-        td {
-            font-size: 6px;
-        }
-        tr:nth-child(even) {
-            background-color: #f2f2f2;
-        }
-        .text-end {
-            text-align: right;
-        }
-        .text-center {
-            text-align: center;
-        }
-        .badge {
-            padding: 1px 3px;
-            border-radius: 2px;
-            font-size: 6px;
-            font-weight: bold;
-            white-space: nowrap;
-        }
-        .badge-success {
-            background-color: #28a745;
-            color: white;
-        }
-        .badge-danger {
-            background-color: #dc3545;
-            color: white;
-        }
-        .badge-primary {
-            background-color: #007bff;
-            color: white;
-        }
-        .nowrap {
-            white-space: nowrap;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <div class="report-title">Credit Reference Bureau (CRB) Report</div>
-            <div class="report-info">Generated on {{ now()->format('d/m/Y H:i') }}</div>
-            <div class="report-info">
-                Reporting Date: {{ \Carbon\Carbon::parse($reportingDate)->format('d/m/Y') }}
-            @if($branch)
-                | Branch: {{ $branch->name }}
-            @endif
-            @if($loanOfficer)
-                | Loan Officer: {{ $loanOfficer->name }}
-            @endif
-            </div>
-        </div>
+@php
+    $reportInfo = '<strong>Reporting Date:</strong> ' . \Carbon\Carbon::parse($reportingDate)->format('d/m/Y');
+    if ($branch) {
+        $reportInfo .= ' | <strong>Branch:</strong> ' . $branch->name;
+    }
+    if ($loanOfficer) {
+        $reportInfo .= ' | <strong>Loan Officer:</strong> ' . $loanOfficer->name;
+    }
+    $reportInfo .= '<br><strong>Report Date:</strong> ' . now()->format('d/m/Y H:i');
+
+    $extraStyles = 'body { font-size: 7px; color: #222; }
+.summary-section { margin: 8px 0; padding: 6px; background-color: #f8f9fa; border: 1px solid #ddd; }
+.summary-item { display: inline-block; margin-right: 16px; margin-bottom: 3px; }
+.summary-label { font-weight: bold; color: #555; }
+.summary-value { color: #000; font-weight: bold; }
+table { table-layout: fixed; }
+th, td { border: 1px solid #ddd; padding: 2px 3px; vertical-align: top; word-wrap: break-word; overflow-wrap: break-word; line-height: 1.2; }
+th { background-color: #4CAF50; color: white; font-size: 6px; }
+td { font-size: 6px; }
+tr:nth-child(even) { background-color: #f2f2f2; }
+.text-end { text-align: right; }
+.badge { padding: 1px 3px; border-radius: 2px; font-size: 6px; font-weight: bold; white-space: nowrap; }
+.badge-success { background-color: #28a745; color: white; }
+.badge-danger { background-color: #dc3545; color: white; }
+.badge-primary { background-color: #007bff; color: white; }
+.nowrap { white-space: nowrap; }';
+@endphp
+
+@include('loans.reports.partials.pdf_report_layout_open', [
+    'company' => $company,
+    'reportTitle' => 'Credit Reference Bureau (CRB) Report',
+    'reportInfo' => $reportInfo,
+    'pageSize' => 'A4 landscape',
+    'extraStyles' => $extraStyles,
+])
 
     <div class="summary-section">
         <div class="summary-item">
@@ -232,6 +135,10 @@
             @endforelse
         </tbody>
     </table>
+
+    <div class="footer">
+        <p><strong>&copy; {{ date('Y') }} {{ $company->name ?? config('app.name', 'SmartFinance') }}. All Rights Reserved.</strong></p>
+        <p class="digital-signature">Generated on: {{ \Carbon\Carbon::now()->format('d/m/Y H:i:s') }} | Document ID: {{ strtoupper(uniqid('DOC-')) }}</p>
     </div>
-</body>
-</html>
+
+@include('loans.reports.partials.pdf_report_layout_close')

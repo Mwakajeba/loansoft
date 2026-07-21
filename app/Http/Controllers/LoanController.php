@@ -602,7 +602,7 @@ class LoanController extends Controller
                     }
 
                     // Edit action — application pipeline or direct loans (not disbursed)
-                    if (auth()->user()->can('edit loan') && $loan->canBeEdited()) {
+                    if ($loan->canBeEdited(auth()->user())) {
                         $editUrl = $loan->usesApplicationEditForm()
                             ? route('loans.application.edit', $encodedId)
                             : route('loans.edit', $encodedId);
@@ -657,7 +657,7 @@ class LoanController extends Controller
                     }
 
                     // Delete action — blocked for disbursed / completed loans
-                    if (auth()->user()->can('delete loan') && $loan->canBeDeleted()) {
+                    if ($loan->canBeDeleted(auth()->user())) {
                         $actions .= '<button class="btn btn-sm btn-outline-danger delete-btn" data-id="' . $encodedId . '" data-name="' . e(optional($loan->customer)->name ?? 'Unknown') . '" title="Delete"><i class="bx bx-trash"></i></button>';
                     }
 
@@ -1934,9 +1934,13 @@ class LoanController extends Controller
         $loanId = $decoded[0];
         $loan = Loan::findOrFail($loanId);
 
-        if (!$loan->canBeEdited() || $loan->usesApplicationEditForm()) {
+        if (!auth()->user()->can('edit loan')) {
+            abort(403, 'You do not have permission to edit loans.');
+        }
+
+        if (!$loan->canBeEdited(auth()->user()) || $loan->usesApplicationEditForm()) {
             return redirect()->route('loans.list')->withErrors([
-                'error' => 'This loan cannot be edited. Only direct loans or applied/rejected applications can be modified.',
+                'error' => 'This loan cannot be edited. Completed and restructured loans cannot be modified.',
             ]);
         }
 
@@ -1993,9 +1997,13 @@ class LoanController extends Controller
             return redirect()->route('loans.list')->withErrors(['Loan not found.']);
         }
 
-        if (!$loan->canBeEdited() || $loan->usesApplicationEditForm()) {
+        if (!auth()->user()->can('edit loan')) {
+            abort(403, 'You do not have permission to edit loans.');
+        }
+
+        if (!$loan->canBeEdited(auth()->user()) || $loan->usesApplicationEditForm()) {
             return redirect()->route('loans.list')->withErrors([
-                'error' => 'This loan cannot be updated. Only direct loans or applied/rejected applications can be modified.',
+                'error' => 'This loan cannot be updated. Completed and restructured loans cannot be modified.',
             ]);
         }
 
@@ -2007,6 +2015,11 @@ class LoanController extends Controller
 
         if (!$request->filled('first_repayment_date')) {
             $request->merge(['first_repayment_date' => null]);
+        }
+
+        // Edit only: if group_id is missing, default to Individual (1)
+        if (!$request->filled('group_id')) {
+            $request->merge(['group_id' => Group::getIndividualGroupId()]);
         }
 
         $validated = $request->validate([
@@ -2234,7 +2247,7 @@ class LoanController extends Controller
         $loanId = (int) $loan->id;
         $deletionService = new LoanDeletionService();
 
-        if (!$cascadeTopupChain && !$loan->canBeDeleted()) {
+        if (!$cascadeTopupChain && !$loan->canBeDeleted(auth()->user())) {
             $hasTopupLinks = $deletionService->hasTopupLinks($loanId);
             $blockMessage = $hasTopupLinks
                 ? 'This loan cannot be deleted on its own because it is linked to a top-up or restructure. Use "Delete entire top-up chain" to remove all related loans.'
@@ -4498,5 +4511,119 @@ class LoanController extends Controller
         }
 
         return $out;
+    }
+    private function directPenaltyReceiptRowsForLoan(Loan $loan)
+    {
+        $penaltyIds = data_get($loan, 'product.penalty_ids', []);
+        if (is_string($penaltyIds)) {
+            $decoded = json_decode($penaltyIds, true);
+            $penaltyIds = is_array($decoded) ? $decoded : [];
+        }
+
+        $penaltyIds = collect($penaltyIds)
+            ->filter()
+            ->map(fn ($id) => (int) $id)
+            ->values();
+        if ($penaltyIds->isEmpty()) {
+            return collect();
+        }
+
+        $penaltyChartAccountIds = Penalty::query()
+            ->whereIn('id', $penaltyIds)
+            ->get(['penalty_receivables_account_id', 'penalty_income_account_id'])
+            ->flatMap(function ($penalty) {
+                return [
+                    data_get($penalty, 'penalty_receivables_account_id'),
+                    data_get($penalty, 'penalty_income_account_id'),
+                ];
+            })
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->values();
+        if ($penaltyChartAccountIds->isEmpty()) {
+            return collect();
+        }
+
+        $customerLoanCount = Loan::query()
+            ->where('customer_id', $loan->customer_id)
+            ->count();
+        $loanTokens = array_filter([
+            strtolower((string) $loan->loanNo),
+            'loan-' . (int) $loan->id,
+            (string) $loan->id,
+        ]);
+
+        $receipts = Receipt::with(['receiptItems', 'bankAccount'])
+            ->where('reference_type', 'manual')
+            ->where('payee_type', 'customer')
+            ->where('customer_id', $loan->customer_id)
+            ->whereDoesntHave('repayments')
+            ->whereHas('receiptItems', function ($query) use ($penaltyChartAccountIds) {
+                $query->whereIn('chart_account_id', $penaltyChartAccountIds);
+            })
+            ->orderByDesc('date')
+            ->get();
+
+        return $receipts->map(function ($receipt) use ($penaltyChartAccountIds, $customerLoanCount, $loanTokens) {
+            $receiptText = strtolower(implode(' ', array_filter([
+                (string) ($receipt->reference ?? ''),
+                (string) ($receipt->reference_number ?? ''),
+                (string) ($receipt->description ?? ''),
+            ])));
+
+            $matchesLoan = $customerLoanCount <= 1;
+            if (!$matchesLoan) {
+                foreach ($loanTokens as $token) {
+                    if ($token !== '' && str_contains($receiptText, $token)) {
+                        $matchesLoan = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!$matchesLoan) {
+                return null;
+            }
+
+            $penaltyPaid = (float) collect($receipt->receiptItems ?? [])->sum(function ($item) use ($penaltyChartAccountIds) {
+                $accountId = (int) ($item->chart_account_id ?? 0);
+
+                return in_array($accountId, $penaltyChartAccountIds->all(), true)
+                    ? (float) ($item->amount ?? 0)
+                    : 0.0;
+            });
+            if ($penaltyPaid <= 0) {
+                return null;
+            }
+
+            return (object) [
+                'receipt_id' => (int) $receipt->id,
+                'encoded_receipt_id' => \Vinkla\Hashids\Facades\Hashids::encode((int) $receipt->id),
+                'payment_date' => $receipt->date,
+                'principal' => 0.0,
+                'interest' => 0.0,
+                'penalty' => round($penaltyPaid, 2),
+                'fee' => 0.0,
+                'total_paid' => round($penaltyPaid, 2),
+                'bank_account' => data_get($receipt, 'bankAccount.name', 'N/A'),
+                'reference' => $receipt->reference_number ?: ('RV-' . $receipt->id),
+            ];
+        })->filter()->values();
+    }
+
+    private function resolveLoanDeleteReturnStatus(?Loan $loan, ?string $requestedStatus): string
+    {
+        $validStatuses = ['applied', 'checked', 'approved', 'authorized', 'active', 'defaulted', 'rejected', 'completed', 'restructured'];
+
+        if ($requestedStatus && in_array($requestedStatus, $validStatuses, true)) {
+            return $requestedStatus;
+        }
+
+        if ($loan && in_array($loan->status, $validStatuses, true)) {
+            return $loan->status;
+        }
+
+        return 'active';
     }
 }
