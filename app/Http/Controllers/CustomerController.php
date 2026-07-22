@@ -435,10 +435,13 @@ class CustomerController extends Controller
             abort(404);
         }
         $customer = Customer::findOrFail($id);
-        $branchId = auth()->user()->branch_id;
+        $branchId = $customer->branch_id ?: auth()->user()->branch_id;
         $loanOfficers = User::where('branch_id', $branchId)->excludeSuperAdmin()->get();
         $collateralTypes = \App\Models\CashCollateralType::where('is_active', 1)->get();
-        $branches = \App\Models\Branch::all();
+        $branches = Branch::query()
+            ->when(auth()->user()->company_id, fn ($q) => $q->where('company_id', auth()->user()->company_id))
+            ->orderBy('name')
+            ->get();
         $companies = \App\Models\Company::all();
         $registrars = \App\Models\User::excludeSuperAdmin()->get();
         $regions = \App\Models\Region::all();
@@ -479,6 +482,7 @@ class CustomerController extends Controller
             }],
             'relation' => 'nullable|string|max:255',
             'category' => 'required|in:Guarantor,Borrower',
+            'branch_id' => 'required|exists:branches,id',
             'photo' => 'nullable|image|mimes:jpeg,png,jpg,gif|max:2048',
             'password' => 'nullable|min:6',
             'loan_officer_ids' => 'nullable|array',
@@ -500,8 +504,8 @@ class CustomerController extends Controller
         }
         $data['category'] = $request->category;
 
-        // Set these from logged-in user
-        $data['branch_id'] = auth()->user()->branch_id;
+        // Allow shifting customer to another branch; keep company from logged-in user
+        $data['branch_id'] = (int) $request->branch_id;
         $data['company_id'] = auth()->user()->company_id;
         $data['registrar'] = auth()->id();
         $data['has_cash_collateral'] = $request->has('has_cash_collateral') ? true : false; // Set boolean value
@@ -579,13 +583,14 @@ class CustomerController extends Controller
                 if ($existingCollateral) {
                     $existingCollateral->update([
                         'type_id' => $request->input('collateral_type_id'),
+                        'branch_id' => (int) $request->branch_id,
                     ]);
                 } else {
                     \App\Models\CashCollateral::create([
                         'customer_id' => $customer->id,
                         'type_id' => $request->input('collateral_type_id'),
                         'amount' => 0,
-                        'branch_id' => auth()->user()->branch_id,
+                        'branch_id' => (int) $request->branch_id,
                         'company_id' => auth()->user()->company_id,
                     ]);
                 }

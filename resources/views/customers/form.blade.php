@@ -244,6 +244,23 @@ $isEdit = isset($customer);
             @endif
         </div>
 
+        <!-- Branch (edit: allow shifting customer to another branch) -->
+        @if($isEdit)
+        <div class="col-md-6 mb-3">
+            <label class="form-label">Branch <span class="text-danger">*</span></label>
+            <select name="branch_id" class="form-select select2-single @error('branch_id') is-invalid @enderror" required>
+                <option value="">Select Branch</option>
+                @foreach($branches ?? [] as $branch)
+                <option value="{{ $branch->id }}" {{ (string) old('branch_id', $customer->branch_id ?? '') === (string) $branch->id ? 'selected' : '' }}>
+                    {{ $branch->name }}
+                </option>
+                @endforeach
+            </select>
+            <small class="form-text text-muted">Change branch to transfer this customer to another branch</small>
+            @error('branch_id') <div class="invalid-feedback">{{ $message }}</div> @enderror
+        </div>
+        @endif
+
         <!-- Category -->
         <div class="col-md-6 mb-3">
             <label class="form-label">Category <span class="text-danger">*</span></label>
