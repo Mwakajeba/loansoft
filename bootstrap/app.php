@@ -36,5 +36,21 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->append(\App\Http\Middleware\CheckSubscriptionStatus::class);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
-        //
+        $exceptions->render(function (\Illuminate\Session\TokenMismatchException $e, \Illuminate\Http\Request $request) {
+            $loginUrl = route('login');
+            $message = 'Your page has expired. Please log in again to continue.';
+
+            if ($request->expectsJson() || $request->ajax()) {
+                return response()->json([
+                    'message' => $message,
+                    'session_expired' => true,
+                    'redirect' => $loginUrl,
+                ], 419);
+            }
+
+            return response()->view('errors.419', [
+                'loginUrl' => $loginUrl,
+                'message' => $message,
+            ], 419);
+        });
     })->create();
