@@ -46,12 +46,14 @@
                                                 <li>Use dropdowns for Sex (M/F), Region, and District</li>
                                                 <li>Delete instruction rows and sample data before uploading</li>
                                                 <li>Upload Excel (.xlsx, .xls) or CSV (.csv) format</li>
-                                                <li>Select cash deposit options if needed</li>
+                                                <li>Large files are processed in the background — keep this page open until progress reaches 100%</li>
                                             </ul>
                                         </div>
                                     </div>
                                 </div>
                             </div>
+
+                            <div id="uploadAlert" class="alert d-none" role="alert"></div>
 
                             @if($errors->any())
                                 <div class="alert alert-danger alert-dismissible fade show" role="alert">
@@ -72,7 +74,7 @@
                                     <strong>Upload completed with warnings!</strong> {{ session('failed_count', 0) }} row(s) had issues.
                                     @if(session('failed_export_key'))
                                         <div class="mt-3">
-                                            <a href="{{ route('customers.download-failed-records', ['key' => session('failed_export_key')]) }}" 
+                                            <a href="{{ route('customers.download-failed-records', ['key' => session('failed_export_key')]) }}"
                                                class="btn btn-sm btn-danger">
                                                 <i class="bx bx-download me-1"></i>Download Failed Records (Excel)
                                             </a>
@@ -120,19 +122,29 @@
                                                         <div class="invalid-feedback">{{ $message }}</div>
                                                     @enderror
                                                 </div>
-                                                
+
                                                 <!-- Progress Bar -->
                                                 <div id="progressContainer" class="mt-3" style="display: none;">
                                                     <div class="d-flex justify-content-between mb-2">
-                                                        <span id="progressText">Uploading...</span>
+                                                        <span id="progressText">Processing...</span>
                                                         <span id="progressPercent">0%</span>
                                                     </div>
                                                     <div class="progress" style="height: 25px;">
-                                                        <div id="progressBar" class="progress-bar progress-bar-striped progress-bar-animated" 
-                                                             role="progressbar" style="width: 0%" aria-valuenow="0" 
+                                                        <div id="progressBar" class="progress-bar progress-bar-striped progress-bar-animated"
+                                                             role="progressbar" style="width: 0%" aria-valuenow="0"
                                                              aria-valuemin="0" aria-valuemax="100">
                                                             <span id="progressBarText">0%</span>
                                                         </div>
+                                                    </div>
+                                                    <div class="row mt-3 small text-muted">
+                                                        <div class="col-md-3">Processed: <strong id="statCurrent">0</strong> / <strong id="statTotal">0</strong></div>
+                                                        <div class="col-md-3 text-success">Success: <strong id="statSuccess">0</strong></div>
+                                                        <div class="col-md-3 text-danger">Failed: <strong id="statFailed">0</strong></div>
+                                                        <div class="col-md-3">Status: <strong id="statStatus">—</strong></div>
+                                                    </div>
+                                                    <div id="progressErrorsBox" class="alert alert-warning mt-3 d-none mb-0">
+                                                        <strong>Row errors (sample):</strong>
+                                                        <ul id="progressErrorsList" class="mb-0 mt-2"></ul>
                                                     </div>
                                                 </div>
                                             </div>
@@ -199,61 +211,170 @@
             const collateralContainer = document.querySelector('#collateral-type-container');
             const form = document.querySelector('#bulkUploadForm');
             const submitBtn = document.querySelector('#submitBtn');
-            const submitText = document.querySelector('#submitText');
+            const storeUrl = form.getAttribute('action');
+            const progressUrl = @json(route('customers.bulk-upload.progress'));
+            let pollTimer = null;
 
-            // Show/hide collateral type
             function toggleCollateralField() {
-                if (checkbox.checked) {
-                    collateralContainer.style.display = 'block';
-                } else {
-                    collateralContainer.style.display = 'none';
-                }
+                collateralContainer.style.display = checkbox.checked ? 'block' : 'none';
             }
 
             checkbox.addEventListener('change', toggleCollateralField);
-            // Initialize the state on page load
             toggleCollateralField();
 
-            // Handle form submission with progress bar
+            function showAlert(type, message) {
+                const el = document.getElementById('uploadAlert');
+                el.className = 'alert alert-' + type;
+                el.textContent = message;
+                el.classList.remove('d-none');
+            }
+
+            function updateProgress(progress) {
+                const pct = progress.percentage || 0;
+                const bar = document.getElementById('progressBar');
+                const barText = document.getElementById('progressBarText');
+                const percent = document.getElementById('progressPercent');
+                const text = document.getElementById('progressText');
+
+                bar.style.width = pct + '%';
+                bar.setAttribute('aria-valuenow', pct);
+                barText.textContent = Math.round(pct) + '%';
+                percent.textContent = Math.round(pct) + '%';
+
+                document.getElementById('statCurrent').textContent = progress.current || 0;
+                document.getElementById('statTotal').textContent = progress.total || 0;
+                document.getElementById('statSuccess').textContent = progress.success || 0;
+                document.getElementById('statFailed').textContent = progress.failed || 0;
+                document.getElementById('statStatus').textContent = progress.status || '—';
+
+                if (progress.status === 'processing') {
+                    text.textContent = 'Importing customers...';
+                } else if (progress.status === 'completed') {
+                    text.textContent = 'Import complete';
+                } else if (progress.status === 'error') {
+                    text.textContent = 'Import failed';
+                }
+
+                if (Array.isArray(progress.errors) && progress.errors.length > 0) {
+                    const box = document.getElementById('progressErrorsBox');
+                    const list = document.getElementById('progressErrorsList');
+                    box.classList.remove('d-none');
+                    list.innerHTML = progress.errors.slice(0, 20).map(function (e) {
+                        const row = e.row ? 'Row ' + e.row + ': ' : '';
+                        const name = e.name ? '(' + e.name + ') ' : '';
+                        return '<li>' + row + name + (e.message || '') + '</li>';
+                    }).join('');
+                }
+            }
+
+            function finishUpload(progress) {
+                if (pollTimer) {
+                    clearInterval(pollTimer);
+                    pollTimer = null;
+                }
+                const bar = document.getElementById('progressBar');
+                bar.classList.remove('progress-bar-animated');
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = '<i class="bx bx-upload me-1"></i><span id="submitText">Upload Customers</span>';
+
+                const success = progress.success || 0;
+                const failed = progress.failed || 0;
+                if (progress.status === 'completed') {
+                    showAlert(
+                        failed > 0 ? 'warning' : 'success',
+                        'Upload finished. Success: ' + success + ', Failed: ' + failed + '.'
+                    );
+                } else {
+                    showAlert('danger', progress.message || 'Upload failed.');
+                }
+            }
+
+            function pollProgress(importId) {
+                fetch(progressUrl + '?import_id=' + encodeURIComponent(importId), {
+                    headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' }
+                })
+                    .then(function (r) { return r.json(); })
+                    .then(function (progress) {
+                        if (!progress.success && progress.status === 'missing') {
+                            return;
+                        }
+                        updateProgress(progress);
+                        if (progress.status === 'completed' || progress.status === 'error') {
+                            finishUpload(progress);
+                        }
+                    })
+                    .catch(function () {});
+            }
+
             form.addEventListener('submit', function (e) {
+                e.preventDefault();
+
                 const fileInput = document.getElementById('csv_file');
-                const file = fileInput.files[0];
-                
-                if (!file) {
+                if (!fileInput.files[0]) {
                     return;
                 }
-                
-                // Show progress bar
+
+                if (pollTimer) {
+                    clearInterval(pollTimer);
+                    pollTimer = null;
+                }
+
+                document.getElementById('uploadAlert').classList.add('d-none');
+                document.getElementById('progressErrorsBox').classList.add('d-none');
                 document.getElementById('progressContainer').style.display = 'block';
+                document.getElementById('progressBar').classList.add('progress-bar-animated');
+                updateProgress({ percentage: 0, current: 0, total: 0, success: 0, failed: 0, status: 'starting' });
+
                 submitBtn.disabled = true;
-                submitText.textContent = 'Uploading...';
-                submitBtn.innerHTML = '<i class="bx bx-loader-alt bx-spin me-1"></i>Uploading...';
-                
-                // Simulate progress (actual progress would come from server via AJAX)
-                let progress = 0;
-                const progressInterval = setInterval(function() {
-                    progress += 5;
-                    if (progress > 90) {
-                        clearInterval(progressInterval);
-                        progress = 90; // Don't go to 100% until server responds
+                submitBtn.innerHTML = '<i class="bx bx-loader-alt bx-spin me-1"></i>Starting...';
+
+                const formData = new FormData(form);
+
+                fetch(storeUrl, {
+                    method: 'POST',
+                    body: formData,
+                    headers: {
+                        'X-Requested-With': 'XMLHttpRequest',
+                        'Accept': 'application/json',
+                        'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content')
+                            || formData.get('_token')
                     }
-                    updateProgress(progress);
-                }, 200);
-                
-                // Store interval to clear on form submit completion
-                form.dataset.progressInterval = progressInterval;
+                })
+                    .then(async function (response) {
+                        const data = await response.json().catch(function () { return {}; });
+                        if (!response.ok) {
+                            let message = data.message || 'Upload failed.';
+                            if (data.errors) {
+                                message = Object.values(data.errors).flat().join(' ');
+                            }
+                            throw new Error(message);
+                        }
+                        return data;
+                    })
+                    .then(function (data) {
+                        updateProgress({
+                            percentage: 0,
+                            current: 0,
+                            total: data.total || 0,
+                            success: 0,
+                            failed: 0,
+                            status: 'processing'
+                        });
+                        document.getElementById('progressText').textContent = data.message || 'Importing customers...';
+                        submitBtn.innerHTML = '<i class="bx bx-loader-alt bx-spin me-1"></i>Processing...';
+
+                        pollProgress(data.import_id);
+                        pollTimer = setInterval(function () {
+                            pollProgress(data.import_id);
+                        }, 1500);
+                    })
+                    .catch(function (err) {
+                        document.getElementById('progressContainer').style.display = 'none';
+                        submitBtn.disabled = false;
+                        submitBtn.innerHTML = '<i class="bx bx-upload me-1"></i><span id="submitText">Upload Customers</span>';
+                        showAlert('danger', err.message || 'Could not start bulk upload.');
+                    });
             });
-            
-            function updateProgress(percent) {
-                const progressBar = document.getElementById('progressBar');
-                const progressBarText = document.getElementById('progressBarText');
-                const progressPercent = document.getElementById('progressPercent');
-                
-                progressBar.style.width = percent + '%';
-                progressBar.setAttribute('aria-valuenow', percent);
-                progressBarText.textContent = Math.round(percent) + '%';
-                progressPercent.textContent = Math.round(percent) + '%';
-            }
         });
     </script>
 @endpush

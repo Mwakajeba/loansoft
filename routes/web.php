@@ -913,6 +913,7 @@ Route::middleware(['auth'])->group(function () {
     // Bulk upload routes (must come before parameterized routes)
     Route::get('customers/bulk-upload', [CustomerController::class, 'bulkUpload'])->name('customers.bulk-upload');
     Route::post('customers/bulk-upload', [CustomerController::class, 'bulkUploadStore'])->name('customers.bulk-upload.store');
+    Route::get('customers/bulk-upload/progress', [CustomerController::class, 'bulkUploadProgress'])->name('customers.bulk-upload.progress');
     Route::get('customers/download-failed-records', [CustomerController::class, 'downloadFailedRecords'])->name('customers.download-failed-records');
     Route::get('customers/download-sample', [CustomerController::class, 'downloadSample'])->name('customers.download-sample');
 
