@@ -43,6 +43,37 @@
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
 
     <script>
+        (function () {
+            var loginUrl = @json(route('login'));
+            var handlingSessionExpiry = false;
+
+            function handleSessionExpired() {
+                if (handlingSessionExpiry) {
+                    return;
+                }
+                handlingSessionExpiry = true;
+
+                Swal.fire({
+                    icon: 'warning',
+                    title: 'Session Expired',
+                    text: 'Your page has expired. Please log in again to continue.',
+                    confirmButtonText: 'Go to Login',
+                    allowOutsideClick: false,
+                    allowEscapeKey: false
+                }).then(function () {
+                    window.location.href = loginUrl;
+                });
+            }
+
+            $(document).ajaxError(function (event, jqxhr) {
+                if (jqxhr && jqxhr.status === 419) {
+                    handleSessionExpired();
+                }
+            });
+        })();
+    </script>
+
+    <script>
         $(document).ready(function () {
             $("#show_hide_password a").on('click', function (event) {
                 event.preventDefault();
@@ -67,6 +98,18 @@
             title: '{{ session('success') }}',
             showConfirmButton: false,
             timer: 2000
+        });
+    </script>
+@endif
+    @if(session('error'))
+    <script>
+        Swal.fire({
+            toast: true,
+            position: 'top-end',
+            icon: 'error',
+            title: '{{ session('error') }}',
+            showConfirmButton: false,
+            timer: 4000
         });
     </script>
 @endif

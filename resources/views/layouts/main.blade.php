@@ -146,6 +146,51 @@
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
 
     <script>
+        (function () {
+            var loginUrl = @json(route('login'));
+            var handlingSessionExpiry = false;
+
+            function handleSessionExpired() {
+                if (handlingSessionExpiry) {
+                    return;
+                }
+                handlingSessionExpiry = true;
+
+                Swal.fire({
+                    icon: 'warning',
+                    title: 'Session Expired',
+                    text: 'Your page has expired. Please log in again to continue.',
+                    confirmButtonText: 'Go to Login',
+                    allowOutsideClick: false,
+                    allowEscapeKey: false
+                }).then(function () {
+                    window.location.href = loginUrl;
+                });
+            }
+
+            window.handleSessionExpired = handleSessionExpired;
+
+            $(document).ajaxError(function (event, jqxhr) {
+                if (jqxhr && jqxhr.status === 419) {
+                    handleSessionExpired();
+                }
+            });
+
+            if (window.fetch) {
+                var originalFetch = window.fetch.bind(window);
+                window.fetch = function () {
+                    return originalFetch.apply(window, arguments).then(function (response) {
+                        if (response.status === 419) {
+                            handleSessionExpired();
+                        }
+                        return response;
+                    });
+                };
+            }
+        })();
+    </script>
+
+    <script>
         $(document).ready(function () {
             // Initialize first table without buttons
             $('#example').DataTable();
