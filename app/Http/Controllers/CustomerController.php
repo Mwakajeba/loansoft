@@ -19,17 +19,16 @@ use App\Exports\CustomerBulkUploadSampleExport;
 use App\Exports\CustomerBulkUploadFailedExport;
 use App\Jobs\BulkCustomerUploadJob;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use Spatie\Permission\Models\Role;
 use Illuminate\Support\Facades\DB;
 use Vinkla\Hashids\Facades\Hashids;
 use Yajra\DataTables\Facades\DataTables;
 use Maatwebsite\Excel\Facades\Excel;
 use PhpOffice\PhpSpreadsheet\IOFactory;
-
-set_time_limit(0);              // no limit for this request
-ini_set('max_execution_time', 0);
 
 class CustomerController extends Controller
 {
@@ -684,7 +683,12 @@ class CustomerController extends Controller
         ]);
 
         if ($request->has('has_cash_collateral') && !$request->collateral_type_id) {
-            return back()->withErrors(['collateral_type_id' => 'Please select a collateral type when applying cash collateral.']);
+            $message = 'Please select a collateral type when applying cash collateral.';
+            if ($request->ajax()) {
+                return response()->json(['success' => false, 'message' => $message], 422);
+            }
+
+            return back()->withErrors(['collateral_type_id' => $message]);
         }
 
         try {
@@ -702,7 +706,12 @@ class CustomerController extends Controller
                 $rows = $worksheet->toArray();
 
                 if (empty($rows)) {
-                    return back()->withErrors(['csv_file' => 'Excel file is empty.']);
+                    $message = 'Excel file is empty.';
+                    if ($request->ajax()) {
+                        return response()->json(['success' => false, 'message' => $message], 422);
+                    }
+
+                    return back()->withErrors(['csv_file' => $message]);
                 }
 
                 // Find header row (skip instruction rows)
@@ -771,7 +780,12 @@ class CustomerController extends Controller
                 }
 
                 if (empty($header)) {
-                    return back()->withErrors(['csv_file' => 'Could not find header row. Please ensure the file has columns: name, phone1, dob, sex']);
+                    $message = 'Could not find header row. Please ensure the file has columns: name, phone1, dob, sex';
+                    if ($request->ajax()) {
+                        return response()->json(['success' => false, 'message' => $message], 422);
+                    }
+
+                    return back()->withErrors(['csv_file' => $message]);
                 }
 
                 // Remove rows before header and the header row itself
@@ -837,7 +851,12 @@ class CustomerController extends Controller
                 }
 
                 if (empty($header)) {
-                    return back()->withErrors(['csv_file' => 'Could not find header row. Please ensure the file has columns: name, phone1, dob, sex']);
+                    $message = 'Could not find header row. Please ensure the file has columns: name, phone1, dob, sex';
+                    if ($request->ajax()) {
+                        return response()->json(['success' => false, 'message' => $message], 422);
+                    }
+
+                    return back()->withErrors(['csv_file' => $message]);
                 }
 
                 // Remove rows before header and the header row itself
@@ -864,189 +883,172 @@ class CustomerController extends Controller
             if (!empty($missingColumns)) {
                 $foundColumns = implode(', ', array_keys(array_intersect_key($header, array_flip($requiredColumns))));
                 $allFoundColumns = implode(', ', array_keys($header));
-                return back()->withErrors([
-                    'csv_file' => 'Missing required columns: ' . implode(', ', $missingColumns) .
+                $message = 'Missing required columns: ' . implode(', ', $missingColumns) .
                     '. Found columns: ' . ($allFoundColumns ?: 'none') .
-                    '. Please ensure your file has the correct header row with: name, phone1, dob, sex'
-                ]);
+                    '. Please ensure your file has the correct header row with: name, phone1, dob, sex';
+
+                if ($request->ajax()) {
+                    return response()->json(['success' => false, 'message' => $message], 422);
+                }
+
+                return back()->withErrors(['csv_file' => $message]);
             }
 
             if (empty($data)) {
-                return back()->withErrors(['csv_file' => 'No data rows found in the file.']);
+                $message = 'No data rows found in the file.';
+                if ($request->ajax()) {
+                    return response()->json(['success' => false, 'message' => $message], 422);
+                }
+
+                return back()->withErrors(['csv_file' => $message]);
             }
 
-            // Process data in chunks of 20
-            $chunkSize = 20;
+            // Tag source row numbers for error reporting
+            foreach ($data as $i => &$row) {
+                $row['_row_number'] = $i + 2;
+            }
+            unset($row);
+
+            $user = auth()->user();
+            $chunkSize = 50;
             $chunks = array_chunk($data, $chunkSize);
             $totalChunks = count($chunks);
             $totalRows = count($data);
+            $importId = 'cust_bulk_' . Str::uuid();
+            $passwordHash = Hash::make('1234567890');
+            $startingCustomerNo = 100000 + (int) (Customer::max('id') ?? 0) + 1;
+            $hasCashCollateral = $request->boolean('has_cash_collateral');
+            $collateralTypeId = $request->filled('collateral_type_id') ? (int) $request->collateral_type_id : null;
 
-            // Process synchronously in chunks for immediate results
-            // This ensures data is saved immediately without requiring queue worker
-            $successCount = 0;
-            $errorCount = 0;
-            $errors = [];
-            $failedRecords = [];
+            Cache::put($importId, [
+                'status' => 'processing',
+                'current' => 0,
+                'total' => $totalRows,
+                'success' => 0,
+                'failed' => 0,
+                'percentage' => 0,
+                'errors' => [],
+            ], 7200);
 
-            DB::beginTransaction();
+            $this->ensureQueueWorkerRunning();
 
-            try {
-                foreach ($chunks as $chunkIndex => $chunk) {
-                    Log::info("Processing chunk {$chunkIndex} of {$totalChunks}", [
-                        'chunk_size' => count($chunk),
-                        'user_id' => auth()->id()
-                    ]);
+            $useSyncQueue = config('queue.default') === 'sync';
 
-                    foreach ($chunk as $rowIndex => $rowData) {
-                        try {
-                            // Validate required fields
-                            if (
-                                empty($rowData['name']) || empty($rowData['phone1']) || empty($rowData['dob']) ||
-                                empty($rowData['sex'])
-                            ) {
-                                throw new \Exception("Missing required fields");
-                            }
+            Log::info('Bulk customer upload queued', [
+                'import_id' => $importId,
+                'total_rows' => $totalRows,
+                'total_chunks' => $totalChunks,
+                'queue' => config('queue.default'),
+            ]);
 
-                            // Validate sex
-                            if (!in_array(strtoupper($rowData['sex']), ['M', 'F'])) {
-                                throw new \Exception("Sex must be M or F");
-                            }
+            foreach ($chunks as $chunkIndex => $chunk) {
+                $job = new BulkCustomerUploadJob(
+                    $chunk,
+                    (int) $user->id,
+                    (int) $user->branch_id,
+                    (int) $user->company_id,
+                    $hasCashCollateral,
+                    $collateralTypeId,
+                    $chunkIndex,
+                    $totalChunks,
+                    $importId,
+                    $startingCustomerNo,
+                    $passwordHash
+                );
 
-                            // Handle region and district - convert names to IDs if provided
-                            $regionId = null;
-                            $districtId = null;
-
-                            if (!empty($rowData['region_id'])) {
-                                if (is_numeric($rowData['region_id'])) {
-                                    $regionId = $rowData['region_id'];
-                                } else {
-                                    $region = Region::where('name', trim($rowData['region_id']))->first();
-                                    $regionId = $region ? $region->id : null;
-                                }
-                            }
-
-                            if (!empty($rowData['district_id'])) {
-                                if (is_numeric($rowData['district_id'])) {
-                                    $districtId = $rowData['district_id'];
-                                } else {
-                                    $district = District::where('name', trim($rowData['district_id']))->first();
-                                    $districtId = $district ? $district->id : null;
-                                }
-                            }
-
-                            // Format phone number
-                            $phone1 = $this->formatPhoneNumber(trim($rowData['phone1']));
-                            $phone2 = !empty($rowData['phone2']) ? $this->formatPhoneNumber(trim($rowData['phone2'])) : null;
-
-                            // Determine category (Borrower/Guarantor) from file, default to Borrower
-                            $rawCategory = trim($rowData['category'] ?? '');
-                            $normalizedCategory = strtolower($rawCategory);
-                            $category = in_array($normalizedCategory, ['borrower', 'guarantor'], true)
-                                ? ucfirst($normalizedCategory)
-                                : 'Borrower';
-
-                            // Create customer data
-                            $customerData = [
-                                'name' => trim($rowData['name']),
-                                'phone1' => $phone1,
-                                'phone2' => $phone2,
-                                'dob' => $rowData['dob'],
-                                'sex' => strtoupper($rowData['sex']),
-                                'region_id' => $regionId,
-                                'district_id' => $districtId,
-                                'work' => trim($rowData['work'] ?? ''),
-                                'workAddress' => trim($rowData['workaddress'] ?? $rowData['workAddress'] ?? ''),
-                                'idType' => trim($rowData['idtype'] ?? $rowData['idType'] ?? ''),
-                                'idNumber' => trim($rowData['idnumber'] ?? $rowData['idNumber'] ?? ''),
-                                'relation' => trim($rowData['relation'] ?? ''),
-                                'description' => trim($rowData['description'] ?? ''),
-                                'customerNo' => 100000 + (Customer::max('id') ?? 0) + 1,
-                                'password' => Hash::make('1234567890'),
-                                'branch_id' => auth()->user()->branch_id,
-                                'company_id' => auth()->user()->company_id,
-                                'registrar' => auth()->id(),
-                                'dateRegistered' => now()->toDateString(),
-                                'has_cash_collateral' => $request->has('has_cash_collateral'),
-                                'category' => $category,
-                            ];
-
-                            $customer = Customer::create($customerData);
-
-                            // Add cash collateral if selected
-                            if ($request->has('has_cash_collateral') && $request->collateral_type_id) {
-                                \App\Models\CashCollateral::create([
-                                    'customer_id' => $customer->id,
-                                    'type_id' => $request->collateral_type_id,
-                                    'amount' => 0,
-                                    'branch_id' => auth()->user()->branch_id,
-                                    'company_id' => auth()->user()->company_id,
-                                ]);
-                            }
-
-                            // Assign to individual group if not already in a group
-                            $existingMembership = DB::table('group_members')->where('customer_id', $customer->id)->first();
-                            if (!$existingMembership) {
-                                DB::table('group_members')->insert([
-                                    'group_id' => 1,
-                                    'customer_id' => $customer->id,
-                                    'status' => 'active',
-                                    'joined_date' => now()->toDateString(),
-                                    'created_at' => now(),
-                                    'updated_at' => now(),
-                                ]);
-                            }
-
-                            $successCount++;
-                        } catch (\Exception $e) {
-                            $errorMsg = "Row " . (($chunkIndex * $chunkSize) + $rowIndex + 2) . ": " . $e->getMessage();
-                            $errors[] = $errorMsg;
-                            $failedRecords[] = array_merge($rowData, [
-                                'row_number' => ($chunkIndex * $chunkSize) + $rowIndex + 2,
-                                'error_reason' => $errorMsg
-                            ]);
-                            $errorCount++;
-                            Log::error('Failed to create customer in bulk upload', [
-                                'row_data' => $rowData,
-                                'error' => $e->getMessage()
-                            ]);
-                        }
-                    }
+                if ($useSyncQueue) {
+                    // Optimized sync path still finishes in-request, but password is hashed once.
+                    $job->handle();
+                } else {
+                    BulkCustomerUploadJob::dispatch(
+                        $chunk,
+                        (int) $user->id,
+                        (int) $user->branch_id,
+                        (int) $user->company_id,
+                        $hasCashCollateral,
+                        $collateralTypeId,
+                        $chunkIndex,
+                        $totalChunks,
+                        $importId,
+                        $startingCustomerNo,
+                        $passwordHash
+                    );
                 }
-
-                if ($errorCount > 0) {
-                    DB::rollBack();
-
-                    // Store failed records in session for export
-                    $failedExportKey = 'failed_customer_upload_' . time();
-                    session([$failedExportKey => $failedRecords]);
-
-                    return back()
-                        ->withErrors(['csv_file' => "Upload completed with errors. {$errorCount} rows failed, {$successCount} rows succeeded."])
-                        ->with('upload_errors', $errors)
-                        ->with('failed_export_key', $failedExportKey)
-                        ->with('failed_count', $errorCount);
-                }
-
-                DB::commit();
-
-                $message = "Successfully uploaded {$successCount} customers.";
-                if ($request->has('has_cash_collateral')) {
-                    $message .= " Cash collateral applied to all customers.";
-                }
-
-                return redirect()->route('customers.index')->with('success', $message);
-            } catch (\Exception $e) {
-                DB::rollBack();
-                Log::error('Bulk customer upload failed', [
-                    'error' => $e->getMessage(),
-                    'trace' => $e->getTraceAsString()
-                ]);
-                return back()->withErrors(['csv_file' => 'Failed to process file: ' . $e->getMessage()]);
             }
+
+            $message = "Bulk upload started for {$totalRows} customer(s).";
+            if ($request->ajax()) {
+                return response()->json([
+                    'success' => true,
+                    'message' => $message,
+                    'import_id' => $importId,
+                    'total' => $totalRows,
+                ]);
+            }
+
+            return redirect()->route('customers.bulk-upload')
+                ->with('success', $message)
+                ->with('import_id', $importId);
         } catch (\Exception $e) {
-            DB::rollBack();
-            return back()->withErrors(['csv_file' => 'Failed to process file: ' . $e->getMessage()]);
+            Log::error('Bulk customer upload failed', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            $message = 'Failed to process file: ' . $e->getMessage();
+            if ($request->ajax()) {
+                return response()->json(['success' => false, 'message' => $message], 500);
+            }
+
+            return back()->withErrors(['csv_file' => $message]);
         }
+    }
+
+    /**
+     * Poll bulk customer upload progress.
+     */
+    public function bulkUploadProgress(Request $request)
+    {
+        $importId = (string) $request->query('import_id', '');
+        if ($importId === '' || ! str_starts_with($importId, 'cust_bulk_')) {
+            return response()->json(['success' => false, 'message' => 'Invalid import id'], 422);
+        }
+
+        $progress = Cache::get($importId);
+        if (! $progress) {
+            return response()->json([
+                'success' => false,
+                'status' => 'missing',
+                'message' => 'Progress not found (expired or invalid).',
+            ], 404);
+        }
+
+        return response()->json(array_merge(['success' => true], $progress));
+    }
+
+    private function ensureQueueWorkerRunning(): void
+    {
+        if (config('queue.default') === 'sync') {
+            return;
+        }
+
+        $command = "ps aux | grep '[a]rtisan queue:work' | grep -v grep";
+        exec($command, $output, $returnCode);
+        if (! empty($output) && $returnCode === 0) {
+            return;
+        }
+
+        $artisanPath = base_path('artisan');
+        $logPath = storage_path('logs/queue-worker.log');
+        $pidFile = storage_path('logs/queue-worker.pid');
+        $cmd = sprintf(
+            'nohup php %s queue:work --sleep=1 --tries=3 --timeout=600 >> %s 2>&1 & echo $! > %s',
+            escapeshellarg($artisanPath),
+            escapeshellarg($logPath),
+            escapeshellarg($pidFile)
+        );
+        exec($cmd);
+        Log::info('Started queue worker for bulk customer upload');
     }
 
     // Download failed records export
