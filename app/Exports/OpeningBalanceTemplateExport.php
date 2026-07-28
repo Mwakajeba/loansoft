@@ -53,7 +53,8 @@ class OpeningBalanceTemplateExport implements FromArray, WithHeadings, WithStyle
         if ($productId) {
             $product = LoanProduct::find($productId);
             if ($product) {
-                $this->releaseFees = OpeningBalanceReleaseFeeResolver::releaseFeesForProduct($product);
+                // All active product fees become Excel columns (so the template always shows them).
+                $this->releaseFees = OpeningBalanceReleaseFeeResolver::productFeesForTemplate($product);
             }
         }
     }
@@ -89,10 +90,20 @@ class OpeningBalanceTemplateExport implements FromArray, WithHeadings, WithStyle
             ];
 
             foreach ($this->releaseFees as $fee) {
-                // Default 0: fixed/% use fee settings; custom must be filled when deducting fees.
                 $row[] = 0;
             }
 
+            $rows[] = $row;
+        }
+
+        // Always include at least one blank sample row so fee columns are visible.
+        if (empty($rows)) {
+            $row = [
+                '', '', '', '', '', '', '', date('Y-m-d'), '', $defaultCycle, 'Business', '',
+            ];
+            foreach ($this->releaseFees as $fee) {
+                $row[] = 0;
+            }
             $rows[] = $row;
         }
 
@@ -117,7 +128,10 @@ class OpeningBalanceTemplateExport implements FromArray, WithHeadings, WithStyle
         ];
 
         foreach ($this->releaseFees as $fee) {
-            $headings[] = OpeningBalanceReleaseFeeResolver::feeColumnKey((int) $fee->id);
+            // fee_12_processing_fee — readable, still parseable by fee id prefix
+            $slug = strtolower(preg_replace('/[^a-zA-Z0-9]+/', '_', (string) $fee->name) ?? 'fee');
+            $slug = trim($slug, '_');
+            $headings[] = OpeningBalanceReleaseFeeResolver::feeColumnKey((int) $fee->id).($slug !== '' ? '_'.$slug : '');
         }
 
         return $headings;
@@ -191,22 +205,27 @@ class OpeningBalanceTemplateExport implements FromArray, WithHeadings, WithStyle
                 }
 
                 $feeGuide = $spreadsheet->createSheet();
-                $feeGuide->setTitle('Release Fees Guide');
+                $feeGuide->setTitle('Fees Guide');
                 $feeGuide->setCellValue('A1', 'Column');
                 $feeGuide->setCellValue('B1', 'Fee Name');
                 $feeGuide->setCellValue('C1', 'Fee Type');
-                $feeGuide->setCellValue('D1', 'Settings Amount');
-                $feeGuide->setCellValue('E1', 'How Excel Value Is Used');
-                $feeGuide->getStyle('A1:E1')->getFont()->setBold(true);
+                $feeGuide->setCellValue('D1', 'Deduction Criteria');
+                $feeGuide->setCellValue('E1', 'Settings Amount');
+                $feeGuide->setCellValue('F1', 'How Excel Value Is Used');
+                $feeGuide->getStyle('A1:F1')->getFont()->setBold(true);
 
                 $guideRow = 2;
                 foreach ($this->releaseFees as $fee) {
-                    $feeGuide->setCellValue('A'.$guideRow, OpeningBalanceReleaseFeeResolver::feeColumnKey((int) $fee->id));
+                    $slug = strtolower(preg_replace('/[^a-zA-Z0-9]+/', '_', (string) $fee->name) ?? 'fee');
+                    $slug = trim($slug, '_');
+                    $colKey = OpeningBalanceReleaseFeeResolver::feeColumnKey((int) $fee->id).($slug !== '' ? '_'.$slug : '');
+                    $feeGuide->setCellValue('A'.$guideRow, $colKey);
                     $feeGuide->setCellValue('B'.$guideRow, $fee->name);
                     $feeGuide->setCellValue('C'.$guideRow, $fee->fee_type);
-                    $feeGuide->setCellValue('D'.$guideRow, $fee->amount);
+                    $feeGuide->setCellValue('D'.$guideRow, $fee->deduction_criteria);
+                    $feeGuide->setCellValue('E'.$guideRow, $fee->amount);
                     $feeGuide->setCellValue(
-                        'E'.$guideRow,
+                        'F'.$guideRow,
                         $fee->isCustom()
                             ? 'Fill amount in Excel (required when deducting fees). 0 = no fee.'
                             : 'Leave 0 to use fee settings (fixed amount or % of loan). Enter amount > 0 to override.'
@@ -215,10 +234,10 @@ class OpeningBalanceTemplateExport implements FromArray, WithHeadings, WithStyle
                 }
 
                 if ($this->releaseFees->isEmpty()) {
-                    $feeGuide->setCellValue('A2', 'No release-date fees on this product.');
+                    $feeGuide->setCellValue('A2', 'No active fees on this product. Attach fees to the loan product, then re-download the template.');
                 }
 
-                foreach (range('A', 'E') as $col) {
+                foreach (range('A', 'F') as $col) {
                     $feeGuide->getColumnDimension($col)->setAutoSize(true);
                 }
 
