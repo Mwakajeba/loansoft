@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\BankAccount;
 use App\Models\Customer;
 use App\Models\Group;
 use App\Models\GroupMember;
@@ -383,8 +384,9 @@ class GroupController extends Controller
         $built = GroupRepaymentDataBuilder::build($group);
         $repaymentData = $built['repaymentData'];
         $totalAmountToPay = $built['totalAmountToPay'];
+        $bankAccounts = BankAccount::forUserBranches()->orderBy('name')->get();
 
-        return view('groups.payment', compact('group', 'repaymentData', 'totalAmountToPay'));
+        return view('groups.payment', compact('group', 'repaymentData', 'totalAmountToPay', 'bankAccounts'));
     }
 
     public function exportGroupRepaymentTemplate($encodedId)
@@ -410,6 +412,7 @@ class GroupController extends Controller
         $request->validate([
             'import_file' => 'required|file|mimes:xlsx,xls,csv|max:10240',
             'payment_date' => 'required|date|before_or_equal:today',
+            'bank_account_id' => 'required|exists:bank_accounts,id',
         ]);
 
         $ids = Hashids::decode($encodedId)[0] ?? null;
@@ -425,6 +428,7 @@ class GroupController extends Controller
             $importRequest = new Request([
                 'repayments' => $repayments,
                 'payment_date' => $request->input('payment_date'),
+                'bank_account_id' => $request->input('bank_account_id'),
             ]);
 
             return $this->groupStore($importRequest, $encodedId);
@@ -545,6 +549,7 @@ class GroupController extends Controller
         // Validation logic kwa data ya fomu
         $request->validate([
             'payment_date' => 'required|date|before_or_equal:today',
+            'bank_account_id' => 'required|exists:bank_accounts,id',
             'repayments.*.*.schedule_id' => 'required|exists:loan_schedules,id',
             'repayments.*.*.amount_paid' => 'required|numeric|min:0',
         ]);
@@ -553,6 +558,10 @@ class GroupController extends Controller
             DB::beginTransaction();
 
             $paymentDate = Carbon::parse($request->input('payment_date'))->startOfDay();
+            $bankAccount = $this->resolveGroupRepaymentBankAccount($request);
+            $bankId = $bankAccount->id;
+            $bankAccountId = $bankAccount->id;
+            $bankChartAccountId = $bankAccount->chart_account_id;
 
             // Initialize arrays for bulk inserts
             $allReceiptItems = [];
@@ -561,7 +570,7 @@ class GroupController extends Controller
             foreach ($request->repayments as $customerId => $loans) {
                 foreach ($loans as $loanId => $repaymentData) {
                     // Pata schedule husika
-                    $schedule = LoanSchedule::with('loan.product', 'loan.bankAccount')->findOrFail($repaymentData['schedule_id']);
+                    $schedule = LoanSchedule::with(['repayments', 'loan.product.fee', 'loan.product.penalty'])->findOrFail($repaymentData['schedule_id']);
 
                     // Kiasi kilicholipwa sasa hivi
                     $amountPaid = (float) $repaymentData['amount_paid'];
@@ -571,16 +580,19 @@ class GroupController extends Controller
                         continue;
                     }
 
-                    ////GET BANK ACCOUNT ID ///
-
                     $user = Auth::user();
-                    $bankId = $schedule->loan->bankAccount->id;
-                    $bankAccountId = $schedule->loan->bankAccount->id ?? null;
-                    $loanProduct = $schedule->loan->loanProduct;
+                    $loan = $schedule->loan;
+                    if (! $loan) {
+                        throw new \RuntimeException("Loan not found for schedule {$schedule->id}.");
+                    }
+
+                    $loanProduct = $loan->product;
+                    if (! $loanProduct) {
+                        throw new \RuntimeException("Loan product not found for loan {$loanId}.");
+                    }
+
                     $customer = Customer::findOrFail($customerId);
-                    // Pata payment order kutoka kwenye LoanProduct
-                    $loanProduct = $schedule->loan->product;
-                    $paymentOrder = explode(',', $loanProduct->repayment_order);
+                    $paymentOrder = explode(',', (string) $loanProduct->repayment_order);
 
                     // Anzisha kiasi kitakacholipwa kwa kila sehemu
                     $principalPaid = 0;
@@ -752,27 +764,8 @@ class GroupController extends Controller
                             'description' => $notes,
                         ];
                     }
-                    if ($feePaid > 0) {
-                        $allReceiptItems[] = [
-                            'receipt_id' => $receipt->id,
-                            'chart_account_id' => $loanProduct->fee->chart_account_id,
-                            'amount' => $feePaid,
-                            'description' => $notes,
-                        ];
-                    }
-                    if ($penaltyPaid > 0) {
-                        $allReceiptItems[] = [
-                            'receipt_id' => $receipt->id,
-                            'chart_account_id' => $loanProduct->penalty->penalty_receivables_account_id,
-                            'amount' => $penaltyPaid,
-                            'description' => $notes,
-                        ];
-                    }
 
                     // *** 4. Kuhifadhi GL Transactions ***
-                    $bankChartAccountId = $schedule->loan->bankAccount->chart_account_id ?? null;
-
-                    // Debit: Bank Account na kiasi chote kilicholipwa
                     $allGlTransactions[] = [
                         'chart_account_id' => $bankChartAccountId,
                         'customer_id' => $customerId,
@@ -786,7 +779,6 @@ class GroupController extends Controller
                         'user_id' => $user->id,
                     ];
 
-                    // Credit transactions kulingana na kiasi kilicholipwa kwa kila sehemu
                     if ($principalPaid > 0) {
                         $allGlTransactions[] = [
                             'chart_account_id' => $loanProduct->principal_receivable_account_id,
@@ -818,8 +810,18 @@ class GroupController extends Controller
                     }
 
                     if ($feePaid > 0) {
+                        $feeChartAccountId = $loanProduct->fee?->chart_account_id;
+                        if (! $feeChartAccountId) {
+                            throw new \RuntimeException("Fee account is not configured for loan product {$loanProduct->name}.");
+                        }
+                        $allReceiptItems[] = [
+                            'receipt_id' => $receipt->id,
+                            'chart_account_id' => $feeChartAccountId,
+                            'amount' => $feePaid,
+                            'description' => $notes,
+                        ];
                         $allGlTransactions[] = [
-                            'chart_account_id' => $loanProduct->fee->chart_account_id,
+                            'chart_account_id' => $feeChartAccountId,
                             'customer_id' => $customerId,
                             'amount' => $feePaid,
                             'nature' => 'credit',
@@ -833,8 +835,18 @@ class GroupController extends Controller
                     }
 
                     if ($penaltyPaid > 0) {
+                        $penaltyChartAccountId = $loanProduct->penalty?->penalty_receivables_account_id;
+                        if (! $penaltyChartAccountId) {
+                            throw new \RuntimeException("Penalty account is not configured for loan product {$loanProduct->name}.");
+                        }
+                        $allReceiptItems[] = [
+                            'receipt_id' => $receipt->id,
+                            'chart_account_id' => $penaltyChartAccountId,
+                            'amount' => $penaltyPaid,
+                            'description' => $notes,
+                        ];
                         $allGlTransactions[] = [
-                            'chart_account_id' => $loanProduct->penalty->penalty_receivables_account_id,
+                            'chart_account_id' => $penaltyChartAccountId,
                             'customer_id' => $customerId,
                             'amount' => $penaltyPaid,
                             'nature' => 'credit',
@@ -870,6 +882,22 @@ class GroupController extends Controller
             DB::rollBack();
             return back()->with('error', 'Failed to process repayment. ' . $e->getMessage());
         }
+    }
+
+    private function resolveGroupRepaymentBankAccount(Request $request): BankAccount
+    {
+        $bankAccount = BankAccount::findOrFail($request->bank_account_id);
+        $user = Auth::user();
+
+        if (! $bankAccount->isAccessibleByUser($user)) {
+            throw new \InvalidArgumentException('You do not have access to the selected bank account.');
+        }
+
+        if (! $bankAccount->chart_account_id) {
+            throw new \InvalidArgumentException('Selected bank account has no linked chart account.');
+        }
+
+        return $bankAccount;
     }
 
     /**

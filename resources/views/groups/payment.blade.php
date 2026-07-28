@@ -1,5 +1,6 @@
 @php
     use Vinkla\Hashids\Facades\Hashids;
+    $selectedBankAccountId = old('bank_account_id', ($bankAccounts ?? collect())->first()?->id);
 @endphp
 
 @extends('layouts.main')
@@ -33,6 +34,18 @@
                                required>
                         @error('payment_date') <div class="invalid-feedback">{{ $message }}</div> @enderror
                     </div>
+                    <div class="col-md-4">
+                        <label for="shared_bank_account_id" class="form-label">Bank Account <span class="text-danger">*</span></label>
+                        <select id="shared_bank_account_id" class="form-select @error('bank_account_id') is-invalid @enderror" required>
+                            <option value="">Select Bank Account</option>
+                            @foreach($bankAccounts ?? [] as $bankAccount)
+                                <option value="{{ $bankAccount->id }}" {{ (string) $selectedBankAccountId === (string) $bankAccount->id ? 'selected' : '' }}>
+                                    {{ $bankAccount->name }}
+                                </option>
+                            @endforeach
+                        </select>
+                        @error('bank_account_id') <div class="invalid-feedback">{{ $message }}</div> @enderror
+                    </div>
                 </div>
             </div>
         </div>
@@ -63,6 +76,7 @@
                 <form action="{{ route('groups.payment.import', Hashids::encode($group->id)) }}" method="POST" enctype="multipart/form-data" class="row g-3 align-items-end mt-2" id="groupRepaymentImportForm">
                     @csrf
                     <input type="hidden" name="payment_date" id="import_payment_date" value="{{ old('payment_date', date('Y-m-d')) }}">
+                    <input type="hidden" name="bank_account_id" id="import_bank_account_id" value="{{ $selectedBankAccountId }}">
                     <div class="col-md-8">
                         <label for="import_file" class="form-label">Import Excel</label>
                         <input type="file" name="import_file" id="import_file" class="form-control @error('import_file') is-invalid @enderror" accept=".xlsx,.xls,.csv" required>
@@ -82,6 +96,7 @@
                 <form action="{{ route('groups.groupStore', Hashids::encode($group->id)) }}" method="POST" id="groupRepaymentForm">
                     @csrf
                     <input type="hidden" name="payment_date" id="form_payment_date" value="{{ old('payment_date', date('Y-m-d')) }}">
+                    <input type="hidden" name="bank_account_id" id="form_bank_account_id" value="{{ $selectedBankAccountId }}">
 
                     <div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-3">
                         <h4 class="card-title mb-0">Repayment Schedule Details</h4>
@@ -219,21 +234,32 @@
         const sharedPaymentDate = document.getElementById('shared_payment_date');
         const formPaymentDate = document.getElementById('form_payment_date');
         const importPaymentDate = document.getElementById('import_payment_date');
+        const sharedBankAccountId = document.getElementById('shared_bank_account_id');
+        const formBankAccountId = document.getElementById('form_bank_account_id');
+        const importBankAccountId = document.getElementById('import_bank_account_id');
 
-        function syncPaymentDate() {
-            if (!sharedPaymentDate) {
-                return;
+        function syncPaymentFields() {
+            if (sharedPaymentDate) {
+                if (formPaymentDate) {
+                    formPaymentDate.value = sharedPaymentDate.value;
+                }
+                if (importPaymentDate) {
+                    importPaymentDate.value = sharedPaymentDate.value;
+                }
             }
-            if (formPaymentDate) {
-                formPaymentDate.value = sharedPaymentDate.value;
-            }
-            if (importPaymentDate) {
-                importPaymentDate.value = sharedPaymentDate.value;
+            if (sharedBankAccountId) {
+                if (formBankAccountId) {
+                    formBankAccountId.value = sharedBankAccountId.value;
+                }
+                if (importBankAccountId) {
+                    importBankAccountId.value = sharedBankAccountId.value;
+                }
             }
         }
 
-        sharedPaymentDate?.addEventListener('change', syncPaymentDate);
-        syncPaymentDate();
+        sharedPaymentDate?.addEventListener('change', syncPaymentFields);
+        sharedBankAccountId?.addEventListener('change', syncPaymentFields);
+        syncPaymentFields();
 
         function updateTotalAmount() {
             let total = 0;
