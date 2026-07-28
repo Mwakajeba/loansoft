@@ -4672,7 +4672,7 @@ class LoanReportController extends Controller
 
         $showData = $request->filled('group_id');
         $reportData = $showData
-            ? GroupRepaymentScheduleCardBuilder::build((int) $groupId, $startDate, $endDate)
+            ? \App\Support\Loans\GroupRepaymentScheduleCardBuilder::build((int) $groupId, $startDate, $endDate)
             : ['group' => null, 'schedule_dates' => [], 'date_keys' => [], 'rows' => [], 'column_totals' => []];
 
         $company = Company::first();
@@ -4698,7 +4698,7 @@ class LoanReportController extends Controller
         $endDate = $request->input('end_date');
         $groupId = (int) $request->input('group_id');
 
-        $reportData = GroupRepaymentScheduleCardBuilder::build($groupId, $startDate, $endDate);
+        $reportData = \App\Support\Loans\GroupRepaymentScheduleCardBuilder::build($groupId, $startDate, $endDate);
         $company = Company::first();
 
         $pdf = PDF::loadView('loans.reports.group_repayment_schedule_pdf', compact(
