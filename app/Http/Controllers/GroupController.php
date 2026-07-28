@@ -570,7 +570,7 @@ class GroupController extends Controller
             foreach ($request->repayments as $customerId => $loans) {
                 foreach ($loans as $loanId => $repaymentData) {
                     // Pata schedule husika
-                    $schedule = LoanSchedule::with(['repayments', 'loan.product.fee', 'loan.product.penalty'])->findOrFail($repaymentData['schedule_id']);
+                    $schedule = LoanSchedule::with(['repayments', 'loan.product'])->findOrFail($repaymentData['schedule_id']);
 
                     // Kiasi kilicholipwa sasa hivi
                     $amountPaid = (float) $repaymentData['amount_paid'];
@@ -810,7 +810,7 @@ class GroupController extends Controller
                     }
 
                     if ($feePaid > 0) {
-                        $feeChartAccountId = $loanProduct->fee?->chart_account_id;
+                        $feeChartAccountId = $this->resolveFeeChartAccountId($loanProduct);
                         if (! $feeChartAccountId) {
                             throw new \RuntimeException("Fee account is not configured for loan product {$loanProduct->name}.");
                         }
@@ -835,7 +835,7 @@ class GroupController extends Controller
                     }
 
                     if ($penaltyPaid > 0) {
-                        $penaltyChartAccountId = $loanProduct->penalty?->penalty_receivables_account_id;
+                        $penaltyChartAccountId = $this->resolvePenaltyChartAccountId($loanProduct);
                         if (! $penaltyChartAccountId) {
                             throw new \RuntimeException("Penalty account is not configured for loan product {$loanProduct->name}.");
                         }
@@ -898,6 +898,39 @@ class GroupController extends Controller
         }
 
         return $bankAccount;
+    }
+
+    private function resolveFeeChartAccountId(\App\Models\LoanProduct $loanProduct): ?int
+    {
+        if (empty($loanProduct->fees_ids)) {
+            return null;
+        }
+
+        $feeIds = is_array($loanProduct->fees_ids)
+            ? $loanProduct->fees_ids
+            : json_decode((string) $loanProduct->fees_ids, true);
+
+        if (! is_array($feeIds)) {
+            return null;
+        }
+
+        foreach ($feeIds as $feeId) {
+            $fee = \App\Models\Fee::query()->find($feeId);
+            if ($fee && $fee->chart_account_id) {
+                return (int) $fee->chart_account_id;
+            }
+        }
+
+        return null;
+    }
+
+    private function resolvePenaltyChartAccountId(\App\Models\LoanProduct $loanProduct): ?int
+    {
+        $penalty = $loanProduct->penalty;
+
+        return $penalty && $penalty->penalty_receivables_account_id
+            ? (int) $penalty->penalty_receivables_account_id
+            : null;
     }
 
     /**
