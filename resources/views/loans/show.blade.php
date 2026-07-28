@@ -370,6 +370,14 @@
                                             <td class="text-dark fw-bold">TZS {{ number_format($loan->amount, 2) }}</td>
                                         </tr>
                                         <tr>
+                                            <td class="fw-bold text-muted ps-4">Fees Deducted on Release</td>
+                                            <td class="text-warning fw-bold">TZS {{ number_format($totalDeductedReleaseFees ?? 0, 2) }}</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="fw-bold text-muted ps-4">Net Amount Disbursed</td>
+                                            <td class="text-primary fw-bold">TZS {{ number_format($netDisbursedAmount ?? $loan->amount, 2) }}</td>
+                                        </tr>
+                                        <tr>
                                             <td class="fw-bold text-muted ps-4">Interest Amount</td>
                                             <td class="text-dark">TZS {{ number_format($loan->interest_amount, 2) }}</td>
                                         </tr>
@@ -801,7 +809,7 @@
 
                 <div class="tab-pane fade" id="fees" role="tabpanel">
                     <div class="row g-3 mb-3">
-                        <div class="col-md-4">
+                        <div class="col-md-3">
                             <div class="card border-0 shadow-sm h-100">
                                 <div class="card-body">
                                     <p class="text-muted mb-1">Configured Loan Fees</p>
@@ -809,7 +817,15 @@
                                 </div>
                             </div>
                         </div>
-                        <div class="col-md-4">
+                        <div class="col-md-3">
+                            <div class="card border-0 shadow-sm h-100">
+                                <div class="card-body">
+                                    <p class="text-muted mb-1">Deducted on Release</p>
+                                    <h5 class="mb-0 text-warning">TZS {{ number_format($totalDeductedReleaseFees ?? 0, 2) }}</h5>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
                             <div class="card border-0 shadow-sm h-100">
                                 <div class="card-body">
                                     <p class="text-muted mb-1">Total Fees Paid So Far</p>
@@ -817,15 +833,86 @@
                                 </div>
                             </div>
                         </div>
-                        <div class="col-md-4">
+                        <div class="col-md-3">
                             <div class="card border-0 shadow-sm h-100">
                                 <div class="card-body">
                                     <p class="text-muted mb-1">Remaining Fees</p>
-                                    <h5 class="mb-0 text-warning">TZS {{ number_format($remainingFees ?? 0, 2) }}</h5>
+                                    <h5 class="mb-0 text-danger">TZS {{ number_format($remainingFees ?? 0, 2) }}</h5>
                                 </div>
                             </div>
                         </div>
                     </div>
+
+                    @if(isset($deductedReleaseFees) && $deductedReleaseFees->count())
+                        <div class="card radius-10 mb-3">
+                            <div class="card-header bg-warning text-dark">
+                                <h6 class="mb-0"><i class="bx bx-minus-circle me-2"></i>FEES DEDUCTED ON LOAN RELEASE</h6>
+                            </div>
+                            <div class="card-body">
+                                <div class="row g-3 mb-3">
+                                    <div class="col-md-4">
+                                        <div class="border rounded p-3 h-100">
+                                            <small class="text-muted d-block">Principal</small>
+                                            <span class="fw-bold text-dark">TZS {{ number_format($loan->amount, 2) }}</span>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-4">
+                                        <div class="border rounded p-3 h-100">
+                                            <small class="text-muted d-block">Total Deducted Fees</small>
+                                            <span class="fw-bold text-warning">TZS {{ number_format($totalDeductedReleaseFees ?? 0, 2) }}</span>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-4">
+                                        <div class="border rounded p-3 h-100">
+                                            <small class="text-muted d-block">Net Amount Disbursed</small>
+                                            <span class="fw-bold text-primary">TZS {{ number_format($netDisbursedAmount ?? $loan->amount, 2) }}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="table-responsive">
+                                    <table class="table table-bordered table-striped mb-0">
+                                        <thead class="bg-light">
+                                            <tr>
+                                                <th>#</th>
+                                                <th>Fee Name</th>
+                                                <th>Fee Type</th>
+                                                <th class="text-end">Configured</th>
+                                                <th class="text-end">Calculated</th>
+                                                <th class="text-end">Deducted</th>
+                                                <th>Posted in GL</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            @foreach($deductedReleaseFees as $index => $fee)
+                                                <tr>
+                                                    <td>{{ $index + 1 }}</td>
+                                                    <td>{{ $fee->name }}</td>
+                                                    <td>{{ ucfirst(str_replace('_', ' ', $fee->fee_type ?? 'N/A')) }}</td>
+                                                    <td class="text-end">{{ number_format((float) ($fee->configured_amount ?? 0), 2) }}</td>
+                                                    <td class="text-end">{{ number_format((float) ($fee->calculated_amount ?? 0), 2) }}</td>
+                                                    <td class="text-end fw-semibold text-warning">{{ number_format((float) ($fee->deducted_amount ?? 0), 2) }}</td>
+                                                    <td>
+                                                        @if(!empty($fee->posted_in_gl))
+                                                            <span class="badge bg-success">Yes</span>
+                                                        @else
+                                                            <span class="badge bg-secondary">Calculated</span>
+                                                        @endif
+                                                    </td>
+                                                </tr>
+                                            @endforeach
+                                        </tbody>
+                                        <tfoot>
+                                            <tr class="fw-bold">
+                                                <td colspan="5" class="text-end">Total Deducted</td>
+                                                <td class="text-end text-warning">{{ number_format($totalDeductedReleaseFees ?? 0, 2) }}</td>
+                                                <td></td>
+                                            </tr>
+                                        </tfoot>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    @endif
 
                     @if(isset($loanFees) && $loanFees->count())
                         <div class="card radius-10">
@@ -875,16 +962,22 @@
                         </div>
                         <div class="card-body">
                             <div class="row g-3 mb-3">
-                                <div class="col-md-6">
+                                <div class="col-md-4">
                                     <div class="border rounded p-3 h-100">
                                         <small class="text-muted d-block">Paid via Repayments</small>
                                         <span class="fw-bold text-dark">TZS {{ number_format($feesPaidFromRepayments ?? 0, 2) }}</span>
                                     </div>
                                 </div>
-                                <div class="col-md-6">
+                                <div class="col-md-4">
                                     <div class="border rounded p-3 h-100">
                                         <small class="text-muted d-block">Paid via Receipts</small>
                                         <span class="fw-bold text-dark">TZS {{ number_format($feesPaidFromReceipts ?? 0, 2) }}</span>
+                                    </div>
+                                </div>
+                                <div class="col-md-4">
+                                    <div class="border rounded p-3 h-100">
+                                        <small class="text-muted d-block">Deducted on Release</small>
+                                        <span class="fw-bold text-warning">TZS {{ number_format($totalDeductedReleaseFees ?? 0, 2) }}</span>
                                     </div>
                                 </div>
                             </div>

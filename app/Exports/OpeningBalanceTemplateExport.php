@@ -3,7 +3,9 @@
 namespace App\Exports;
 
 use App\Models\Customer;
+use App\Models\Fee;
 use App\Models\LoanProduct;
+use App\Support\Loans\OpeningBalanceReleaseFeeResolver;
 use Maatwebsite\Excel\Concerns\FromArray;
 use Maatwebsite\Excel\Concerns\WithColumnWidths;
 use Maatwebsite\Excel\Concerns\WithEvents;
@@ -40,14 +42,24 @@ class OpeningBalanceTemplateExport implements FromArray, WithHeadings, WithStyle
 
     protected ?int $productId;
 
+    /** @var \Illuminate\Support\Collection<int, Fee> */
+    protected $releaseFees;
+
     public function __construct(?int $productId = null)
     {
         $this->productId = $productId;
+        $this->releaseFees = collect();
+
+        if ($productId) {
+            $product = LoanProduct::find($productId);
+            if ($product) {
+                $this->releaseFees = OpeningBalanceReleaseFeeResolver::releaseFeesForProduct($product);
+            }
+        }
     }
 
     public function array(): array
     {
-        // Default value is independent of loan product; user can select per row.
         $defaultCycle = 'monthly';
 
         $branchId = auth()->user()->branch_id ?? null;
@@ -61,7 +73,7 @@ class OpeningBalanceTemplateExport implements FromArray, WithHeadings, WithStyle
         $rows = [];
         foreach ($customers as $customer) {
             $group = $customer->groups->first();
-            $rows[] = [
+            $row = [
                 $customer->customerNo,
                 $customer->name,
                 $group ? $group->id : '',
@@ -71,10 +83,17 @@ class OpeningBalanceTemplateExport implements FromArray, WithHeadings, WithStyle
                 '', // period
                 date('Y-m-d'), // date_applied
                 '', // first_repayment_date
-                $defaultCycle, // interest_cycle (dropdown)
-                'Business', // sector (dropdown)
+                $defaultCycle, // interest_cycle
+                'Business', // sector
                 '', // amount_paid
             ];
+
+            foreach ($this->releaseFees as $fee) {
+                // Default 0: fixed/% use fee settings; custom must be filled when deducting fees.
+                $row[] = 0;
+            }
+
+            $rows[] = $row;
         }
 
         return $rows;
@@ -82,7 +101,7 @@ class OpeningBalanceTemplateExport implements FromArray, WithHeadings, WithStyle
 
     public function headings(): array
     {
-        return [
+        $headings = [
             'customer_no',
             'customer_name',
             'group_id',
@@ -96,6 +115,12 @@ class OpeningBalanceTemplateExport implements FromArray, WithHeadings, WithStyle
             'sector',
             'amount_paid',
         ];
+
+        foreach ($this->releaseFees as $fee) {
+            $headings[] = OpeningBalanceReleaseFeeResolver::feeColumnKey((int) $fee->id);
+        }
+
+        return $headings;
     }
 
     public function styles(Worksheet $sheet): array
@@ -114,7 +139,7 @@ class OpeningBalanceTemplateExport implements FromArray, WithHeadings, WithStyle
 
     public function columnWidths(): array
     {
-        return [
+        $widths = [
             'A' => 14,
             'B' => 28,
             'C' => 10,
@@ -128,6 +153,15 @@ class OpeningBalanceTemplateExport implements FromArray, WithHeadings, WithStyle
             'K' => 14,
             'L' => 14,
         ];
+
+        $colIndex = 13; // column M
+        foreach ($this->releaseFees as $fee) {
+            $letter = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($colIndex);
+            $widths[$letter] = 16;
+            $colIndex++;
+        }
+
+        return $widths;
     }
 
     public function title(): string
@@ -154,6 +188,38 @@ class OpeningBalanceTemplateExport implements FromArray, WithHeadings, WithStyle
                 $helperSheet->setCellValue('B1', 'Sectors');
                 foreach (self::SECTORS as $index => $sector) {
                     $helperSheet->setCellValue('B'.($index + 2), $sector);
+                }
+
+                $feeGuide = $spreadsheet->createSheet();
+                $feeGuide->setTitle('Release Fees Guide');
+                $feeGuide->setCellValue('A1', 'Column');
+                $feeGuide->setCellValue('B1', 'Fee Name');
+                $feeGuide->setCellValue('C1', 'Fee Type');
+                $feeGuide->setCellValue('D1', 'Settings Amount');
+                $feeGuide->setCellValue('E1', 'How Excel Value Is Used');
+                $feeGuide->getStyle('A1:E1')->getFont()->setBold(true);
+
+                $guideRow = 2;
+                foreach ($this->releaseFees as $fee) {
+                    $feeGuide->setCellValue('A'.$guideRow, OpeningBalanceReleaseFeeResolver::feeColumnKey((int) $fee->id));
+                    $feeGuide->setCellValue('B'.$guideRow, $fee->name);
+                    $feeGuide->setCellValue('C'.$guideRow, $fee->fee_type);
+                    $feeGuide->setCellValue('D'.$guideRow, $fee->amount);
+                    $feeGuide->setCellValue(
+                        'E'.$guideRow,
+                        $fee->isCustom()
+                            ? 'Fill amount in Excel (required when deducting fees). 0 = no fee.'
+                            : 'Leave 0 to use fee settings (fixed amount or % of loan). Enter amount > 0 to override.'
+                    );
+                    $guideRow++;
+                }
+
+                if ($this->releaseFees->isEmpty()) {
+                    $feeGuide->setCellValue('A2', 'No release-date fees on this product.');
+                }
+
+                foreach (range('A', 'E') as $col) {
+                    $feeGuide->getColumnDimension($col)->setAutoSize(true);
                 }
 
                 $highestRow = max(2, (int) $sheet->getHighestRow());
@@ -184,7 +250,16 @@ class OpeningBalanceTemplateExport implements FromArray, WithHeadings, WithStyle
                     $sheet->getCell('K'.$row)->setDataValidation(clone $sectorValidation);
                 }
 
-                $sheet->getStyle('A1:L1')->getBorders()->getAllBorders()->setBorderStyle(Border::BORDER_THIN);
+                $lastColIndex = 12 + $this->releaseFees->count();
+                $lastCol = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($lastColIndex);
+                $sheet->getStyle('A1:'.$lastCol.'1')->getBorders()->getAllBorders()->setBorderStyle(Border::BORDER_THIN);
+
+                // Highlight fee columns
+                if ($this->releaseFees->isNotEmpty()) {
+                    $feeStart = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex(13);
+                    $sheet->getStyle($feeStart.'1:'.$lastCol.'1')->getFill()->setFillType(Fill::FILL_SOLID)
+                        ->getStartColor()->setARGB('FF70AD47');
+                }
             },
         ];
     }
