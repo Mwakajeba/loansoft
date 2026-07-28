@@ -16,6 +16,7 @@ use Illuminate\Support\Facades\DB;
 use App\Exports\DisbursementsExport;
 use App\Exports\RepaymentExport;
 use App\Models\Repayment;
+use App\Support\Loans\GroupRepaymentScheduleCardBuilder;
 use App\Support\Loans\LoanReportMetrics;
 use App\Support\Loans\LoanReportRowBuilder;
 use App\Support\Loans\RepaymentReportBuilder;
