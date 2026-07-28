@@ -242,9 +242,14 @@
                             <h5 class="card-title mb-0">
                                 <i class="bx bx-credit-card me-2"></i>Group Loans
                             </h5>
-                            <a href="{{ route('groups.payment', Hashids::encode($group->id)) }}" class="btn btn-light btn-sm">
-                                <i class="bx bx-money me-1"></i> Group Repayment
-                            </a>
+                            <div class="d-flex gap-2">
+                                <a href="{{ route('groups.loans.export', Hashids::encode($group->id)) }}" class="btn btn-light btn-sm">
+                                    <i class="bx bx-download me-1"></i> Export Excel
+                                </a>
+                                <a href="{{ route('groups.payment', Hashids::encode($group->id)) }}" class="btn btn-light btn-sm">
+                                    <i class="bx bx-money me-1"></i> Group Repayment
+                                </a>
+                            </div>
                         </div>
                         <div class="card-body">
                             <div class="table-responsive">
