@@ -1008,6 +1008,7 @@ Route::middleware(['auth'])->group(function () {
     Route::get('groups/{encodedId}/edit', [GroupController::class, 'edit'])->name('groups.edit');
     Route::put('groups/{encodedId}', [GroupController::class, 'update'])->name('groups.update'); // Badilisha 'GroupController' na jina la controller yako halisi.
     Route::delete('groups/{encodedId}', [GroupController::class, 'destroy'])->name('groups.destroy');
+    Route::get('groups/{encodedId}/loans/export', [\App\Http\Controllers\GroupLoanAjaxController::class, 'export'])->name('groups.loans.export');
     Route::get('groups/{encodedId}/payment', [GroupController::class, 'payment'])->name('groups.payment');
     Route::get('groups/{encodedId}/payment/export', [GroupController::class, 'exportGroupRepaymentTemplate'])->name('groups.payment.export');
     Route::post('groups/{encodedId}/payment/import', [GroupController::class, 'importGroupRepayment'])->name('groups.payment.import');
