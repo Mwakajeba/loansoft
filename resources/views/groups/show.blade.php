@@ -238,10 +238,13 @@
             <div class="row mb-4">
                 <div class="col-12">
                     <div class="card border-0 shadow-sm">
-                        <div class="card-header bg-info text-white">
+                        <div class="card-header bg-info text-white d-flex justify-content-between align-items-center">
                             <h5 class="card-title mb-0">
                                 <i class="bx bx-credit-card me-2"></i>Group Loans
                             </h5>
+                            <a href="{{ route('groups.payment', Hashids::encode($group->id)) }}" class="btn btn-light btn-sm">
+                                <i class="bx bx-money me-1"></i> Group Repayment
+                            </a>
                         </div>
                         <div class="card-body">
                             <div class="table-responsive">
