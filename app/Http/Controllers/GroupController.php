@@ -379,12 +379,12 @@ class GroupController extends Controller
         // Pata wateja wote walio kwenye kundi kupitia uhusiano wa `GroupMember`.
         // Kisha pakia (eager load) uhusiano wa customer, mikopo, schedules, na repayments.
         $customers = $group->members()->with([
-            'customer.loans' => function ($query) use ($group) {
+            'loans' => function ($query) use ($group) {
                 $query->where('group_id', $group->id)
                     ->whereIn('status', [Loan::STATUS_ACTIVE, Loan::STATUS_DEFAULTED])
                     ->with(['schedule.repayments']);
-            }
-        ])->get()->pluck('customer');
+            },
+        ])->get();
 
         $repaymentData = [];
         $totalAmountToPay = 0;
