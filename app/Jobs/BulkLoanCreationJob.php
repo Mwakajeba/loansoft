@@ -5,12 +5,14 @@ namespace App\Jobs;
 use App\Models\BankAccount;
 use App\Models\CashCollateral;
 use App\Models\Customer;
+use App\Models\Fee;
 use App\Models\GlTransaction;
 use App\Services\LoanDisbursementGlService;
 use App\Models\Journal;
 use App\Models\JournalItem;
 use App\Models\Loan;
 use App\Models\LoanProduct;
+use App\Support\Loans\OpeningBalanceReleaseFeeResolver;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -341,12 +343,57 @@ class BulkLoanCreationJob implements ShouldQueue
             }
         }
 
+        $feeResolution = $this->resolveRowReleaseFees($row, $product, (float) $data['amount']);
+
         return array_merge($data, [
             'customer_id' => $customer->id,
             'product_id' => $product->id,
             'branch_id' => $this->validated['branch_id'],
             'chart_account_id' => $chartAccountId,
+            'deduct_fees_on_release' => $feeResolution['deduct'],
+            'release_fee_total' => $feeResolution['total'],
+            'custom_fee_amounts' => $feeResolution['custom_fee_amounts'],
+            'release_fee_breakdown' => $feeResolution['breakdown'],
         ]);
+    }
+
+    /**
+     * @param  array<int, mixed>  $row
+     * @return array{
+     *     deduct: bool,
+     *     total: float,
+     *     custom_fee_amounts: array<int, float>,
+     *     breakdown: array<int, array{fee_id: int, name: string, fee_type: string, amount: float, source: string}>
+     * }
+     */
+    private function resolveRowReleaseFees(array $row, LoanProduct $product, float $loanAmount): array
+    {
+        $deduct = (bool) ($this->validated['deduct_fees_on_release'] ?? false);
+        $releaseFees = OpeningBalanceReleaseFeeResolver::releaseFeesForProduct($product);
+
+        if (! $deduct || $releaseFees->isEmpty()) {
+            return [
+                'deduct' => false,
+                'total' => 0.0,
+                'custom_fee_amounts' => [],
+                'breakdown' => [],
+            ];
+        }
+
+        $excelAmounts = [];
+        foreach ($releaseFees as $fee) {
+            $col = OpeningBalanceReleaseFeeResolver::feeColumnKey((int) $fee->id);
+            $excelAmounts[(int) $fee->id] = floatval($this->cell($row, $col, 0));
+        }
+
+        $resolved = OpeningBalanceReleaseFeeResolver::resolve($releaseFees, $loanAmount, $excelAmounts);
+
+        return [
+            'deduct' => true,
+            'total' => $resolved['total'],
+            'custom_fee_amounts' => $resolved['custom_fee_amounts'],
+            'breakdown' => $resolved['breakdown'],
+        ];
     }
 
     /**
@@ -355,6 +402,11 @@ class BulkLoanCreationJob implements ShouldQueue
     private function createLoan(array $loanData, LoanProduct $product, int $chartAccountId): ?Loan
     {
         return DB::transaction(function () use ($loanData, $product, $chartAccountId) {
+            $deductFees = (bool) ($loanData['deduct_fees_on_release'] ?? false);
+            $customFeeAmounts = ! empty($loanData['custom_fee_amounts'])
+                ? $loanData['custom_fee_amounts']
+                : null;
+
             $loan = Loan::create([
                 'product_id' => $loanData['product_id'],
                 'period' => $loanData['period'],
@@ -370,6 +422,7 @@ class BulkLoanCreationJob implements ShouldQueue
                 'status' => 'active',
                 'interest_cycle' => $loanData['interest_cycle'],
                 'loan_officer_id' => $this->userId,
+                'custom_fee_amounts' => $customFeeAmounts,
             ]);
 
             $interestAmount = $loan->calculateInterestAmount($loanData['interest']);
@@ -396,8 +449,17 @@ class BulkLoanCreationJob implements ShouldQueue
             }
 
             $principalAmount = round((float) $loan->amount, 2);
-            $releaseFeeTotal = $disbursementGlService->calculateReleaseFeeTotal($loan);
+            $releaseFeeTotal = $deductFees
+                ? round((float) ($loanData['release_fee_total'] ?? 0), 2)
+                : 0.0;
             $disbursementAmount = round($principalAmount - $releaseFeeTotal, 2);
+
+            if ($disbursementAmount < 0) {
+                throw new \Exception(
+                    'Release-date fees ('.number_format($releaseFeeTotal, 2)
+                    .') exceed loan principal ('.number_format($principalAmount, 2).').'
+                );
+            }
 
             $journal = Journal::create([
                 'date' => $loanData['date_applied'],
@@ -424,6 +486,16 @@ class BulkLoanCreationJob implements ShouldQueue
                 'description' => $notes,
             ]);
 
+            if ($deductFees && $releaseFeeTotal > 0) {
+                $this->postReleaseFeeJournalAndGl(
+                    $loan,
+                    $journal->id,
+                    $loanData['date_applied'],
+                    $loanData['branch_id'],
+                    $loanData['release_fee_breakdown'] ?? []
+                );
+            }
+
             $bankAccount = BankAccount::where('chart_account_id', $chartAccountId)->first();
             if ($bankAccount) {
                 $loan->update(['bank_account_id' => $bankAccount->id]);
@@ -431,44 +503,89 @@ class BulkLoanCreationJob implements ShouldQueue
             }
 
             if (! $disbursementGlService->hasDisbursementGl($loan->id)) {
-                if ($loan->bank_account_id) {
-                    $disbursementGlService->postDisbursement(
-                        $loan,
-                        $loanData['date_applied'],
-                        $this->userId,
-                        $loanData['branch_id']
-                    );
-                } else {
-                    GlTransaction::insert([
-                        [
-                            'chart_account_id' => $chartAccountId,
-                            'customer_id' => $loan->customer_id,
-                            'amount' => $disbursementAmount,
-                            'nature' => 'credit',
-                            'transaction_id' => $loan->id,
-                            'transaction_type' => LoanDisbursementGlService::TRANSACTION_TYPE,
-                            'date' => $loanData['date_applied'],
-                            'description' => $notes,
-                            'branch_id' => $loanData['branch_id'],
-                            'user_id' => $this->userId,
-                        ],
-                        [
-                            'chart_account_id' => $principalReceivable,
-                            'customer_id' => $loan->customer_id,
-                            'amount' => $principalAmount,
-                            'nature' => 'debit',
-                            'transaction_id' => $loan->id,
-                            'transaction_type' => LoanDisbursementGlService::TRANSACTION_TYPE,
-                            'date' => $loanData['date_applied'],
-                            'description' => $notes,
-                            'branch_id' => $loanData['branch_id'],
-                            'user_id' => $this->userId,
-                        ],
-                    ]);
-                }
+                // Always post net cash + principal here so fee overrides/settings match Excel resolution.
+                // (postDisbursement would recalculate fees from product settings only.)
+                $glRows = [
+                    [
+                        'chart_account_id' => $chartAccountId,
+                        'customer_id' => $loan->customer_id,
+                        'amount' => $disbursementAmount,
+                        'nature' => 'credit',
+                        'transaction_id' => $loan->id,
+                        'transaction_type' => LoanDisbursementGlService::TRANSACTION_TYPE,
+                        'date' => $loanData['date_applied'],
+                        'description' => $notes,
+                        'branch_id' => $loanData['branch_id'],
+                        'user_id' => $this->userId,
+                    ],
+                    [
+                        'chart_account_id' => $principalReceivable,
+                        'customer_id' => $loan->customer_id,
+                        'amount' => $principalAmount,
+                        'nature' => 'debit',
+                        'transaction_id' => $loan->id,
+                        'transaction_type' => LoanDisbursementGlService::TRANSACTION_TYPE,
+                        'date' => $loanData['date_applied'],
+                        'description' => $notes,
+                        'branch_id' => $loanData['branch_id'],
+                        'user_id' => $this->userId,
+                    ],
+                ];
+
+                GlTransaction::insert($glRows);
             }
 
             return $loan;
         });
+    }
+
+    /**
+     * Credit fee income so net disbursement journals stay balanced
+     * (Dr principal P / Cr cash P−F / Cr fee income F).
+     *
+     * @param  array<int, array{fee_id: int, name: string, fee_type: string, amount: float, source: string}>  $breakdown
+     */
+    private function postReleaseFeeJournalAndGl(
+        Loan $loan,
+        int $journalId,
+        $date,
+        int $branchId,
+        array $breakdown
+    ): void {
+        foreach ($breakdown as $item) {
+            $amount = round((float) ($item['amount'] ?? 0), 2);
+            if ($amount <= 0) {
+                continue;
+            }
+
+            $fee = Fee::find($item['fee_id'] ?? 0);
+            if (! $fee || ! $fee->chart_account_id) {
+                continue;
+            }
+
+            $feeName = $fee->name ?: ('Fee #'.$fee->id);
+            $desc = "{$feeName} Fee for opening balance loan #{$loan->id}";
+
+            JournalItem::create([
+                'journal_id' => $journalId,
+                'chart_account_id' => $fee->chart_account_id,
+                'amount' => $amount,
+                'nature' => 'credit',
+                'description' => $desc,
+            ]);
+
+            GlTransaction::create([
+                'chart_account_id' => $fee->chart_account_id,
+                'customer_id' => $loan->customer_id,
+                'amount' => $amount,
+                'nature' => 'credit',
+                'transaction_id' => $loan->id,
+                'transaction_type' => LoanDisbursementGlService::TRANSACTION_TYPE,
+                'date' => $date,
+                'description' => $desc,
+                'branch_id' => $branchId,
+                'user_id' => $this->userId,
+            ]);
+        }
     }
 }

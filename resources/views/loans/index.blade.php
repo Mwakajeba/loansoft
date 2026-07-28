@@ -321,6 +321,24 @@
                                 @error('csv_file') <div class="invalid-feedback">{{ $message }}</div> @enderror
                                 <small class="text-muted">Upload the filled template (.xlsx recommended for dropdowns)</small>
                             </div>
+
+                            <!-- Deduct release fees -->
+                            <div class="col-12 mb-3">
+                                <div class="form-check">
+                                    <input type="hidden" name="deduct_fees_on_release" value="0">
+                                    <input class="form-check-input" type="checkbox" value="1"
+                                        id="deductFeesOnRelease" name="deduct_fees_on_release"
+                                        {{ old('deduct_fees_on_release', '0') == '1' ? 'checked' : '' }}>
+                                    <label class="form-check-label" for="deductFeesOnRelease">
+                                        Deduct all release-date fees from cash on loan release
+                                    </label>
+                                </div>
+                                <small class="text-muted d-block mt-1">
+                                    When checked: fixed/% fees use product fee settings if Excel is <strong>0</strong>;
+                                    <strong>custom</strong> fees must be filled in the Excel <code>fee_*</code> columns.
+                                    See the template sheet <em>Release Fees Guide</em>.
+                                </small>
+                            </div>
                         </div>
 
                         <!-- Instructions -->
@@ -330,6 +348,8 @@
                                 <li>Select a loan product first, then download the Excel template</li>
                                 <li>Use the <strong>interest_cycle</strong> dropdown (column J) — same options as Create Loan (daily, weekly, monthly, etc.)</li>
                                 <li>Optional <strong>first_repayment_date</strong>: leave blank to use the default schedule from the interest cycle</li>
+                                <li>Fee columns (<code>fee_&lt;id&gt;</code>): for <strong>custom</strong> fees enter the amount; for <strong>fixed</strong> or <strong>percentage</strong> leave 0 to calculate from fee settings (or enter an override amount)</li>
+                                <li>Tick <strong>Deduct all release-date fees</strong> only if cash disbursed should be reduced by those fees</li>
                                 <li>Delete template rows you do not need; only rows with amount, interest, and period are imported</li>
                                 <li>Ensure customer numbers exist in the system</li>
                                 <li>Loans will be created with 'active' status</li>

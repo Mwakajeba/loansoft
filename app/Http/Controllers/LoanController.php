@@ -81,6 +81,8 @@ class LoanController extends Controller
     {
         $loanFees = collect();
         $totalConfiguredFees = 0;
+        $deductedReleaseFees = collect();
+        $totalDeductedReleaseFees = 0.0;
 
         if ($loan->product && $loan->product->fees_ids) {
             $feeIds = is_array($loan->product->fees_ids)
@@ -94,6 +96,75 @@ class LoanController extends Controller
                 });
 
                 $totalConfiguredFees = $loanFees->sum('calculated_amount');
+
+                $releaseFeeModels = $loanFees
+                    ->filter(fn ($fee) => ($fee->deduction_criteria ?? '') === 'charge_fee_on_release_date'
+                        && strtolower((string) ($fee->status ?? 'active')) === 'active')
+                    ->values();
+
+                $releaseFeeChartIds = $releaseFeeModels
+                    ->pluck('chart_account_id')
+                    ->filter()
+                    ->map(fn ($id) => (int) $id)
+                    ->unique()
+                    ->values()
+                    ->all();
+
+                $feeIncomeByChart = [];
+                if (! empty($releaseFeeChartIds)) {
+                    $feeIncomeByChart = GlTransaction::query()
+                        ->where('transaction_id', $loan->id)
+                        ->where('transaction_type', LoanDisbursementGlService::TRANSACTION_TYPE)
+                        ->where('nature', 'credit')
+                        ->whereIn('chart_account_id', $releaseFeeChartIds)
+                        ->selectRaw('chart_account_id, SUM(amount) as total')
+                        ->groupBy('chart_account_id')
+                        ->pluck('total', 'chart_account_id')
+                        ->map(fn ($v) => (float) $v)
+                        ->all();
+                }
+
+                $cashDisbursed = (float) GlTransaction::query()
+                    ->where('transaction_id', $loan->id)
+                    ->where('transaction_type', LoanDisbursementGlService::TRANSACTION_TYPE)
+                    ->where('nature', 'credit')
+                    ->when(! empty($releaseFeeChartIds), function ($q) use ($releaseFeeChartIds) {
+                        $q->whereNotIn('chart_account_id', $releaseFeeChartIds);
+                    })
+                    ->sum('amount');
+
+                $calculatedReleaseTotal = round((float) $releaseFeeModels->sum('calculated_amount'), 2);
+                $feesWereDeducted = ! empty($feeIncomeByChart)
+                    || (
+                        $cashDisbursed > 0
+                        && $calculatedReleaseTotal > 0.009
+                        && $cashDisbursed < ((float) $loan->amount - 0.009)
+                    );
+
+                $deductedReleaseFees = $feesWereDeducted
+                    ? $releaseFeeModels->map(function ($fee) use ($feeIncomeByChart) {
+                        $amount = round((float) ($fee->calculated_amount ?? 0), 2);
+                        $glDeducted = isset($fee->chart_account_id)
+                            ? round((float) ($feeIncomeByChart[(int) $fee->chart_account_id] ?? 0), 2)
+                            : 0.0;
+                        $deductedAmount = $glDeducted > 0.009 ? $glDeducted : $amount;
+
+                        return (object) [
+                            'id' => $fee->id,
+                            'name' => $fee->name,
+                            'fee_type' => $fee->fee_type,
+                            'deduction_criteria' => $fee->deduction_criteria,
+                            'configured_amount' => (float) ($fee->amount ?? 0),
+                            'calculated_amount' => $amount,
+                            'deducted_amount' => $deductedAmount,
+                            'posted_in_gl' => $glDeducted > 0.009,
+                        ];
+                    })
+                        ->filter(fn ($fee) => (float) $fee->deducted_amount > 0.009)
+                        ->values()
+                    : collect();
+
+                $totalDeductedReleaseFees = round((float) $deductedReleaseFees->sum('deducted_amount'), 2);
             }
         }
 
@@ -141,14 +212,28 @@ class LoanController extends Controller
             }
         }
 
-        $totalFeesPaid = $feesPaidFromRepayments + $feesPaidFromReceipts;
+        foreach ($deductedReleaseFees as $deductedFee) {
+            $feePaymentTransactions->push((object) [
+                'payment_date' => $loan->disbursed_on ?? $loan->date_applied ?? $loan->created_at,
+                'source' => 'Release Deduction',
+                'reference' => 'Loan Disbursement #' . $loan->id,
+                'fee_name' => $deductedFee->name,
+                'amount' => (float) $deductedFee->deducted_amount,
+            ]);
+        }
+
+        $totalFeesPaid = $feesPaidFromRepayments + $feesPaidFromReceipts + $totalDeductedReleaseFees;
         $remainingFees = max(0, $totalConfiguredFees - $totalFeesPaid);
+        $netDisbursed = round(max(0, (float) $loan->amount - $totalDeductedReleaseFees), 2);
 
         return [
             'loanFees' => $loanFees,
             'totalConfiguredFees' => round((float) $totalConfiguredFees, 2),
             'feesPaidFromRepayments' => round((float) $feesPaidFromRepayments, 2),
             'feesPaidFromReceipts' => round((float) $feesPaidFromReceipts, 2),
+            'deductedReleaseFees' => $deductedReleaseFees,
+            'totalDeductedReleaseFees' => $totalDeductedReleaseFees,
+            'netDisbursedAmount' => $netDisbursed,
             'totalFeesPaid' => round((float) $totalFeesPaid, 2),
             'remainingFees' => round((float) $remainingFees, 2),
             'feePaymentTransactions' => $feePaymentTransactions->sortByDesc(function ($item) {
@@ -4042,8 +4127,11 @@ class LoanController extends Controller
             'product_id' => 'required|exists:loan_products,id',
             'branch_id' => 'required|exists:branches,id',
             'chart_account_id' => 'required|exists:chart_accounts,id',
+            'deduct_fees_on_release' => 'nullable|boolean',
             'csv_file' => 'required|file|mimes:csv,txt,xlsx,xls|max:20480',
         ]);
+
+        $validated['deduct_fees_on_release'] = $request->boolean('deduct_fees_on_release');
 
         try {
             $file = $request->file('csv_file');
