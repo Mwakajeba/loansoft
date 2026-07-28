@@ -15,6 +15,7 @@ use App\Models\ReceiptItem;
 use App\Models\Repayment;
 use App\Exports\GroupRepaymentTemplateExport;
 use App\Support\Loans\GroupRepaymentDataBuilder;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -408,6 +409,7 @@ class GroupController extends Controller
     {
         $request->validate([
             'import_file' => 'required|file|mimes:xlsx,xls,csv|max:10240',
+            'payment_date' => 'required|date|before_or_equal:today',
         ]);
 
         $ids = Hashids::decode($encodedId)[0] ?? null;
@@ -420,7 +422,10 @@ class GroupController extends Controller
                 return back()->with('error', 'No valid repayment rows found in the uploaded file.');
             }
 
-            $importRequest = new Request(['repayments' => $repayments]);
+            $importRequest = new Request([
+                'repayments' => $repayments,
+                'payment_date' => $request->input('payment_date'),
+            ]);
 
             return $this->groupStore($importRequest, $encodedId);
         } catch (\InvalidArgumentException $e) {
@@ -539,12 +544,15 @@ class GroupController extends Controller
     {
         // Validation logic kwa data ya fomu
         $request->validate([
+            'payment_date' => 'required|date|before_or_equal:today',
             'repayments.*.*.schedule_id' => 'required|exists:loan_schedules,id',
             'repayments.*.*.amount_paid' => 'required|numeric|min:0',
         ]);
 
         try {
             DB::beginTransaction();
+
+            $paymentDate = Carbon::parse($request->input('payment_date'))->startOfDay();
 
             // Initialize arrays for bulk inserts
             $allReceiptItems = [];
@@ -632,7 +640,7 @@ class GroupController extends Controller
                         'fee_amount' => $feePaid,
                         'cash_deposit' => $amountPaid,
                         'due_date' => $schedule->due_date,
-                        'payment_date' => now(),
+                        'payment_date' => $paymentDate,
                     ]);
 
                     // Send SMS notification to customer after repayment is created
@@ -717,7 +725,7 @@ class GroupController extends Controller
                         'reference_type' => 'Repayment',
                         'reference_number' => null,
                         'amount' => $amountPaid,
-                        'date' => now(),
+                        'date' => $paymentDate,
                         'description' => $notes,
                         'user_id' => $user->id,
                         'bank_account_id' => $bankAccountId,
@@ -772,7 +780,7 @@ class GroupController extends Controller
                         'nature' => 'debit',
                         'transaction_id' => $repayment->id,
                         'transaction_type' => 'Repayment',
-                        'date' => now(),
+                        'date' => $paymentDate,
                         'description' => $notes,
                         'branch_id' => $user->branch_id,
                         'user_id' => $user->id,
@@ -787,7 +795,7 @@ class GroupController extends Controller
                             'nature' => 'credit',
                             'transaction_id' => $repayment->id,
                             'transaction_type' => 'Repayment',
-                            'date' => now(),
+                            'date' => $paymentDate,
                             'description' => $notes,
                             'branch_id' => $user->branch_id,
                             'user_id' => $user->id,
@@ -802,7 +810,7 @@ class GroupController extends Controller
                             'nature' => 'credit',
                             'transaction_id' => $repayment->id,
                             'transaction_type' => 'Repayment',
-                            'date' => now(),
+                            'date' => $paymentDate,
                             'description' => $notes,
                             'branch_id' => $user->branch_id,
                             'user_id' => $user->id,
@@ -817,7 +825,7 @@ class GroupController extends Controller
                             'nature' => 'credit',
                             'transaction_id' => $repayment->id,
                             'transaction_type' => 'Repayment',
-                            'date' => now(),
+                            'date' => $paymentDate,
                             'description' => $notes,
                             'branch_id' => $user->branch_id,
                             'user_id' => $user->id,
@@ -832,7 +840,7 @@ class GroupController extends Controller
                             'nature' => 'credit',
                             'transaction_id' => $repayment->id,
                             'transaction_type' => 'Repayment',
-                            'date' => now(),
+                            'date' => $paymentDate,
                             'description' => $notes,
                             'branch_id' => $user->branch_id,
                             'user_id' => $user->id,

@@ -23,6 +23,23 @@
         <div class="card radius-10 mb-4">
             <div class="card-body">
                 <div class="row g-3 align-items-end">
+                    <div class="col-md-4">
+                        <label for="shared_payment_date" class="form-label">Payment Date <span class="text-danger">*</span></label>
+                        <input type="date"
+                               id="shared_payment_date"
+                               class="form-control @error('payment_date') is-invalid @enderror"
+                               value="{{ old('payment_date', date('Y-m-d')) }}"
+                               max="{{ date('Y-m-d') }}"
+                               required>
+                        @error('payment_date') <div class="invalid-feedback">{{ $message }}</div> @enderror
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card radius-10 mb-4">
+            <div class="card-body">
+                <div class="row g-3 align-items-end">
                     <div class="col-md-8">
                         <h6 class="mb-2"><i class="bx bx-spreadsheet me-1"></i> Excel Import / Export</h6>
                         <p class="text-muted small mb-0">
@@ -43,8 +60,9 @@
                     </div>
                 </div>
 
-                <form action="{{ route('groups.payment.import', Hashids::encode($group->id)) }}" method="POST" enctype="multipart/form-data" class="row g-3 align-items-end mt-2">
+                <form action="{{ route('groups.payment.import', Hashids::encode($group->id)) }}" method="POST" enctype="multipart/form-data" class="row g-3 align-items-end mt-2" id="groupRepaymentImportForm">
                     @csrf
+                    <input type="hidden" name="payment_date" id="import_payment_date" value="{{ old('payment_date', date('Y-m-d')) }}">
                     <div class="col-md-8">
                         <label for="import_file" class="form-label">Import Excel</label>
                         <input type="file" name="import_file" id="import_file" class="form-control @error('import_file') is-invalid @enderror" accept=".xlsx,.xls,.csv" required>
@@ -61,12 +79,13 @@
 
         <div class="card radius-10">
             <div class="card-body">
-                <form action="{{ route('groups.groupStore', Hashids::encode($group->id)) }}" method="POST">
+                <form action="{{ route('groups.groupStore', Hashids::encode($group->id)) }}" method="POST" id="groupRepaymentForm">
                     @csrf
+                    <input type="hidden" name="payment_date" id="form_payment_date" value="{{ old('payment_date', date('Y-m-d')) }}">
 
-                    <div class="d-flex justify-content-between align-items-center mb-4">
+                    <div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-3">
                         <h4 class="card-title mb-0">Repayment Schedule Details</h4>
-                        <div class="d-flex gap-2 align-items-center">
+                        <div class="d-flex gap-3 align-items-center flex-wrap">
                             <h5 class="mb-0">Total Amount to Pay: <strong id="total-amount-display">{{ number_format($totalAmountToPay, 2) }}</strong></h5>
                             <button
                                 type="submit"
@@ -197,6 +216,24 @@
     document.addEventListener('DOMContentLoaded', function() {
         const repaymentTable = document.querySelector('#repayment-table');
         const totalAmountDisplay = document.querySelector('#total-amount-display');
+        const sharedPaymentDate = document.getElementById('shared_payment_date');
+        const formPaymentDate = document.getElementById('form_payment_date');
+        const importPaymentDate = document.getElementById('import_payment_date');
+
+        function syncPaymentDate() {
+            if (!sharedPaymentDate) {
+                return;
+            }
+            if (formPaymentDate) {
+                formPaymentDate.value = sharedPaymentDate.value;
+            }
+            if (importPaymentDate) {
+                importPaymentDate.value = sharedPaymentDate.value;
+            }
+        }
+
+        sharedPaymentDate?.addEventListener('change', syncPaymentDate);
+        syncPaymentDate();
 
         function updateTotalAmount() {
             let total = 0;
