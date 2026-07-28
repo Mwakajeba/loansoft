@@ -265,7 +265,7 @@
                                         <i class="bx bx-download me-1"></i> Download Template
                                     </button>
                                 </div>
-                                <small class="text-muted">Download the Excel template (dropdowns for interest cycle &amp; sector) and fill in your loan data</small>
+                                <small class="text-muted">Select product first, then download. Fee columns (`fee_*`) are added from that product’s active fees. See sheet <em>Fees Guide</em>.</small>
                             </div>
 
                             <!-- Product Selection -->
@@ -336,7 +336,7 @@
                                 <small class="text-muted d-block mt-1">
                                     When checked: fixed/% fees use product fee settings if Excel is <strong>0</strong>;
                                     <strong>custom</strong> fees must be filled in the Excel <code>fee_*</code> columns.
-                                    See the template sheet <em>Release Fees Guide</em>.
+                                    See the template sheet <em>Fees Guide</em>.
                                 </small>
                             </div>
                         </div>

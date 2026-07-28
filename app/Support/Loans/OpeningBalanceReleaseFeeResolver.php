@@ -5,7 +5,6 @@ namespace App\Support\Loans;
 use App\Models\Fee;
 use App\Models\LoanProduct;
 use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\DB;
 
 class OpeningBalanceReleaseFeeResolver
 {
@@ -15,35 +14,88 @@ class OpeningBalanceReleaseFeeResolver
     }
 
     /**
-     * Active product fees charged on release date.
+     * Parse fee id from an Excel header like fee_12 or fee_12_processing.
+     */
+    public static function feeIdFromColumnKey(string $header): ?int
+    {
+        if (preg_match('/^fee_(\d+)/i', trim($header), $m)) {
+            return (int) $m[1];
+        }
+
+        return null;
+    }
+
+    /**
+     * All active fees attached to the loan product (shown as Excel columns).
+     *
+     * @return Collection<int, Fee>
+     */
+    public static function productFeesForTemplate(LoanProduct $product): Collection
+    {
+        $feeIds = self::normalizeFeeIds($product->fees_ids);
+        if (empty($feeIds)) {
+            return collect();
+        }
+
+        $fees = Fee::query()
+            ->whereIn('id', $feeIds)
+            ->where(function ($q) {
+                $q->whereRaw('LOWER(status) = ?', ['active']);
+            })
+            ->orderBy('id')
+            ->get();
+
+        // Fallback: if status filter yields nothing, still return attached fees.
+        if ($fees->isEmpty()) {
+            $fees = Fee::query()
+                ->whereIn('id', $feeIds)
+                ->orderBy('id')
+                ->get();
+        }
+
+        return $fees;
+    }
+
+    /**
+     * Fees deducted from cash when "deduct fees on release" is enabled.
+     * Prefer charge_fee_on_release_date; if none, use all active product fees.
      *
      * @return Collection<int, Fee>
      */
     public static function releaseFeesForProduct(LoanProduct $product): Collection
     {
-        $feeIds = is_array($product->fees_ids)
-            ? $product->fees_ids
-            : (json_decode($product->fees_ids ?? '[]', true) ?: []);
-
-        if (! is_array($feeIds) || empty($feeIds)) {
+        $fees = self::productFeesForTemplate($product);
+        if ($fees->isEmpty()) {
             return collect();
         }
 
-        $releaseIds = DB::table('fees')
-            ->whereIn('id', $feeIds)
-            ->where('deduction_criteria', 'charge_fee_on_release_date')
-            ->where('status', 'active')
-            ->pluck('id')
-            ->all();
+        $onRelease = $fees->filter(
+            fn (Fee $fee) => ($fee->deduction_criteria ?? '') === 'charge_fee_on_release_date'
+        )->values();
 
-        if (empty($releaseIds)) {
-            return collect();
+        return $onRelease->isNotEmpty() ? $onRelease : $fees->values();
+    }
+
+    /**
+     * @param  mixed  $feesIds
+     * @return array<int, int>
+     */
+    public static function normalizeFeeIds($feesIds): array
+    {
+        if (is_string($feesIds)) {
+            $decoded = json_decode($feesIds, true);
+            if (json_last_error() === JSON_ERROR_NONE) {
+                $feesIds = $decoded;
+            } else {
+                $feesIds = array_filter(array_map('trim', explode(',', $feesIds)));
+            }
         }
 
-        return Fee::query()
-            ->whereIn('id', $releaseIds)
-            ->orderBy('id')
-            ->get();
+        if (! is_array($feesIds) || empty($feesIds)) {
+            return [];
+        }
+
+        return array_values(array_unique(array_filter(array_map('intval', $feesIds))));
     }
 
     /**

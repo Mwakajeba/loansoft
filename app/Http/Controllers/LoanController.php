@@ -4044,7 +4044,11 @@ class LoanController extends Controller
      */
     public function downloadOpeningBalanceTemplate(Request $request)
     {
-        $productId = $request->filled('product_id') ? (int) $request->get('product_id') : null;
+        $request->validate([
+            'product_id' => 'required|exists:loan_products,id',
+        ]);
+
+        $productId = (int) $request->get('product_id');
         $filename = 'opening_balance_template_'.date('Y-m-d').'.xlsx';
 
         return Excel::download(new OpeningBalanceTemplateExport($productId), $filename);
@@ -4198,12 +4202,16 @@ class LoanController extends Controller
             $totalChunks = count($chunks);
             $useSyncQueue = config('queue.default') === 'sync';
 
+            // Start worker before dispatching (same pattern as customer bulk upload).
+            $this->ensureQueueWorkerRunning();
+
             Log::info('Opening balance upload queued', [
                 'import_id' => $importId,
                 'total_rows' => $totalRows,
                 'total_chunks' => $totalChunks,
                 'chunk_size' => $chunkSize,
                 'queue' => config('queue.default'),
+                'deduct_fees_on_release' => (bool) ($validated['deduct_fees_on_release'] ?? false),
             ]);
 
             foreach ($chunks as $chunkIndex => $chunk) {
@@ -4230,10 +4238,6 @@ class LoanController extends Controller
                         $importId
                     );
                 }
-            }
-
-            if (! $useSyncQueue) {
-                $this->ensureQueueWorkerRunning();
             }
 
             $progress = Cache::get($importId, []);
@@ -4276,54 +4280,26 @@ class LoanController extends Controller
             return;
         }
 
-        if (! $this->isQueueWorkerRunning()) {
-            $this->startQueueWorker();
-        }
-    }
-
-    private function isQueueWorkerRunning(): bool
-    {
         $command = "ps aux | grep '[a]rtisan queue:work' | grep -v grep";
         exec($command, $output, $returnCode);
+        if (! empty($output) && $returnCode === 0) {
+            Log::info('Queue worker already running for opening balance');
 
-        if (config('queue.default') === 'database') {
-            $pendingJobs = DB::table('jobs')->count();
-            if ($pendingJobs > 0 && empty($output)) {
-                return false;
-            }
+            return;
         }
 
-        return ! empty($output) && $returnCode === 0;
-    }
-
-    private function startQueueWorker(): void
-    {
         $artisanPath = base_path('artisan');
         $logPath = storage_path('logs/queue-worker.log');
         $pidFile = storage_path('logs/queue-worker.pid');
-
-        if (file_exists($pidFile)) {
-            $pid = trim((string) file_get_contents($pidFile));
-            if ($pid !== '') {
-                exec('ps -p '.escapeshellarg($pid).' > /dev/null 2>&1', $output, $returnCode);
-                if ($returnCode === 0) {
-                    Log::info('Queue worker already running', ['pid' => $pid]);
-
-                    return;
-                }
-            }
-        }
-
-        $command = sprintf(
-            'cd %s && nohup php %s queue:work --tries=3 --timeout=3600 --max-time=3600 >> %s 2>&1 & echo $! > %s',
-            escapeshellarg(base_path()),
+        $cmd = sprintf(
+            'nohup php %s queue:work --sleep=1 --tries=3 --timeout=3600 >> %s 2>&1 & echo $! > %s',
             escapeshellarg($artisanPath),
             escapeshellarg($logPath),
             escapeshellarg($pidFile)
         );
-        exec($command);
+        exec($cmd);
         usleep(500000);
-        Log::info('Queue worker started for opening balance', ['user_id' => auth()->id()]);
+        Log::info('Started queue worker for opening balance upload', ['user_id' => auth()->id()]);
     }
 
     /**

@@ -381,9 +381,19 @@ class BulkLoanCreationJob implements ShouldQueue
         }
 
         $excelAmounts = [];
+        foreach ($this->getColumnMap() as $header => $index) {
+            $feeId = OpeningBalanceReleaseFeeResolver::feeIdFromColumnKey((string) $header);
+            if ($feeId === null) {
+                continue;
+            }
+            $excelAmounts[$feeId] = floatval($row[$index] ?? 0);
+        }
+
         foreach ($releaseFees as $fee) {
-            $col = OpeningBalanceReleaseFeeResolver::feeColumnKey((int) $fee->id);
-            $excelAmounts[(int) $fee->id] = floatval($this->cell($row, $col, 0));
+            $feeId = (int) $fee->id;
+            if (! array_key_exists($feeId, $excelAmounts)) {
+                $excelAmounts[$feeId] = 0.0;
+            }
         }
 
         $resolved = OpeningBalanceReleaseFeeResolver::resolve($releaseFees, $loanAmount, $excelAmounts);
