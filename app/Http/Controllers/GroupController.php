@@ -592,7 +592,8 @@ class GroupController extends Controller
                     }
 
                     $customer = Customer::findOrFail($customerId);
-                    $paymentOrder = explode(',', (string) $loanProduct->repayment_order);
+                    $paymentOrder = $this->normalizeRepaymentOrder($loanProduct);
+                    $paymentDateValue = $paymentDate->toDateTimeString();
 
                     // Anzisha kiasi kitakacholipwa kwa kila sehemu
                     $principalPaid = 0;
@@ -773,7 +774,7 @@ class GroupController extends Controller
                         'nature' => 'debit',
                         'transaction_id' => $repayment->id,
                         'transaction_type' => 'Repayment',
-                        'date' => $paymentDate,
+                        'date' => $paymentDateValue,
                         'description' => $notes,
                         'branch_id' => $user->branch_id,
                         'user_id' => $user->id,
@@ -787,7 +788,7 @@ class GroupController extends Controller
                             'nature' => 'credit',
                             'transaction_id' => $repayment->id,
                             'transaction_type' => 'Repayment',
-                            'date' => $paymentDate,
+                            'date' => $paymentDateValue,
                             'description' => $notes,
                             'branch_id' => $user->branch_id,
                             'user_id' => $user->id,
@@ -802,7 +803,7 @@ class GroupController extends Controller
                             'nature' => 'credit',
                             'transaction_id' => $repayment->id,
                             'transaction_type' => 'Repayment',
-                            'date' => $paymentDate,
+                            'date' => $paymentDateValue,
                             'description' => $notes,
                             'branch_id' => $user->branch_id,
                             'user_id' => $user->id,
@@ -827,7 +828,7 @@ class GroupController extends Controller
                             'nature' => 'credit',
                             'transaction_id' => $repayment->id,
                             'transaction_type' => 'Repayment',
-                            'date' => $paymentDate,
+                            'date' => $paymentDateValue,
                             'description' => $notes,
                             'branch_id' => $user->branch_id,
                             'user_id' => $user->id,
@@ -852,7 +853,7 @@ class GroupController extends Controller
                             'nature' => 'credit',
                             'transaction_id' => $repayment->id,
                             'transaction_type' => 'Repayment',
-                            'date' => $paymentDate,
+                            'date' => $paymentDateValue,
                             'description' => $notes,
                             'branch_id' => $user->branch_id,
                             'user_id' => $user->id,
@@ -931,6 +932,25 @@ class GroupController extends Controller
         return $penalty && $penalty->penalty_receivables_account_id
             ? (int) $penalty->penalty_receivables_account_id
             : null;
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function normalizeRepaymentOrder(\App\Models\LoanProduct $loanProduct): array
+    {
+        $order = $loanProduct->repayment_order;
+
+        if (! is_array($order)) {
+            $order = array_values(array_filter(array_map(
+                static fn ($item) => trim((string) $item),
+                explode(',', (string) $order)
+            )));
+        }
+
+        return ! empty($order)
+            ? array_map(static fn ($item) => trim((string) $item), $order)
+            : ['penalties', 'fees', 'interest', 'principal'];
     }
 
     /**
