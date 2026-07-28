@@ -1,3 +1,7 @@
+@php
+    use Vinkla\Hashids\Facades\Hashids;
+@endphp
+
 @extends('layouts.main')
 
 @section('title', 'Group Repayment')
@@ -15,6 +19,45 @@
         </div>
         <h6 class="mb-0 text-uppercase">GROUP REPAYMENT FOR {{ $group->name }}</h6>
         <hr />
+
+        <div class="card radius-10 mb-4">
+            <div class="card-body">
+                <div class="row g-3 align-items-end">
+                    <div class="col-md-8">
+                        <h6 class="mb-2"><i class="bx bx-spreadsheet me-1"></i> Excel Import / Export</h6>
+                        <p class="text-muted small mb-0">
+                            Download the template with members, due dates, and instalment amounts. Edit <strong>amount_to_pay</strong> in Excel, then import to process repayments.
+                            Do not change <strong>customer_id</strong>, <strong>loan_id</strong>, or <strong>schedule_id</strong>.
+                        </p>
+                    </div>
+                    <div class="col-md-4 text-md-end">
+                        @if($totalAmountToPay > 0)
+                            <a href="{{ route('groups.payment.export', Hashids::encode($group->id)) }}" class="btn btn-success btn-sm me-1">
+                                <i class="bx bx-download me-1"></i> Download Excel
+                            </a>
+                        @else
+                            <button type="button" class="btn btn-success btn-sm me-1" disabled>
+                                <i class="bx bx-download me-1"></i> Download Excel
+                            </button>
+                        @endif
+                    </div>
+                </div>
+
+                <form action="{{ route('groups.payment.import', Hashids::encode($group->id)) }}" method="POST" enctype="multipart/form-data" class="row g-3 align-items-end mt-2">
+                    @csrf
+                    <div class="col-md-8">
+                        <label for="import_file" class="form-label">Import Excel</label>
+                        <input type="file" name="import_file" id="import_file" class="form-control @error('import_file') is-invalid @enderror" accept=".xlsx,.xls,.csv" required>
+                        @error('import_file') <div class="invalid-feedback">{{ $message }}</div> @enderror
+                    </div>
+                    <div class="col-md-4 text-md-end">
+                        <button type="submit" class="btn btn-warning">
+                            <i class="bx bx-upload me-1"></i> Import &amp; Process
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
 
         <div class="card radius-10">
             <div class="card-body">
@@ -74,6 +117,7 @@
                                     <td>
                                         @if($loop->first)
                                         <strong>{{ $customerData['customer']->name }}</strong><br>
+                                        <small class="text-muted">{{ $customerData['customer']->customerNo }}</small>
                                         @endif
                                     </td>
                                     <td>{{ Carbon\Carbon::parse($loanData['schedule']->due_date)->format('d M, Y') }}</td>
