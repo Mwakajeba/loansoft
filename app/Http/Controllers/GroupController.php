@@ -13,10 +13,14 @@ use App\Models\LoanSchedule;
 use App\Models\Receipt;
 use App\Models\ReceiptItem;
 use App\Models\Repayment;
+use App\Exports\GroupRepaymentTemplateExport;
+use App\Support\Loans\GroupRepaymentDataBuilder;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
+use Maatwebsite\Excel\Facades\Excel;
+use PhpOffice\PhpSpreadsheet\IOFactory;
 use Vinkla\Hashids\Facades\Hashids;
 
 class GroupController extends Controller
@@ -372,91 +376,165 @@ class GroupController extends Controller
 
     public function payment($encodedId)
     {
-        // Tumia Hashids kupata Group ID na kutafuta group husika
         $ids = Hashids::decode($encodedId)[0] ?? null;
         $group = Group::findOrFail($ids);
 
-        // Pata wateja wote walio kwenye kundi kupitia uhusiano wa `GroupMember`.
-        // Kisha pakia (eager load) uhusiano wa customer, mikopo, schedules, na repayments.
-        $customers = $group->members()->with([
-            'loans' => function ($query) use ($group) {
-                $query->where('group_id', $group->id)
-                    ->whereIn('status', [Loan::STATUS_ACTIVE, Loan::STATUS_DEFAULTED])
-                    ->with(['schedule.repayments']);
-            },
-        ])->get();
-
-        $repaymentData = [];
-        $totalAmountToPay = 0;
-
-        foreach ($customers as $customer) {
-            // Hapa tunaangalia tena ikiwa mteja ana mikopo iliyo active baada ya Eager Loading
-            if ($customer->loans->isNotEmpty()) {
-                $customerData = [
-                    'customer' => $customer,
-                    'loans' => [],
-                ];
-
-                foreach ($customer->loans as $loan) {
-                    // Pata schedule ya kwanza ambayo haijalipwa kikamilifu
-                    $unpaidSchedule = $loan->schedule
-                        ->sortBy('due_date')
-                        ->first(function ($schedule) {
-                            $amountDue = $schedule->principal
-                                + $schedule->interest
-                                + $schedule->fee_amount
-                                + $schedule->penalty_amount;
-
-                            $totalPaid = $schedule->repayments->sum(function ($repayment) {
-                                return $repayment->principal
-                                    + $repayment->interest
-                                    + $repayment->penalt_amount
-                                    + $repayment->fee_amount;
-                            });
-
-                            // Iwe haijalipwa kabisa au imelipwa nusu
-                            return $totalPaid < $amountDue;
-                        });
-
-
-                    if ($unpaidSchedule) {
-                        $totalDue = $unpaidSchedule->principal
-                            + $unpaidSchedule->interest
-                            + $unpaidSchedule->penalty_amount
-                            + $unpaidSchedule->fee_amount;
-
-                        $amountAlreadyPaid = $unpaidSchedule->repayments->sum(function ($repayment) {
-                            return $repayment->principal
-                                + $repayment->interest
-                                + $repayment->penalt_amount
-                                + $repayment->fee_amount;
-                        });
-
-                        $remainingAmountToPay = $totalDue - $amountAlreadyPaid;
-                        $totalAmountToPay += $remainingAmountToPay;
-
-                        $customerData['loans'][] = [
-                            'loan' => $loan,
-                            'schedule' => $unpaidSchedule,
-                            'amount_to_pay' => $remainingAmountToPay,
-                            'installment_amount' => $unpaidSchedule->principal + $unpaidSchedule->interest,
-                            'penalty_amount' => $unpaidSchedule->penalty_amount,
-                            'fee_amount' => $unpaidSchedule->fee_amount,
-                            'total_due' => $totalDue,
-                            'amount_already_paid' => $amountAlreadyPaid,
-                        ];
-                    }
-                }
-
-                // Ongeza mteja kwenye data ya malipo tu ikiwa ana schedules ambazo hazijalipwa
-                if (!empty($customerData['loans'])) {
-                    $repaymentData[] = $customerData;
-                }
-            }
-        }
+        $built = GroupRepaymentDataBuilder::build($group);
+        $repaymentData = $built['repaymentData'];
+        $totalAmountToPay = $built['totalAmountToPay'];
 
         return view('groups.payment', compact('group', 'repaymentData', 'totalAmountToPay'));
     }
+
+    public function exportGroupRepaymentTemplate($encodedId)
+    {
+        $ids = Hashids::decode($encodedId)[0] ?? null;
+        $group = Group::findOrFail($ids);
+
+        $built = GroupRepaymentDataBuilder::build($group);
+        $rows = GroupRepaymentDataBuilder::flattenForExport($built['repaymentData']);
+
+        if (empty($rows)) {
+            return back()->with('error', 'No unpaid schedules found to export for this group.');
+        }
+
+        $safeName = preg_replace('/[^a-zA-Z0-9_-]+/', '_', $group->name);
+        $filename = 'group_repayment_' . $safeName . '_' . date('Y-m-d') . '.xlsx';
+
+        return Excel::download(new GroupRepaymentTemplateExport($rows, $group->name), $filename);
+    }
+
+    public function importGroupRepayment(Request $request, $encodedId)
+    {
+        $request->validate([
+            'import_file' => 'required|file|mimes:xlsx,xls,csv|max:10240',
+        ]);
+
+        $ids = Hashids::decode($encodedId)[0] ?? null;
+        $group = Group::findOrFail($ids);
+
+        try {
+            $repayments = $this->parseGroupRepaymentImportFile($request->file('import_file'), $group);
+
+            if (empty($repayments)) {
+                return back()->with('error', 'No valid repayment rows found in the uploaded file.');
+            }
+
+            $importRequest = new Request(['repayments' => $repayments]);
+
+            return $this->groupStore($importRequest, $encodedId);
+        } catch (\InvalidArgumentException $e) {
+            return back()->with('error', $e->getMessage());
+        } catch (\Exception $e) {
+            \Log::error('Group repayment import failed', [
+                'group_id' => $group->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return back()->with('error', 'Failed to import repayments: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * @return array<int, array<int, array<string, mixed>>>
+     */
+    private function parseGroupRepaymentImportFile($file, Group $group): array
+    {
+        $path = $file->getRealPath();
+        $extension = strtolower($file->getClientOriginalExtension());
+        $rows = [];
+
+        if (in_array($extension, ['xlsx', 'xls'], true)) {
+            $spreadsheet = IOFactory::load($path);
+            $rows = $spreadsheet->getActiveSheet()->toArray();
+        } else {
+            $rows = array_map('str_getcsv', file($path));
+        }
+
+        if (empty($rows)) {
+            throw new \InvalidArgumentException('The uploaded file is empty.');
+        }
+
+        $headerRowIndex = null;
+        $header = [];
+
+        for ($i = 0; $i < min(15, count($rows)); $i++) {
+            $normalized = array_map(function ($cell) {
+                return strtolower(trim((string) ($cell ?? '')));
+            }, $rows[$i]);
+
+            $normalized = array_map(function ($col) {
+                return preg_replace('/\s+/', '_', $col);
+            }, $normalized);
+
+            if (in_array('schedule_id', $normalized, true) && in_array('amount_to_pay', $normalized, true)) {
+                $headerRowIndex = $i;
+                $header = $normalized;
+                break;
+            }
+        }
+
+        if ($headerRowIndex === null) {
+            throw new \InvalidArgumentException('Could not find header row. Required columns: schedule_id, amount_to_pay.');
+        }
+
+        $columnIndex = array_flip($header);
+        $required = ['customer_id', 'loan_id', 'schedule_id', 'amount_to_pay'];
+        foreach ($required as $col) {
+            if (! array_key_exists($col, $columnIndex)) {
+                throw new \InvalidArgumentException('Missing required column: ' . $col);
+            }
+        }
+
+        $validScheduleIds = $this->getGroupRepaymentScheduleIds($group);
+        $repayments = [];
+
+        foreach (array_slice($rows, $headerRowIndex + 1) as $row) {
+            $scheduleId = (int) trim((string) ($row[$columnIndex['schedule_id']] ?? ''));
+            $customerId = (int) trim((string) ($row[$columnIndex['customer_id']] ?? ''));
+            $loanId = (int) trim((string) ($row[$columnIndex['loan_id']] ?? ''));
+            $amountPaid = (float) str_replace(',', '', (string) ($row[$columnIndex['amount_to_pay']] ?? '0'));
+
+            if ($scheduleId <= 0 || $customerId <= 0 || $loanId <= 0) {
+                continue;
+            }
+
+            if (! in_array($scheduleId, $validScheduleIds, true)) {
+                throw new \InvalidArgumentException("Schedule ID {$scheduleId} is not valid for this group repayment.");
+            }
+
+            if ($amountPaid <= 0) {
+                continue;
+            }
+
+            $repayments[$customerId][$loanId] = [
+                'schedule_id' => $scheduleId,
+                'customer_id' => $customerId,
+                'loan_id' => $loanId,
+                'amount_paid' => $amountPaid,
+            ];
+        }
+
+        return $repayments;
+    }
+
+    /**
+     * @return array<int, int>
+     */
+    private function getGroupRepaymentScheduleIds(Group $group): array
+    {
+        $built = GroupRepaymentDataBuilder::build($group);
+        $scheduleIds = [];
+
+        foreach ($built['repaymentData'] as $customerData) {
+            foreach ($customerData['loans'] as $loanData) {
+                $scheduleIds[] = (int) $loanData['schedule']->id;
+            }
+        }
+
+        return $scheduleIds;
+    }
+
     public function groupStore(Request $request, $encodedId)
     {
         // Validation logic kwa data ya fomu
