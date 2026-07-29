@@ -22,6 +22,7 @@ use App\Jobs\CalculateDailyInterestJob;
 use Barryvdh\DomPDF\Facade\Pdf;
 use App\Models\ArrearsClassification;
 use App\Models\SmsLog;
+use App\Support\Upload\FileUploadLimits;
 
 class SettingsController extends Controller
 {
@@ -807,12 +808,16 @@ class SettingsController extends Controller
             abort(403, 'You do not have permission to import a database.');
         }
 
+        FileUploadLimits::prepareLongRunningSqlImport();
+
+        $maxKb = FileUploadLimits::maxKilobytes();
+
         $validated = $request->validate([
-            'sql_file' => 'required|file|max:512000',
+            'sql_file' => 'required|file|max:'.$maxKb,
             'current_password' => 'required|string',
             'confirm_import' => 'accepted',
         ], [
-            'sql_file.max' => 'The SQL file may not be larger than 500 MB.',
+            'sql_file.max' => 'The SQL file may not be larger than '.FileUploadLimits::maxMegabytesLabel().' MB.',
             'confirm_import.accepted' => 'You must confirm that the import will overwrite current database data.',
         ]);
 
@@ -848,7 +853,18 @@ class SettingsController extends Controller
                 'Automatic safety backup before importing ' . $originalName
             );
 
+            if ($safetyBackup->status !== 'completed' || (int) $safetyBackup->size <= 0) {
+                throw new \Exception('Safety backup could not be created. Import was aborted.');
+            }
+
             $backupService->importSqlFile($filePath);
+
+            Log::info('SQL database imported', [
+                'file' => $originalName,
+                'user_id' => auth()->id(),
+                'safety_backup_id' => $safetyBackup->id,
+                'size' => $file->getSize(),
+            ]);
 
             return redirect()->route('settings.backup')->with(
                 'success',

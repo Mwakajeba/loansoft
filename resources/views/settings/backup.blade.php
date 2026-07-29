@@ -189,7 +189,11 @@
                                         @error('sql_file')
                                             <div class="invalid-feedback">{{ $message }}</div>
                                         @enderror
-                                        <div class="form-text">MySQL/MariaDB .sql files only, maximum 500 MB.</div>
+                                        <div class="form-text">
+                                            MySQL/MariaDB .sql files only, maximum
+                                            {{ \App\Support\Upload\FileUploadLimits::maxMegabytesLabel() }} MB
+                                            (set <code>UPLOAD_MAX_FILE_SIZE</code> in .env to increase).
+                                        </div>
                                     </div>
                                 </div>
                                 <div class="col-md-4">
