@@ -799,6 +799,75 @@ class SettingsController extends Controller
         }
     }
 
+    public function importSqlDatabase(Request $request)
+    {
+        if (!auth()->user()->can('restore backup') &&
+            !auth()->user()->can('manage system settings') &&
+            !auth()->user()->hasRole('admin')) {
+            abort(403, 'You do not have permission to import a database.');
+        }
+
+        $validated = $request->validate([
+            'sql_file' => 'required|file|max:512000',
+            'current_password' => 'required|string',
+            'confirm_import' => 'accepted',
+        ], [
+            'sql_file.max' => 'The SQL file may not be larger than 500 MB.',
+            'confirm_import.accepted' => 'You must confirm that the import will overwrite current database data.',
+        ]);
+
+        if (!Hash::check($validated['current_password'], auth()->user()->password)) {
+            return back()->withErrors([
+                'current_password' => 'The current password is incorrect.',
+            ]);
+        }
+
+        $file = $request->file('sql_file');
+        if (strtolower((string) $file->getClientOriginalExtension()) !== 'sql') {
+            return back()->withErrors([
+                'sql_file' => 'Only .sql database dump files are allowed.',
+            ]);
+        }
+
+        $filePath = $file->getRealPath();
+        $sample = file_get_contents($filePath, false, null, 0, 65536);
+        if ($sample === false || trim($sample) === '' ||
+            !preg_match('/\b(CREATE|INSERT|DROP|ALTER|SET|LOCK|REPLACE|USE)\b/i', $sample)) {
+            return back()->withErrors([
+                'sql_file' => 'The uploaded file does not appear to be a valid SQL database dump.',
+            ]);
+        }
+
+        $originalName = $file->getClientOriginalName();
+
+        try {
+            $backupService = new BackupService();
+
+            // Always preserve the current database before performing a destructive import.
+            $safetyBackup = $backupService->createDatabaseBackup(
+                'Automatic safety backup before importing ' . $originalName
+            );
+
+            $backupService->importSqlFile($filePath);
+
+            return redirect()->route('settings.backup')->with(
+                'success',
+                'SQL database imported successfully. A safety backup was created first: ' . $safetyBackup->filename
+            );
+        } catch (\Throwable $e) {
+            Log::error('SQL database import failed', [
+                'file' => $originalName,
+                'user_id' => auth()->id(),
+                'error' => $e->getMessage(),
+            ]);
+
+            return redirect()->route('settings.backup')->with(
+                'error',
+                'Database import failed: ' . $e->getMessage()
+            );
+        }
+    }
+
     public function downloadBackup($hash_id)
     {
         // Check permissions for downloading backups

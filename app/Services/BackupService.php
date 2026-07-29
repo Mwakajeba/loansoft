@@ -320,23 +320,64 @@ class BackupService
      */
     protected function restoreDatabaseBackup($filePath)
     {
-        $database = config('database.connections.mysql.database');
-        $username = config('database.connections.mysql.username');
-        $password = config('database.connections.mysql.password');
-        $host = config('database.connections.mysql.host');
-        $port = config('database.connections.mysql.port');
+        return $this->importSqlFile($filePath);
+    }
 
-        $command = "mysql -h {$host} -P {$port} -u {$username}";
-        if ($password) {
-            $command .= " -p{$password}";
+    /**
+     * Import an uploaded SQL dump into the configured MySQL/MariaDB database.
+     */
+    public function importSqlFile(string $filePath): bool
+    {
+        if (!is_file($filePath) || !is_readable($filePath)) {
+            throw new \Exception('SQL file is missing or unreadable.');
         }
-        $command .= " {$database} < {$filePath}";
 
-        exec($command, $output, $returnCode);
+        $connectionName = config('database.default');
+        $connection = config("database.connections.{$connectionName}", []);
+        $driver = $connection['driver'] ?? null;
+
+        if (!in_array($driver, ['mysql', 'mariadb'], true)) {
+            throw new \Exception('SQL import currently supports MySQL and MariaDB databases only.');
+        }
+
+        $command = [
+            'mysql',
+            '--host=' . ($connection['host'] ?? '127.0.0.1'),
+            '--port=' . ($connection['port'] ?? '3306'),
+            '--user=' . ($connection['username'] ?? 'root'),
+            '--default-character-set=' . ($connection['charset'] ?? 'utf8mb4'),
+            (string) ($connection['database'] ?? ''),
+        ];
+
+        $descriptors = [
+            0 => ['file', $filePath, 'r'],
+            1 => ['pipe', 'w'],
+            2 => ['pipe', 'w'],
+        ];
+        $environment = null;
+        $password = (string) ($connection['password'] ?? '');
+        if ($password !== '') {
+            $environment = array_merge(getenv() ?: [], ['MYSQL_PWD' => $password]);
+        }
+
+        $process = proc_open($command, $descriptors, $pipes, base_path(), $environment);
+        if (!is_resource($process)) {
+            throw new \Exception('Unable to start the MySQL import process.');
+        }
+
+        $output = stream_get_contents($pipes[1]);
+        $error = stream_get_contents($pipes[2]);
+        fclose($pipes[1]);
+        fclose($pipes[2]);
+        $returnCode = proc_close($process);
 
         if ($returnCode !== 0) {
-            throw new \Exception('Database restore failed');
+            $details = trim((string) ($error ?: $output));
+            throw new \Exception('Database import failed' . ($details !== '' ? ': ' . $details : '.'));
         }
+
+        DB::purge($connectionName);
+        DB::reconnect($connectionName);
 
         return true;
     }
