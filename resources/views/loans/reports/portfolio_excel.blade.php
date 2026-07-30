@@ -36,7 +36,8 @@
             <th style="background:#4472C4;color:#fff;">Status</th>
             <th style="background:#4472C4;color:#fff;">Disbursed Date</th>
             <th style="background:#4472C4;color:#fff;">Disbursed Amount</th>
-            <th style="background:#4472C4;color:#fff;">Management Fees Balance</th>
+            <th style="background:#dc3545;color:#fff;">Management Fee Unpaid</th>
+            <th style="background:#198754;color:#fff;">Management Fee Paid</th>
             <th style="background:#4472C4;color:#fff;">Outstanding principal</th>
             <th style="background:#4472C4;color:#fff;">Accrued/Outstanding Interest</th>
             <th style="background:#4472C4;color:#fff;">Days in Arrears</th>
@@ -59,7 +60,8 @@
             <td>{{ ucfirst($loan['status']) }}</td>
             <td>{{ $loan['disbursed_date_iso'] ?? $loan['disbursed_date'] }}</td>
             <td>{{ number_format($loan['disbursed_amount'], 2) }}</td>
-            <td>{{ number_format($loan['management_fees_balance'] ?? 0, 2) }}</td>
+            <td style="color:#dc3545;font-weight:bold;">{{ number_format($loan['management_fees_balance'] ?? 0, 2) }}</td>
+            <td style="color:#198754;font-weight:bold;">{{ number_format($loan['management_fees_paid'] ?? 0, 2) }}</td>
             <td>{{ number_format($loan['outstanding_principal'] ?? 0, 2) }}</td>
             <td>{{ number_format($loan['outstanding_interest'] ?? 0, 2) }}</td>
             <td>{{ $loan['days_in_arrears'] ?? 0 }}</td>

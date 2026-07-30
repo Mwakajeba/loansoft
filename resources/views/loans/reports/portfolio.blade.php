@@ -234,7 +234,8 @@
                                     <th>Status</th>
                                     <th>Disbursed Date</th>
                                     <th class="text-end">Disbursed Amount</th>
-                                    <th class="text-end">Management Fees Balance</th>
+                                    <th class="text-end" style="background:#dc3545;">Management Fee Unpaid</th>
+                                    <th class="text-end" style="background:#198754;">Management Fee Paid</th>
                                     <th class="text-end">Outstanding principal</th>
                                     <th class="text-end">Accrued/Outstanding Interest</th>
                                     <th class="text-center">Days in Arrears</th>
@@ -257,7 +258,12 @@
                                     <td>{{ ucfirst($loan['status']) }}</td>
                                     <td>{{ $loan['disbursed_date_iso'] ?? $loan['disbursed_date'] }}</td>
                                     <td class="text-end">{{ number_format($loan['disbursed_amount'], 2) }}</td>
-                                    <td class="text-end">{{ number_format($loan['management_fees_balance'] ?? 0, 2) }}</td>
+                                    <td class="text-end text-danger fw-bold">
+                                        {{ number_format($loan['management_fees_balance'] ?? 0, 2) }}
+                                    </td>
+                                    <td class="text-end text-success fw-bold">
+                                        {{ number_format($loan['management_fees_paid'] ?? 0, 2) }}
+                                    </td>
                                     <td class="text-end">{{ number_format($loan['outstanding_principal'] ?? 0, 2) }}</td>
                                     <td class="text-end">{{ number_format($loan['outstanding_interest'] ?? 0, 2) }}</td>
                                     <td class="text-center {{ ($loan['days_in_arrears'] ?? 0) > 0 ? 'text-danger fw-bold' : '' }}">{{ $loan['days_in_arrears'] ?? 0 }}</td>
@@ -268,7 +274,7 @@
                                 </tr>
                                 @empty
                                 <tr>
-                                    <td colspan="18" class="text-center">No loans found for the selected criteria.</td>
+                                    <td colspan="19" class="text-center">No loans found for the selected criteria.</td>
                                 </tr>
                                 @endforelse
                             </tbody>
