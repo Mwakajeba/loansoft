@@ -42,7 +42,7 @@
     <table>
         <thead>
             <tr>
-                <th>Customer Name</th><th>Customer No</th><th>Phone</th><th>Gender</th><th>Tenure</th><th>Subsector</th>
+                <th>Customer Name</th><th>Customer No</th><th>Group</th><th>Phone</th><th>Gender</th><th>Tenure</th><th>Subsector</th>
                 <th>Loan Officer</th><th>Status</th><th>Disbursed Date</th><th>Disbursed Amount</th>
                 <th style="background:#dc3545;">Mgmt Fee Unpaid</th><th style="background:#198754;">Mgmt Fee Paid</th>
                 <th>Outstanding Principal</th><th>Outstanding Interest</th>
@@ -57,6 +57,7 @@
                 <tr>
                     <td>{{ $loan['customer'] }}</td>
                     <td class="text-center">{{ $loan['customer_no'] }}</td>
+                    <td>{{ $loan['group'] ?? 'Individual' }}</td>
                     <td class="text-center">{{ $loan['phone'] }}</td>
                     <td>{{ $loan['gender'] ?? '' }}</td>
                     <td>{{ $loan['tenure'] ?? '' }}</td>
@@ -76,7 +77,7 @@
                     <td class="text-center">{{ $loan['maturity_date'] }}</td>
                 </tr>
             @empty
-                <tr><td colspan="19" class="text-center">No records found</td></tr>
+                <tr><td colspan="20" class="text-center">No records found</td></tr>
             @endforelse
         </tbody>
     </table>

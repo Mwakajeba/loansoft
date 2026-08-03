@@ -226,6 +226,7 @@
                                 <tr>
                                     <th>Customer Name</th>
                                     <th>Customer No</th>
+                                    <th>Group</th>
                                     <th>Phone</th>
                                     <th>Gender</th>
                                     <th>Tenure</th>
@@ -250,6 +251,7 @@
                                 <tr>
                                     <td>{{ $loan['customer'] }}</td>
                                     <td>{{ $loan['customer_no'] }}</td>
+                                    <td>{{ $loan['group'] ?? 'Individual' }}</td>
                                     <td>{{ $loan['phone'] }}</td>
                                     <td>{{ $loan['gender'] ?? '' }}</td>
                                     <td>{{ $loan['tenure'] ?? '' }}</td>
@@ -274,7 +276,7 @@
                                 </tr>
                                 @empty
                                 <tr>
-                                    <td colspan="19" class="text-center">No loans found for the selected criteria.</td>
+                                    <td colspan="20" class="text-center">No loans found for the selected criteria.</td>
                                 </tr>
                                 @endforelse
                             </tbody>
