@@ -37,7 +37,7 @@
                         </div>
                         <div class="col-md-2 mb-3">
                             <label for="group_id" class="form-label">Group</label>
-                            <select class="form-select" id="group_id" name="group_id">
+                            <select class="form-select select2-single" id="group_id" name="group_id" data-placeholder="Search group...">
                                 <option value="all" {{ empty($groupId) || $groupId === 'all' ? 'selected' : '' }}>All Groups</option>
                                 @foreach($groups as $group)
                                     <option value="{{ $group->id }}" {{ (string) $groupId === (string) $group->id ? 'selected' : '' }}>
