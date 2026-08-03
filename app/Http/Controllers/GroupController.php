@@ -3,6 +3,8 @@
 namespace App\Http\Controllers;
 
 use App\Models\BankAccount;
+use App\Models\CashCollateral;
+use App\Models\CashCollateralType;
 use App\Models\Customer;
 use App\Models\Group;
 use App\Models\GroupMember;
@@ -15,6 +17,8 @@ use App\Models\Receipt;
 use App\Models\ReceiptItem;
 use App\Models\Repayment;
 use App\Exports\GroupRepaymentTemplateExport;
+use App\Services\CashCollateralDepositService;
+use App\Support\Loans\GroupRepaymentAllocator;
 use App\Support\Loans\GroupRepaymentDataBuilder;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
@@ -651,10 +655,25 @@ class GroupController extends Controller
                         'penalt_amount' => $penaltyPaid,
                         'bank_account_id' => $bankId,
                         'fee_amount' => $feePaid,
-                        'cash_deposit' => $amountPaid,
+                        'cash_deposit' => $amountToDistribute,
                         'due_date' => $schedule->due_date,
                         'payment_date' => $paymentDate,
                     ]);
+
+                    $overflowAmount = round($amountPaid - $amountToDistribute, 2);
+                    if ($overflowAmount > 0) {
+                        $this->processGroupRepaymentOverflow(
+                            $loan,
+                            $schedule,
+                            $customer,
+                            $loanProduct,
+                            $bankAccount,
+                            $overflowAmount,
+                            $paymentOrder,
+                            $paymentDate,
+                            $user
+                        );
+                    }
 
                     // Send SMS notification to customer after repayment is created
                     try {
@@ -731,13 +750,13 @@ class GroupController extends Controller
 
 
                     // *** 3. Kuhifadhi Receipt na ReceiptItem ***
-                    $notes = "Being Repayment for {$loanProduct->name} Loan from {$customer->name}, of TSHS {$amountPaid}";
+                    $notes = "Being Repayment for {$loanProduct->name} Loan from {$customer->name}, of TSHS {$amountToDistribute}";
 
                     $receipt = Receipt::create([
                         'reference' => $repayment->id,
                         'reference_type' => 'Repayment',
                         'reference_number' => null,
-                        'amount' => $amountPaid,
+                        'amount' => $amountToDistribute,
                         'date' => $paymentDate,
                         'description' => $notes,
                         'user_id' => $user->id,
@@ -748,6 +767,7 @@ class GroupController extends Controller
                         'approved_by' => $user->id,
                         'approved_at' => now(),
                     ]);
+                    $repayment->update(['receipt_id' => $receipt->id]);
 
                     if ($principalPaid > 0) {
                         $allReceiptItems[] = [
@@ -770,7 +790,7 @@ class GroupController extends Controller
                     $allGlTransactions[] = [
                         'chart_account_id' => $bankChartAccountId,
                         'customer_id' => $customerId,
-                        'amount' => $amountPaid,
+                        'amount' => $amountToDistribute,
                         'nature' => 'debit',
                         'transaction_id' => $repayment->id,
                         'transaction_type' => 'Repayment',
@@ -883,6 +903,189 @@ class GroupController extends Controller
             DB::rollBack();
             return back()->with('error', 'Failed to process repayment. ' . $e->getMessage());
         }
+    }
+
+    private function processGroupRepaymentOverflow(
+        Loan $loan,
+        LoanSchedule $selectedSchedule,
+        Customer $customer,
+        \App\Models\LoanProduct $loanProduct,
+        BankAccount $bankAccount,
+        float $overflowAmount,
+        array $paymentOrder,
+        Carbon $paymentDate,
+        User $user
+    ): void {
+        $laterSchedules = LoanSchedule::query()
+            ->where('loan_id', $loan->id)
+            ->where(function ($query) use ($selectedSchedule) {
+                $query->whereDate('due_date', '>', $selectedSchedule->due_date)
+                    ->orWhere(function ($sameDate) use ($selectedSchedule) {
+                        $sameDate->whereDate('due_date', $selectedSchedule->due_date)
+                            ->where('id', '>', $selectedSchedule->id);
+                    });
+            })
+            ->orderBy('due_date')
+            ->orderBy('id')
+            ->lockForUpdate()
+            ->get();
+        $laterSchedules->load('repayments');
+
+        $allocationResult = GroupRepaymentAllocator::allocate(
+            $laterSchedules,
+            $overflowAmount,
+            $paymentOrder
+        );
+        $paymentDateValue = $paymentDate->toDateTimeString();
+
+        foreach ($allocationResult['allocations'] as $allocation) {
+            $schedule = $laterSchedules->firstWhere('id', $allocation['schedule_id']);
+            $appliedAmount = (float) $allocation['total'];
+            $notes = "Advance repayment for {$loanProduct->name} Loan from {$customer->name}, of TSHS {$appliedAmount}";
+
+            $repayment = Repayment::create([
+                'customer_id' => $customer->id,
+                'loan_id' => $loan->id,
+                'loan_schedule_id' => $schedule->id,
+                'principal' => $allocation['principal'],
+                'interest' => $allocation['interest'],
+                'penalt_amount' => $allocation['penalt_amount'],
+                'bank_account_id' => $bankAccount->id,
+                'fee_amount' => $allocation['fee_amount'],
+                'cash_deposit' => $appliedAmount,
+                'due_date' => $schedule->due_date,
+                'payment_date' => $paymentDate,
+            ]);
+
+            $receipt = Receipt::create([
+                'reference' => $repayment->id,
+                'reference_type' => 'Repayment',
+                'reference_number' => null,
+                'amount' => $appliedAmount,
+                'date' => $paymentDate,
+                'description' => $notes,
+                'user_id' => $user->id,
+                'bank_account_id' => $bankAccount->id,
+                'customer_id' => $customer->id,
+                'branch_id' => $user->branch_id,
+                'approved' => true,
+                'approved_by' => $user->id,
+                'approved_at' => now(),
+            ]);
+            $repayment->update(['receipt_id' => $receipt->id]);
+
+            $componentAccounts = [
+                'principal' => (int) $loanProduct->principal_receivable_account_id,
+                'interest' => (int) $loanProduct->interest_revenue_account_id,
+                'fee_amount' => $allocation['fee_amount'] > 0
+                    ? $this->resolveFeeChartAccountId($loanProduct)
+                    : null,
+                'penalt_amount' => $allocation['penalt_amount'] > 0
+                    ? $this->resolvePenaltyChartAccountId($loanProduct)
+                    : null,
+            ];
+
+            if ($allocation['fee_amount'] > 0 && ! $componentAccounts['fee_amount']) {
+                throw new \RuntimeException("Fee account is not configured for loan product {$loanProduct->name}.");
+            }
+            if ($allocation['penalt_amount'] > 0 && ! $componentAccounts['penalt_amount']) {
+                throw new \RuntimeException("Penalty account is not configured for loan product {$loanProduct->name}.");
+            }
+
+            GlTransaction::create([
+                'chart_account_id' => $bankAccount->chart_account_id,
+                'customer_id' => $customer->id,
+                'amount' => $appliedAmount,
+                'nature' => 'debit',
+                'transaction_id' => $repayment->id,
+                'transaction_type' => 'Repayment',
+                'date' => $paymentDateValue,
+                'description' => $notes,
+                'branch_id' => $user->branch_id,
+                'user_id' => $user->id,
+            ]);
+
+            foreach ($componentAccounts as $component => $chartAccountId) {
+                $componentAmount = (float) $allocation[$component];
+                if ($componentAmount <= 0) {
+                    continue;
+                }
+
+                ReceiptItem::create([
+                    'receipt_id' => $receipt->id,
+                    'chart_account_id' => $chartAccountId,
+                    'amount' => $componentAmount,
+                    'description' => $notes,
+                ]);
+                GlTransaction::create([
+                    'chart_account_id' => $chartAccountId,
+                    'customer_id' => $customer->id,
+                    'amount' => $componentAmount,
+                    'nature' => 'credit',
+                    'transaction_id' => $repayment->id,
+                    'transaction_type' => 'Repayment',
+                    'date' => $paymentDateValue,
+                    'description' => $notes,
+                    'branch_id' => $user->branch_id,
+                    'user_id' => $user->id,
+                ]);
+            }
+        }
+
+        $collateralAmount = (float) $allocationResult['cash_collateral'];
+        if ($collateralAmount <= 0) {
+            return;
+        }
+
+        $collateral = CashCollateral::query()
+            ->with('type')
+            ->where('customer_id', $customer->id)
+            ->where('company_id', $user->company_id)
+            ->lockForUpdate()
+            ->first();
+
+        if (! $collateral) {
+            $collateralType = null;
+            if ($loanProduct->cash_collateral_type) {
+                $collateralType = CashCollateralType::query()
+                    ->where('name', $loanProduct->cash_collateral_type)
+                    ->where('is_active', true)
+                    ->whereNotNull('chart_account_id')
+                    ->first();
+            }
+            $collateralType ??= CashCollateralType::query()
+                ->where('is_active', true)
+                ->whereNotNull('chart_account_id')
+                ->first();
+
+            if (! $collateralType) {
+                throw new \RuntimeException('No active cash collateral account is configured for overpayments.');
+            }
+
+            $collateral = CashCollateral::create([
+                'customer_id' => $customer->id,
+                'type_id' => $collateralType->id,
+                'branch_id' => $loan->branch_id,
+                'company_id' => $user->company_id,
+                'amount' => 0,
+            ]);
+            $collateral->setRelation('type', $collateralType);
+            $customer->update(['has_cash_collateral' => true]);
+        }
+
+        if (! $collateral->type || ! $collateral->type->chart_account_id) {
+            throw new \RuntimeException('The customer cash collateral account has no linked chart account.');
+        }
+
+        app(CashCollateralDepositService::class)->processDeposit(
+            $collateral,
+            $bankAccount,
+            $collateralAmount,
+            $paymentDateValue,
+            "Loan overpayment transferred to cash collateral for {$customer->name}",
+            $user,
+            false
+        );
     }
 
     private function resolveGroupRepaymentBankAccount(Request $request): BankAccount

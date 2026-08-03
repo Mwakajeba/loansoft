@@ -3144,10 +3144,11 @@ class LoanReportController extends Controller
             $feePaid             = \App\Support\Loans\LoanFeeMetrics::totalFeesPaid($loan, $metricsDate);
             $principalCollected  = (float) $loan->repayments->sum('principal');
             $accruedInterest     = (float) $loan->schedule->sum('accrued_interest');
-            $outstandingBalance  = (float) $loan->getTotalOutstandingAmount();
+            $outstandingMetrics  = \App\Support\Loans\LoanReportMetrics::outstandingBreakdownAsOf($loan, $metricsDate);
+            $outstandingBalance  = (float) $outstandingMetrics['total_balance'];
             $daysInArrears       = (int) ($loan->days_in_arrears ?? 0);
 
-            $feeUnpaid = \App\Support\Loans\LoanReportMetrics::outstandingFeesAsOf($loan, $metricsDate);
+            $feeUnpaid = (float) $outstandingMetrics['outstanding_fees'];
 
             // Due interest unpaid: overdue schedules with remaining interest
             $dueInterestUnpaid = 0.0;

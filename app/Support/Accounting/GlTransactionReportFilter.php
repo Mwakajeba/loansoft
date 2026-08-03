@@ -11,11 +11,9 @@ class GlTransactionReportFilter
 {
     public const RECEIPT_TRANSACTION_TYPES = ['receipt', 'receipt_reversal'];
 
-    public const REPAYMENT_TRANSACTION_TYPES = [
-        'Settle Interest',
-        'Settle Principal',
-        'journal repayment',
-    ];
+    public const REPAYMENT_TRANSACTION_TYPES = ['Repayment', 'Settle Interest', 'Settle Principal'];
+
+    public const JOURNAL_TRANSACTION_TYPES = ['journal repayment'];
 
     public const PAYMENT_TRANSACTION_TYPES = ['payment'];
 
@@ -37,6 +35,13 @@ class GlTransactionReportFilter
                             ->from('repayments')
                             ->whereColumn('repayments.id', "{$glTable}.transaction_id")
                             ->whereNull('repayments.deleted_at');
+                    });
+            })->orWhere(function (Builder $q) use ($glTable) {
+                $q->whereIn("{$glTable}.transaction_type", self::JOURNAL_TRANSACTION_TYPES)
+                    ->whereNotExists(function (Builder $sub) use ($glTable) {
+                        $sub->selectRaw('1')
+                            ->from('journals')
+                            ->whereColumn('journals.id', "{$glTable}.transaction_id");
                     });
             })->orWhere(function (Builder $q) use ($glTable) {
                 $q->whereIn("{$glTable}.transaction_type", self::PAYMENT_TRANSACTION_TYPES)

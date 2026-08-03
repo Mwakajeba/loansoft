@@ -42,9 +42,10 @@
     <table>
         <thead>
             <tr>
-                <th>Customer Name</th><th>Customer No</th><th>Phone</th><th>Gender</th><th>Tenure</th><th>Subsector</th>
+                <th>Customer Name</th><th>Customer No</th><th>Group</th><th>Phone</th><th>Gender</th><th>Tenure</th><th>Subsector</th>
                 <th>Loan Officer</th><th>Status</th><th>Disbursed Date</th><th>Disbursed Amount</th>
-                <th>Mgmt Fees Bal</th><th>Outstanding Principal</th><th>Outstanding Interest</th>
+                <th style="background:#dc3545;">Mgmt Fee Unpaid</th><th style="background:#198754;">Mgmt Fee Paid</th>
+                <th>Outstanding Principal</th><th>Outstanding Interest</th>
                 <th>Days in Arrears</th><th>Accrued Penalties</th><th>Outstanding Balance</th>
                 <th>Repayment Rate</th><th>Maturity Date</th>
             </tr>
@@ -56,6 +57,7 @@
                 <tr>
                     <td>{{ $loan['customer'] }}</td>
                     <td class="text-center">{{ $loan['customer_no'] }}</td>
+                    <td>{{ $loan['group'] ?? 'Individual' }}</td>
                     <td class="text-center">{{ $loan['phone'] }}</td>
                     <td>{{ $loan['gender'] ?? '' }}</td>
                     <td>{{ $loan['tenure'] ?? '' }}</td>
@@ -64,7 +66,8 @@
                     <td class="text-center">{{ ucfirst($loan['status']) }}</td>
                     <td class="text-center">{{ $loan['disbursed_date_iso'] ?? $loan['disbursed_date'] }}</td>
                     <td class="text-right">{{ number_format($loan['disbursed_amount'], 2) }}</td>
-                    <td class="text-right">{{ number_format($loan['management_fees_balance'] ?? 0, 2) }}</td>
+                    <td class="text-right" style="color:#dc3545;font-weight:bold;">{{ number_format($loan['management_fees_balance'] ?? 0, 2) }}</td>
+                    <td class="text-right" style="color:#198754;font-weight:bold;">{{ number_format($loan['management_fees_paid'] ?? 0, 2) }}</td>
                     <td class="text-right">{{ number_format($loan['outstanding_principal'] ?? 0, 2) }}</td>
                     <td class="text-right">{{ number_format($loan['outstanding_interest'] ?? 0, 2) }}</td>
                     <td class="text-center">{{ $loan['days_in_arrears'] ?? 0 }}</td>
@@ -74,7 +77,7 @@
                     <td class="text-center">{{ $loan['maturity_date'] }}</td>
                 </tr>
             @empty
-                <tr><td colspan="18" class="text-center">No records found</td></tr>
+                <tr><td colspan="20" class="text-center">No records found</td></tr>
             @endforelse
         </tbody>
     </table>

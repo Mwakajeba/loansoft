@@ -3,7 +3,9 @@
 namespace App\Support\Loans;
 
 use App\Models\Fee;
+use App\Models\GlTransaction;
 use App\Models\Loan;
+use App\Services\LoanDisbursementGlService;
 use Carbon\Carbon;
 
 /**
@@ -110,10 +112,51 @@ class LoanFeeMetrics
         return round($total, 2);
     }
 
+    /**
+     * Release-date fees collected by netting them from loan cash disbursement.
+     */
+    public static function feesPaidOnRelease(Loan $loan, ?string $asOfDate = null, ?string $fromDate = null): float
+    {
+        $releaseFees = self::configuredFees($loan)
+            ->filter(fn ($fee) => ($fee->deduction_criteria ?? '') === 'charge_fee_on_release_date'
+                && strtolower((string) ($fee->status ?? 'active')) === 'active'
+                && $fee->chart_account_id)
+            ->values();
+
+        if ($releaseFees->isEmpty()) {
+            return 0.0;
+        }
+
+        $asOf = $asOfDate ? Carbon::parse($asOfDate)->endOfDay() : null;
+        $from = $fromDate ? Carbon::parse($fromDate)->startOfDay() : null;
+        $chartAccountIds = $releaseFees
+            ->pluck('chart_account_id')
+            ->map(fn ($id) => (int) $id)
+            ->unique()
+            ->values()
+            ->all();
+
+        $posted = (float) GlTransaction::query()
+            ->where('transaction_id', $loan->id)
+            ->where('transaction_type', LoanDisbursementGlService::TRANSACTION_TYPE)
+            ->where('nature', 'credit')
+            ->whereIn('chart_account_id', $chartAccountIds)
+            ->when($asOf, fn ($query) => $query->where('date', '<=', $asOf->toDateString()))
+            ->when($from, fn ($query) => $query->where('date', '>=', $from->toDateString()))
+            ->sum('amount');
+
+        $expected = (float) $releaseFees->sum('calculated_amount');
+
+        // Never count unrelated/excess credits to a shared fee account as payment.
+        return round(min($posted, $expected), 2);
+    }
+
     public static function totalFeesPaid(Loan $loan, ?string $asOfDate = null): float
     {
         return round(
-            self::feesPaidFromRepayments($loan, $asOfDate) + self::feesPaidFromReceipts($loan, $asOfDate),
+            self::feesPaidFromRepayments($loan, $asOfDate)
+                + self::feesPaidFromReceipts($loan, $asOfDate)
+                + self::feesPaidOnRelease($loan, $asOfDate),
             2
         );
     }

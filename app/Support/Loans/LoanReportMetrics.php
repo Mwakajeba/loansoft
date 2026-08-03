@@ -50,6 +50,7 @@ class LoanReportMetrics
         }
 
         $fees += LoanFeeMetrics::feesPaidFromReceipts($loan);
+        $fees += LoanFeeMetrics::feesPaidOnRelease($loan);
 
         return [
             'principal' => round($principal, 2),
@@ -98,6 +99,7 @@ class LoanReportMetrics
         }
 
         $fees += LoanFeeMetrics::feesPaidFromReceipts($loan, $asOfDate);
+        $fees += LoanFeeMetrics::feesPaidOnRelease($loan, $asOfDate);
 
         return [
             'principal' => round($principal, 2),
@@ -124,6 +126,11 @@ class LoanReportMetrics
         $configuredOutstanding = LoanFeeMetrics::outstandingConfiguredFees($loan, $asOfDate);
         $scheduleExpected = (float) $loan->schedule->sum('fee_amount');
         $configuredTotal = LoanFeeMetrics::totalConfiguredFees($loan);
+        $releaseFeesPaid = LoanFeeMetrics::feesPaidOnRelease($loan, $asOfDate);
+
+        // Release-date fees are settled from disbursed cash. Some legacy schedules
+        // also carried the same fee, so remove that paid amount from schedule balance.
+        $scheduleOutstanding = max(0.0, $scheduleOutstanding - $releaseFeesPaid);
 
         if ($configuredTotal > $scheduleExpected + 0.009) {
             return round($scheduleOutstanding + $configuredOutstanding, 2);

@@ -63,6 +63,43 @@ class BackupService
     }
 
     /**
+     * @return array{connection: string, driver: string, host: string, port: string, database: string, username: string, password: string, charset: string}
+     */
+    protected function databaseConnectionConfig(): array
+    {
+        $connectionName = config('database.default');
+        $connection = config("database.connections.{$connectionName}", []);
+        $driver = $connection['driver'] ?? null;
+
+        if (! in_array($driver, ['mysql', 'mariadb'], true)) {
+            throw new \Exception('Database backup/import requires a MySQL or MariaDB connection.');
+        }
+
+        return [
+            'connection' => (string) $connectionName,
+            'driver' => (string) $driver,
+            'host' => (string) ($connection['host'] ?? '127.0.0.1'),
+            'port' => (string) ($connection['port'] ?? '3306'),
+            'database' => (string) ($connection['database'] ?? ''),
+            'username' => (string) ($connection['username'] ?? 'root'),
+            'password' => (string) ($connection['password'] ?? ''),
+            'charset' => (string) ($connection['charset'] ?? 'utf8mb4'),
+        ];
+    }
+
+    /**
+     * @return array<string, string>|null
+     */
+    protected function mysqlProcessEnvironment(string $password): ?array
+    {
+        if ($password === '') {
+            return null;
+        }
+
+        return array_merge(getenv() ?: [], ['MYSQL_PWD' => $password]);
+    }
+
+    /**
      * Execute database backup (with data). Returns result array for creating/updating record.
      */
     protected function executeDatabaseBackup(): array
@@ -71,25 +108,11 @@ class BackupService
         $filePath = $this->backupPath . '/' . $filename;
         $fullPath = storage_path("app/{$filePath}");
 
-        $database = config('database.connections.mysql.database');
-        $username = config('database.connections.mysql.username');
-        $password = config('database.connections.mysql.password');
-        $host = config('database.connections.mysql.host');
-        $port = config('database.connections.mysql.port');
+        $cfg = $this->databaseConnectionConfig();
 
-        $command = "mysqldump -h {$host} -P {$port} -u {$username}";
-        if ($password) {
-            $command .= " -p{$password}";
-        }
-        $command .= " {$database} > {$fullPath}";
+        $this->dumpDatabaseToFile($fullPath, $cfg);
 
-        exec($command, $output, $returnCode);
-
-        if ($returnCode !== 0) {
-            throw new \Exception('Database backup failed');
-        }
-
-        $size = file_exists($fullPath) ? filesize($fullPath) : 0;
+        $size = filesize($fullPath) ?: 0;
 
         return [
             'name' => 'Database Backup - ' . date('Y-m-d H:i:s'),
@@ -97,6 +120,50 @@ class BackupService
             'file_path' => $filePath,
             'size' => $size,
         ];
+    }
+
+    /**
+     * @param  array{connection: string, driver: string, host: string, port: string, database: string, username: string, password: string, charset: string}|null  $cfg
+     */
+    protected function dumpDatabaseToFile(string $fullPath, ?array $cfg = null): void
+    {
+        $cfg ??= $this->databaseConnectionConfig();
+
+        $command = [
+            'mysqldump',
+            '--host=' . $cfg['host'],
+            '--port=' . $cfg['port'],
+            '--user=' . $cfg['username'],
+            '--default-character-set=' . $cfg['charset'],
+            '--single-transaction',
+            '--routines',
+            '--triggers',
+            $cfg['database'],
+        ];
+
+        $descriptors = [
+            0 => ['pipe', 'r'],
+            1 => ['file', $fullPath, 'w'],
+            2 => ['pipe', 'w'],
+        ];
+
+        $process = proc_open($command, $descriptors, $pipes, base_path(), $this->mysqlProcessEnvironment($cfg['password']));
+        if (! is_resource($process)) {
+            throw new \Exception('Unable to start database backup process.');
+        }
+
+        fclose($pipes[0]);
+        $error = stream_get_contents($pipes[2]);
+        fclose($pipes[2]);
+        $returnCode = proc_close($process);
+
+        if ($returnCode !== 0 || ! file_exists($fullPath)) {
+            if (file_exists($fullPath)) {
+                @unlink($fullPath);
+            }
+            $details = trim((string) $error);
+            throw new \Exception('Database backup failed' . ($details !== '' ? ': ' . $details : '.'));
+        }
     }
 
     /**
@@ -207,23 +274,7 @@ class BackupService
         $dbFilename = 'database_backup_' . date('Y-m-d_H-i-s') . '.sql';
         $dbFilePath = storage_path("app/{$this->backupPath}/{$dbFilename}");
 
-        $database = config('database.connections.mysql.database');
-        $username = config('database.connections.mysql.username');
-        $password = config('database.connections.mysql.password');
-        $host = config('database.connections.mysql.host');
-        $port = config('database.connections.mysql.port');
-
-        $command = "mysqldump -h {$host} -P {$port} -u {$username}";
-        if ($password) {
-            $command .= " -p{$password}";
-        }
-        $command .= " {$database} > {$dbFilePath}";
-
-        exec($command, $output, $returnCode);
-
-        if ($returnCode !== 0) {
-            throw new \Exception('Database backup failed');
-        }
+        $this->dumpDatabaseToFile($dbFilePath);
 
         $zip = new ZipArchive();
         if ($zip->open($tempZipPath, ZipArchive::CREATE) !== true) {
@@ -320,23 +371,54 @@ class BackupService
      */
     protected function restoreDatabaseBackup($filePath)
     {
-        $database = config('database.connections.mysql.database');
-        $username = config('database.connections.mysql.username');
-        $password = config('database.connections.mysql.password');
-        $host = config('database.connections.mysql.host');
-        $port = config('database.connections.mysql.port');
+        return $this->importSqlFile($filePath);
+    }
 
-        $command = "mysql -h {$host} -P {$port} -u {$username}";
-        if ($password) {
-            $command .= " -p{$password}";
+    /**
+     * Import an uploaded SQL dump into the configured MySQL/MariaDB database.
+     */
+    public function importSqlFile(string $filePath): bool
+    {
+        if (!is_file($filePath) || !is_readable($filePath)) {
+            throw new \Exception('SQL file is missing or unreadable.');
         }
-        $command .= " {$database} < {$filePath}";
 
-        exec($command, $output, $returnCode);
+        $cfg = $this->databaseConnectionConfig();
+
+        $command = [
+            'mysql',
+            '--host=' . $cfg['host'],
+            '--port=' . $cfg['port'],
+            '--user=' . $cfg['username'],
+            '--default-character-set=' . $cfg['charset'],
+            $cfg['database'],
+        ];
+
+        $descriptors = [
+            0 => ['file', $filePath, 'r'],
+            1 => ['pipe', 'w'],
+            2 => ['pipe', 'w'],
+        ];
+        $environment = $this->mysqlProcessEnvironment($cfg['password']);
+
+        $process = proc_open($command, $descriptors, $pipes, base_path(), $environment);
+        if (!is_resource($process)) {
+            throw new \Exception('Unable to start the MySQL import process.');
+        }
+
+        $output = stream_get_contents($pipes[1]);
+        $error = stream_get_contents($pipes[2]);
+        fclose($pipes[1]);
+        fclose($pipes[2]);
+        $returnCode = proc_close($process);
 
         if ($returnCode !== 0) {
-            throw new \Exception('Database restore failed');
+            $details = trim((string) ($error ?: $output));
+            throw new \Exception('Database import failed' . ($details !== '' ? ': ' . $details : '.'));
         }
+
+        DB::purge($cfg['connection']);
+        DB::reconnect($cfg['connection']);
 
         return true;
     }

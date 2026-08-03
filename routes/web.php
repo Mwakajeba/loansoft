@@ -313,6 +313,7 @@ Route::prefix('settings')->name('settings.')->middleware(['auth', 'company.scope
     Route::get('/backup/history/data', [SettingsController::class, 'backupHistoryData'])->name('backup.history.data');
     Route::get('/backup/jobs/data', [SettingsController::class, 'backupJobsData'])->name('backup.jobs.data');
     Route::post('/backup/restore', [SettingsController::class, 'restoreBackup'])->name('backup.restore');
+    Route::post('/backup/import-sql', [SettingsController::class, 'importSqlDatabase'])->name('backup.import-sql');
     Route::get('/backup/{hash_id}/download', [SettingsController::class, 'downloadBackup'])->name('backup.download');
     Route::delete('/backup/{hash_id}', [SettingsController::class, 'deleteBackup'])->name('backup.delete');
     Route::post('/backup/clean', [SettingsController::class, 'cleanOldBackups'])->name('backup.clean');

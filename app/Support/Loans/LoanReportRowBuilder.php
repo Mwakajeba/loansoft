@@ -342,6 +342,7 @@ class LoanReportRowBuilder
             'status' => $status,
             'disbursed_amount' => round((float) ($loan->amount ?? 0), 2),
             'management_fees_balance' => (float) ($outstanding['outstanding_fees'] ?? 0),
+            'management_fees_paid' => (float) ($totals['paid']['fees'] ?? 0),
             'outstanding_principal' => (float) ($outstanding['outstanding_principal'] ?? 0),
             'outstanding_interest' => (float) ($outstanding['outstanding_interest'] ?? 0),
             'accrued_penalties' => (float) ($outstanding['outstanding_penalty'] ?? 0),
