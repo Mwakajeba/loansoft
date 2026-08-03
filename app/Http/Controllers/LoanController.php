@@ -4379,9 +4379,11 @@ class LoanController extends Controller
                 'schedule' => function ($query) {
                     $query->orderBy('due_date', 'asc');
                 },
+                'schedule.repayments',
                 'repayments' => function ($query) {
                     $query->orderBy('created_at', 'asc');
                 },
+                'repayments.chartAccount',
                 'approvals.user',
                 'approvals' => function ($query) {
                     $query->orderBy('approval_level', 'asc');
@@ -4392,9 +4394,9 @@ class LoanController extends Controller
                 'loanOfficer'
             ])->findOrFail($decoded[0]);
 
-            // Check if loan is active
-            if ($loan->status !== Loan::STATUS_ACTIVE) {
-                return redirect()->back()->withErrors(['error' => 'Only active loans can be exported.']);
+            // Allow exporting both active and completed loans.
+            if (! in_array($loan->status, [Loan::STATUS_ACTIVE, Loan::STATUS_COMPLETE], true)) {
+                return redirect()->back()->withErrors(['error' => 'Only active or completed loans can be exported.']);
             }
 
             // Get loan fees if they exist
@@ -4424,6 +4426,15 @@ class LoanController extends Controller
             $totalInterestPaid = $loan->repayments->sum('interest');
             $totalFeesPaid = $loan->repayments->sum('fee_amount');
             $totalPenaltiesPaid = $loan->repayments->sum('penalt_amount');
+
+            $totalPenaltyCharged = $loan->schedule->sum('penalty_amount');
+            $totalOutstandingPenalty = 0;
+            foreach ($loan->schedule as $schedule) {
+                $penaltyPaidOnSchedule = $schedule->relationLoaded('repayments') && $schedule->repayments
+                    ? $schedule->repayments->sum('penalt_amount')
+                    : 0;
+                $totalOutstandingPenalty += max(0, (float) $schedule->penalty_amount - (float) $penaltyPaidOnSchedule);
+            }
 
             // Calculate fees received through receipts
             $feesReceivedThroughReceipts = 0;
@@ -4460,6 +4471,8 @@ class LoanController extends Controller
                 'totalInterestPaid' => $totalInterestPaid,
                 'totalFeesPaid' => $totalFeesPaid,
                 'totalPenaltiesPaid' => $totalPenaltiesPaid,
+                'totalPenaltyCharged' => $totalPenaltyCharged,
+                'totalOutstandingPenalty' => $totalOutstandingPenalty,
                 'remainingBalance' => $remainingBalance,
                 'remainingPrincipal' => $remainingPrincipal,
                 'exportDate' => now()->format('Y-m-d H:i:s'),
@@ -4469,12 +4482,19 @@ class LoanController extends Controller
             $pdf = \Barryvdh\DomPDF\Facade\Pdf::loadView('loans.export-details', $data);
             $pdf->setPaper('A4', 'portrait');
 
-            $filename = 'Loan_Details_' . $loan->loanNo . '_' . now()->format('Y-m-d') . '.pdf';
+            $filename = 'Loan_Statement_'.$loan->loanNo.'_'.now()->format('Y-m-d').'.pdf';
 
             return $pdf->download($filename);
         } catch (\Exception $e) {
-            Log::error('Export loan details failed: ' . $e->getMessage());
-            return redirect()->back()->withErrors(['error' => 'Failed to export loan details: ' . $e->getMessage()]);
+            Log::error('Export loan details failed: '.$e->getMessage(), [
+                'loan_id' => $decoded[0] ?? null,
+                'gd_loaded' => extension_loaded('gd'),
+            ]);
+            $message = str_contains($e->getMessage(), 'GD extension')
+                ? 'PDF export failed: PHP GD extension is not installed. Ask your server admin to install php-gd, then restart PHP/web server.'
+                : 'Failed to export loan details: '.$e->getMessage();
+
+            return redirect()->back()->withErrors(['error' => $message]);
         }
     }
 

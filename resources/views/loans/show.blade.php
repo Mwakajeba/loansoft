@@ -47,10 +47,10 @@
                                 </button>
                             @endif
 
-                            @if($loan->status === 'active')
+                            @if(in_array($loan->status, ['active', 'completed'], true))
                                 <a href="{{ route('loans.export-details', Vinkla\Hashids\Facades\Hashids::encode($loan->id)) }}"
                                     class="btn btn-info">
-                                    <i class="bx bx-download me-2"></i>Export Loan Details
+                                    <i class="bx bx-download me-2"></i>Export Loan Statement
                                 </a>
                             @endif
                         @endif
