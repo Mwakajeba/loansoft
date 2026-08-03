@@ -638,37 +638,111 @@ class CustomerController extends Controller
         try {
             $customer = Customer::findOrFail($decoded);
 
-            // Check for existing loans, cash collaterals, or GL transactions
-
-            //check if member is in any group then he need to delete that mmeber from that group
-            $existingMembership = DB::table('group_members')->where('customer_id', $customer->id)->where('group_id', '!=', 1)->first();
+            $existingMembership = DB::table('group_members')
+                ->where('customer_id', $customer->id)
+                ->where('group_id', '!=', 1)
+                ->first();
             if ($existingMembership) {
                 return redirect()->route('customers.index')->with('error', 'Customer is a member of a group. Please remove them from the group first.');
             }
-            $hasLoans = $customer->loans()->exists();
-            $hasCollaterals = $customer->collaterals()->exists();
-            $hasGLTransactions = \DB::table('gl_transactions')->where('customer_id', $customer->id)->exists();
 
-            if ($hasLoans || $hasCollaterals || $hasGLTransactions) {
-                $msg = 'Cannot delete customer: ';
-                if ($hasLoans) {
-                    $msg .= 'Customer has existing loans. ';
-                }
-                if ($hasCollaterals) {
-                    $msg .= 'Customer has cash collaterals. ';
-                }
-                if ($hasGLTransactions) {
-                    $msg .= 'Customer has transactions.';
-                }
-                return redirect()->route('customers.index')->with('error', $msg);
+            if (\App\Models\Group::where('group_leader', $customer->id)->exists()) {
+                return redirect()->route('customers.index')->with('error', 'Customer is a group leader. Please reassign the group leader first.');
             }
 
-            $customer->delete();
+            if ($customer->loans()->exists()) {
+                return redirect()->route('customers.index')->with('error', 'Cannot delete customer: Customer has existing loans.');
+            }
+
+            DB::transaction(function () use ($customer) {
+                $this->purgeCustomerCashCollaterals($customer);
+
+                DB::table('customer_file_types')->where('customer_id', $customer->id)->delete();
+                DB::table('customer_officer')->where('customer_id', $customer->id)->delete();
+                DB::table('group_members')->where('customer_id', $customer->id)->delete();
+                DB::table('loan_guarantor')->where('customer_id', $customer->id)->delete();
+
+                // Any remaining customer-linked GL after collateral purge still blocks delete.
+                if (DB::table('gl_transactions')->where('customer_id', $customer->id)->exists()) {
+                    throw new \RuntimeException('Customer has other transactions that must be cleared first.');
+                }
+
+                if ($customer->repayments()->exists()) {
+                    throw new \RuntimeException('Customer has repayments that must be cleared first.');
+                }
+
+                $customer->delete();
+            });
 
             return redirect()->route('customers.index')->with('success', 'Customer deleted successfully.');
         } catch (\Exception $e) {
             return back()->with('error', 'Failed to delete customer: ' . $e->getMessage());
         }
+    }
+
+    /**
+     * Remove cash collateral accounts and related deposit/withdrawal accounting for a customer.
+     */
+    private function purgeCustomerCashCollaterals(Customer $customer): void
+    {
+        $collateralIds = \App\Models\CashCollateral::where('customer_id', $customer->id)
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+
+        if (empty($collateralIds)) {
+            return;
+        }
+
+        $receipts = \App\Models\Receipt::withTrashed()
+            ->where('reference_type', 'Deposit')
+            ->whereIn('reference', $collateralIds)
+            ->get();
+
+        foreach ($receipts as $receipt) {
+            \App\Models\GlTransaction::where('transaction_type', 'receipt')
+                ->where('transaction_id', $receipt->id)
+                ->delete();
+            $receipt->receiptItems()->delete();
+            $receipt->forceDelete();
+        }
+
+        $payments = \App\Models\Payment::query()
+            ->where('reference_type', 'Withdrawal')
+            ->whereIn('reference', $collateralIds)
+            ->get();
+
+        foreach ($payments as $payment) {
+            \App\Models\GlTransaction::where('transaction_type', 'payment')
+                ->where('transaction_id', $payment->id)
+                ->delete();
+            $payment->paymentItems()->delete();
+            $payment->delete();
+        }
+
+        // Safety: remove any leftover customer GL tied to the purged deposit/withdrawal docs.
+        $receiptIds = $receipts->pluck('id')->filter()->values()->all();
+        $paymentIds = $payments->pluck('id')->filter()->values()->all();
+        if (! empty($receiptIds) || ! empty($paymentIds)) {
+            \App\Models\GlTransaction::where('customer_id', $customer->id)
+                ->where(function ($query) use ($receiptIds, $paymentIds) {
+                    if (! empty($receiptIds)) {
+                        $query->orWhere(function ($receiptGl) use ($receiptIds) {
+                            $receiptGl->whereIn('transaction_type', ['receipt', 'receipt_reversal'])
+                                ->whereIn('transaction_id', $receiptIds);
+                        });
+                    }
+                    if (! empty($paymentIds)) {
+                        $query->orWhere(function ($paymentGl) use ($paymentIds) {
+                            $paymentGl->where('transaction_type', 'payment')
+                                ->whereIn('transaction_id', $paymentIds);
+                        });
+                    }
+                })
+                ->delete();
+        }
+
+        \App\Models\CashCollateral::where('customer_id', $customer->id)->delete();
     }
 
     // Show bulk upload form
