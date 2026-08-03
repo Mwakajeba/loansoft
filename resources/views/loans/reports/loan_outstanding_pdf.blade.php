@@ -1,5 +1,6 @@
 @php
     $reportInfo = '<strong>Branch:</strong> ' . ($branch->name ?? 'All Branches');
+    $reportInfo .= ' | <strong>Group:</strong> ' . ($group->name ?? 'All Groups');
     $reportInfo .= ' | <strong>Loan Officer:</strong> ' . ($loanOfficer->name ?? 'All Officers');
     $reportInfo .= '<br><strong>As of Date:</strong> ' . \Carbon\Carbon::parse($asOfDate)->format('d/m/Y');
     $reportInfo .= ' | <strong>Report Date:</strong> ' . \Carbon\Carbon::now()->format('d/m/Y H:i:s');
@@ -17,7 +18,7 @@
     <table>
         <thead>
             <tr>
-                <th>Customer</th><th>Cust No</th><th>Phone</th><th>Loan No</th><th>Expires</th>
+                <th>Customer</th><th>Cust No</th><th>Group</th><th>Phone</th><th>Loan No</th><th>Expires</th>
                 <th>Branch</th><th>Officer</th><th>Disb Date</th><th>Disb Amt</th><th>Tot Int</th>
                 <th>Tot P+I</th><th>Exp Fees</th><th>Tot Pen</th>
                 <th>Princ Paid</th><th>Int Paid</th><th>Fees Paid</th><th>Pen Paid</th>
@@ -31,6 +32,7 @@
                 <tr>
                     <td>{{ $row['customer'] }}</td>
                     <td class="text-center">{{ $row['customer_no'] }}</td>
+                    <td>{{ $row['group'] ?? 'Individual' }}</td>
                     <td class="text-center">{{ $row['phone'] }}</td>
                     <td class="text-center">{{ $row['loan_no'] }}</td>
                     <td class="text-center">{{ $row['expires'] }}</td>
@@ -54,11 +56,11 @@
                     <td class="text-right">{{ number_format($row['outstanding_balance'], 2) }}</td>
                 </tr>
             @empty
-                <tr><td colspan="23" class="text-center">No records found</td></tr>
+                <tr><td colspan="24" class="text-center">No records found</td></tr>
             @endforelse
             @if(!empty($outstandingData))
             <tr class="total-row">
-                <td colspan="8" class="text-center"><strong>TOTALS</strong></td>
+                <td colspan="9" class="text-center"><strong>TOTALS</strong></td>
                 <td class="text-right"><strong>{{ number_format($summary['total_disbursed'] ?? 0, 2) }}</strong></td>
                 <td class="text-right"><strong>{{ number_format($summary['total_interest'] ?? 0, 2) }}</strong></td>
                 <td class="text-right"><strong>{{ number_format($summary['total_principal_interest'] ?? 0, 2) }}</strong></td>

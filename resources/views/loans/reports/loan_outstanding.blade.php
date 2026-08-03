@@ -20,27 +20,38 @@
             <div class="card-body">
                 <form method="GET" action="{{ route('accounting.loans.reports.loan_outstanding') }}">
                     <div class="row">
-                        <div class="col-md-3 mb-3">
+                        <div class="col-md-2 mb-3">
                             <label for="as_of_date" class="form-label">As of Date</label>
-                            <input type="date" class="form-control" id="as_of_date" name="as_of_date" value="{{ request('as_of_date', date('Y-m-d')) }}">
+                            <input type="date" class="form-control" id="as_of_date" name="as_of_date" value="{{ $asOfDate ?? request('as_of_date', date('Y-m-d')) }}">
+                        </div>
+                        <div class="col-md-2 mb-3">
+                            <label for="branch_id" class="form-label">Branch</label>
+                            <select class="form-select" id="branch_id" name="branch_id">
+                                @if(($branches->count() ?? 0) > 1)
+                                    <option value="all" {{ ($branchId ?? request('branch_id')) === 'all' ? 'selected' : '' }}>All My Branches</option>
+                                @endif
+                                @foreach($branches as $branch)
+                                    <option value="{{ $branch->id }}" {{ ($branchId ?? request('branch_id')) == $branch->id ? 'selected' : '' }}>{{ $branch->name }}</option>
+                                @endforeach
+                            </select>
+                        </div>
+                        <div class="col-md-2 mb-3">
+                            <label for="group_id" class="form-label">Group</label>
+                            <select class="form-select" id="group_id" name="group_id">
+                                <option value="all" {{ empty($groupId) || ($groupId ?? '') === 'all' ? 'selected' : '' }}>All Groups</option>
+                                @foreach($groups as $group)
+                                    <option value="{{ $group->id }}" {{ (string) ($groupId ?? '') === (string) $group->id ? 'selected' : '' }}>
+                                        {{ $group->name }}
+                                    </option>
+                                @endforeach
+                            </select>
                         </div>
                         <div class="col-md-3 mb-3">
                             <label for="loan_officer_id" class="form-label">Loan Officer</label>
                             <select class="form-select" id="loan_officer_id" name="loan_officer_id">
                                 <option value="">All Officers</option>
                                 @foreach($loanOfficers as $officer)
-                                    <option value="{{ $officer->id }}" {{ request('loan_officer_id') == $officer->id ? 'selected' : '' }}>{{ $officer->name }}</option>
-                                @endforeach
-                            </select>
-                        </div>
-                        <div class="col-md-3 mb-3">
-                            <label for="branch_id" class="form-label">Branch</label>
-                            <select class="form-select" id="branch_id" name="branch_id">
-                                @if(($branches->count() ?? 0) > 1)
-                                    <option value="all" {{ request('branch_id') === 'all' ? 'selected' : '' }}>All My Branches</option>
-                                @endif
-                                @foreach($branches as $branch)
-                                    <option value="{{ $branch->id }}" {{ request('branch_id') == $branch->id ? 'selected' : '' }}>{{ $branch->name }}</option>
+                                    <option value="{{ $officer->id }}" {{ ($loanOfficerId ?? request('loan_officer_id')) == $officer->id ? 'selected' : '' }}>{{ $officer->name }}</option>
                                 @endforeach
                             </select>
                         </div>
@@ -79,13 +90,13 @@
                     <table class="table table-bordered table-striped table-sm">
                         <thead>
                             <tr class="text-white text-center" style="background:#4472C4;">
-                                <th colspan="13">Loan Information</th>
+                                <th colspan="14">Loan Information</th>
                                 <th colspan="4" style="background:#28a745;">PAID AMOUNT</th>
                                 <th colspan="5" style="background:#fd7e14;">OUTSTANDING AMOUNT</th>
                                 <th style="background:#dc3545;">Outstanding Balance</th>
                             </tr>
                             <tr class="text-white" style="background:#4472C4;">
-                                <th>Customer</th><th>Customer No</th><th>Phone</th><th>Loan No</th><th>Expires</th>
+                                <th>Customer</th><th>Customer No</th><th>Group</th><th>Phone</th><th>Loan No</th><th>Expires</th>
                                 <th>Branch</th><th>Loan Officer</th><th>Disbursed Date</th>
                                 <th class="text-end">Disbursed Amount</th><th class="text-end">Total Interest</th>
                                 <th class="text-end">Total P+I</th><th class="text-end">Expected Fees</th><th class="text-end">Total penalties</th>
@@ -106,6 +117,7 @@
                                 <tr>
                                     <td>{{ $row['customer'] }}</td>
                                     <td>{{ $row['customer_no'] }}</td>
+                                    <td>{{ $row['group'] ?? 'Individual' }}</td>
                                     <td>{{ $row['phone'] }}</td>
                                     <td>{{ $row['loan_no'] }}</td>
                                     <td>{{ $row['expires'] }}</td>
@@ -129,13 +141,13 @@
                                     <td class="text-end fw-bold">{{ number_format($row['outstanding_balance'], 2) }}</td>
                                 </tr>
                             @empty
-                                <tr><td colspan="23" class="text-center text-muted">No outstanding data found.</td></tr>
+                                <tr><td colspan="24" class="text-center text-muted">No outstanding data found.</td></tr>
                             @endforelse
                         </tbody>
                         @if(!empty($outstandingData))
                         <tfoot class="table-dark">
                             <tr>
-                                <th colspan="8" class="text-center">TOTALS</th>
+                                <th colspan="9" class="text-center">TOTALS</th>
                                 <th class="text-end">{{ number_format($summary['total_disbursed'] ?? 0, 2) }}</th>
                                 <th class="text-end">{{ number_format($summary['total_interest'] ?? 0, 2) }}</th>
                                 <th class="text-end">{{ number_format($summary['total_principal_interest'] ?? 0, 2) }}</th>

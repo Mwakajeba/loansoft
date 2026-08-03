@@ -858,6 +858,10 @@ class LoanReportController extends Controller
 
         $asOfDate = ($request->input('as_of_date') ?? date('Y-m-d'));
         $branchId = $request->input('branch_id');
+        $groupId = $request->input('group_id');
+        if ($groupId === null || $groupId === '' || $groupId === 'all') {
+            $groupId = 'all';
+        }
         $loanOfficerId = $request->input('loan_officer_id');
         $exportType = $request->input('export_type');
 
@@ -872,6 +876,7 @@ class LoanReportController extends Controller
             $branchId = $branches->first()->id;
         }
 
+        $groups = Group::all();
         $loanOfficers = User::excludeSuperAdmin()
             ->when($branchId, function ($query) use ($branchId) {
                 $query->whereHas('branches', function ($q) use ($branchId) {
@@ -892,6 +897,9 @@ class LoanReportController extends Controller
 
         if ($branchId && $branchId !== 'all') {
             $loansQuery->where('branch_id', $branchId);
+        }
+        if ($groupId && $groupId !== 'all') {
+            $loansQuery->where('group_id', $groupId);
         }
         if ($loanOfficerId) {
             $loansQuery->where('loan_officer_id', $loanOfficerId);
@@ -942,19 +950,24 @@ class LoanReportController extends Controller
         // Handle export requests
         if ($exportType && !empty($outstandingData)) {
             if ($exportType === 'excel') {
-                return $this->exportLoanOutstandingToExcel($outstandingData, $summary, $asOfDate, $branchId, $loanOfficerId);
+                return $this->exportLoanOutstandingToExcel($outstandingData, $summary, $asOfDate, $branchId, $loanOfficerId, $groupId);
             } elseif ($exportType === 'pdf') {
-                return $this->exportLoanOutstandingToPdf($outstandingData, $summary, $asOfDate, $branchId, $loanOfficerId);
+                return $this->exportLoanOutstandingToPdf($outstandingData, $summary, $asOfDate, $branchId, $loanOfficerId, $groupId);
             }
         }
 
         // Only show data if filter applied
-        $showData = $request->has('as_of_date') || $request->has('branch_id') || $request->has('loan_officer_id');
+        $showData = $request->has('as_of_date') || $request->has('branch_id') || $request->has('group_id') || $request->has('loan_officer_id');
         return view('loans.reports.loan_outstanding', [
             'branches' => $branches,
+            'groups' => $groups,
             'loanOfficers' => $loanOfficers,
             'outstandingData' => $showData ? $outstandingData : null,
             'summary' => $summary,
+            'asOfDate' => $asOfDate,
+            'branchId' => $branchId,
+            'groupId' => $groupId,
+            'loanOfficerId' => $loanOfficerId,
         ]);
     }
 
@@ -4132,25 +4145,28 @@ class LoanReportController extends Controller
     /**
      * Export Loan Outstanding Balance Report to Excel
      */
-    private function exportLoanOutstandingToExcel($outstandingData, $summary, $asOfDate, $branchId = null, $loanOfficerId = null)
+    private function exportLoanOutstandingToExcel($outstandingData, $summary, $asOfDate, $branchId = null, $loanOfficerId = null, $groupId = null)
     {
-        $branch = $branchId ? Branch::find($branchId) : null;
+        $branch = ($branchId && $branchId !== 'all') ? Branch::find($branchId) : null;
         $loanOfficer = $loanOfficerId ? User::find($loanOfficerId) : null;
+        $group = ($groupId && $groupId !== 'all') ? Group::find($groupId) : null;
 
-        return \Maatwebsite\Excel\Facades\Excel::download(new class($outstandingData, $summary, $asOfDate, $branch, $loanOfficer) implements \Maatwebsite\Excel\Concerns\FromCollection, \Maatwebsite\Excel\Concerns\WithHeadings, \Maatwebsite\Excel\Concerns\WithTitle, \Maatwebsite\Excel\Concerns\WithStyles, \Maatwebsite\Excel\Concerns\ShouldAutoSize {
+        return \Maatwebsite\Excel\Facades\Excel::download(new class($outstandingData, $summary, $asOfDate, $branch, $loanOfficer, $group) implements \Maatwebsite\Excel\Concerns\FromCollection, \Maatwebsite\Excel\Concerns\WithHeadings, \Maatwebsite\Excel\Concerns\WithTitle, \Maatwebsite\Excel\Concerns\WithStyles, \Maatwebsite\Excel\Concerns\ShouldAutoSize {
             private $outstandingData;
             private $summary;
             private $asOfDate;
             private $branch;
             private $loanOfficer;
+            private $group;
 
-            public function __construct($outstandingData, $summary, $asOfDate, $branch, $loanOfficer)
+            public function __construct($outstandingData, $summary, $asOfDate, $branch, $loanOfficer, $group)
             {
                 $this->outstandingData = collect($outstandingData);
                 $this->summary = $summary;
                 $this->asOfDate = $asOfDate;
                 $this->branch = $branch;
                 $this->loanOfficer = $loanOfficer;
+                $this->group = $group;
             }
 
             public function collection()
@@ -4159,6 +4175,7 @@ class LoanReportController extends Controller
                     return [
                         $row['customer'],
                         $row['customer_no'],
+                        $row['group'] ?? 'Individual',
                         $row['phone'],
                         $row['loan_no'],
                         $row['expires'],
@@ -4186,7 +4203,7 @@ class LoanReportController extends Controller
                 if ($this->outstandingData->isNotEmpty()) {
                     $s = $this->summary;
                     $rows->push([
-                        'TOTALS', '', '', '', '', '', '', '',
+                        'TOTALS', '', '', '', '', '', '', '', '',
                         $s['total_disbursed'] ?? 0,
                         $s['total_interest'] ?? 0,
                         $s['total_principal_interest'] ?? 0,
@@ -4213,6 +4230,7 @@ class LoanReportController extends Controller
                 return [
                     'Customer',
                     'Customer No',
+                    'Group',
                     'Phone',
                     'Loan No',
                     'Expires',
@@ -4266,13 +4284,14 @@ class LoanReportController extends Controller
     /**
      * Export Loan Outstanding Balance Report to PDF
      */
-    private function exportLoanOutstandingToPdf($outstandingData, $summary, $asOfDate, $branchId = null, $loanOfficerId = null)
+    private function exportLoanOutstandingToPdf($outstandingData, $summary, $asOfDate, $branchId = null, $loanOfficerId = null, $groupId = null)
     {
-        $branch = $branchId ? Branch::find($branchId) : null;
+        $branch = ($branchId && $branchId !== 'all') ? Branch::find($branchId) : null;
         $loanOfficer = $loanOfficerId ? User::find($loanOfficerId) : null;
+        $group = ($groupId && $groupId !== 'all') ? Group::find($groupId) : null;
         $company = Company::first();
 
-        $pdf = \PDF::loadView('loans.reports.loan_outstanding_pdf', compact('outstandingData', 'summary', 'asOfDate', 'branch', 'loanOfficer', 'company'));
+        $pdf = \PDF::loadView('loans.reports.loan_outstanding_pdf', compact('outstandingData', 'summary', 'asOfDate', 'branch', 'loanOfficer', 'group', 'company'));
         $pdf->setPaper('A3', 'landscape');
         $filename = 'loan_outstanding_balance_' . $asOfDate . '.pdf';
         return $pdf->download($filename);
