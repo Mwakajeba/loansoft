@@ -2734,7 +2734,10 @@ class LoanReportController extends Controller
 
         $asOfDate = ($request->get('as_of_date') ?? now()->format('Y-m-d'));
         $branchId = $request->get('branch_id') ?: null;
-        $groupId = $request->get('group_id') ?: null;
+        $groupId = $request->get('group_id');
+        if ($groupId === null || $groupId === '' || $groupId === 'all') {
+            $groupId = 'all';
+        }
         $loanOfficerId = $request->get('loan_officer_id') ?: null;
         $status = $request->get('status') ?: 'active_completed';
         $exportType = $request->get('export_type');
@@ -2791,7 +2794,10 @@ class LoanReportController extends Controller
     {
         $asOfDate = ($request->get('as_of_date') ?? now()->format('Y-m-d'));
         $branchId = $request->get('branch_id') ?: null;
-        $groupId = $request->get('group_id') ?: null;
+        $groupId = $request->get('group_id');
+        if ($groupId === null || $groupId === '' || $groupId === 'all') {
+            $groupId = 'all';
+        }
         $loanOfficerId = $request->get('loan_officer_id') ?: null;
         $status = $request->get('status') ?: 'active_completed';
 
@@ -2809,7 +2815,10 @@ class LoanReportController extends Controller
     {
         $asOfDate = ($request->get('as_of_date') ?? now()->format('Y-m-d'));
         $branchId = $request->get('branch_id') ?: null;
-        $groupId = $request->get('group_id') ?: null;
+        $groupId = $request->get('group_id');
+        if ($groupId === null || $groupId === '' || $groupId === 'all') {
+            $groupId = 'all';
+        }
         $loanOfficerId = $request->get('loan_officer_id') ?: null;
         $status = $request->get('status') ?: 'active_completed';
 
@@ -2875,7 +2884,7 @@ class LoanReportController extends Controller
             ->when($branchId && $branchId !== 'all', function($q) use ($branchId) {
                 return $q->where('branch_id', $branchId);
             })
-            ->when($groupId, function($q) use ($groupId) {
+            ->when($groupId && $groupId !== 'all', function($q) use ($groupId) {
                 return $q->where('group_id', $groupId);
             })
             ->when($loanOfficerId, function($q) use ($loanOfficerId) {

@@ -20,11 +20,11 @@
             <div class="card-body">
                 <form method="GET" action="{{ route('accounting.loans.reports.portfolio') }}">
                     <div class="row">
-                        <div class="col-md-3 mb-3">
+                        <div class="col-md-2 mb-3">
                             <label for="as_of_date" class="form-label">As of Date</label>
                             <input type="date" class="form-control" id="as_of_date" name="as_of_date" value="{{ $asOfDate }}">
                         </div>
-                        <div class="col-md-3 mb-3">
+                        <div class="col-md-2 mb-3">
                             <label for="branch_id" class="form-label">Branch</label>
                             <select class="form-select" id="branch_id" name="branch_id">
                                 @if(($branches->count() ?? 0) > 1)
@@ -32,6 +32,17 @@
                                 @endif
                                 @foreach($branches as $branch)
                                     <option value="{{ $branch->id }}" {{ $branchId == $branch->id ? 'selected' : '' }}>{{ $branch->name }}</option>
+                                @endforeach
+                            </select>
+                        </div>
+                        <div class="col-md-2 mb-3">
+                            <label for="group_id" class="form-label">Group</label>
+                            <select class="form-select" id="group_id" name="group_id">
+                                <option value="all" {{ empty($groupId) || $groupId === 'all' ? 'selected' : '' }}>All Groups</option>
+                                @foreach($groups as $group)
+                                    <option value="{{ $group->id }}" {{ (string) $groupId === (string) $group->id ? 'selected' : '' }}>
+                                        {{ $group->name }}
+                                    </option>
                                 @endforeach
                             </select>
                         </div>
@@ -200,7 +211,7 @@
                     <form method="GET" action="{{ route('accounting.loans.reports.portfolio.export_excel') }}" class="d-inline">
                         <input type="hidden" name="as_of_date" value="{{ request('as_of_date') }}">
                         <input type="hidden" name="branch_id" value="{{ request('branch_id') }}">
-                        <input type="hidden" name="group_id" value="{{ request('group_id') }}">
+                        <input type="hidden" name="group_id" value="{{ $groupId ?? 'all' }}">
                         <input type="hidden" name="loan_officer_id" value="{{ request('loan_officer_id') }}">
                         <input type="hidden" name="status" value="{{ request('status') }}">
                         <button type="submit" class="btn btn-success btn-sm">
@@ -210,7 +221,7 @@
                     <form method="GET" action="{{ route('accounting.loans.reports.portfolio.export_pdf') }}" class="d-inline">
                         <input type="hidden" name="as_of_date" value="{{ request('as_of_date') }}">
                         <input type="hidden" name="branch_id" value="{{ request('branch_id') }}">
-                        <input type="hidden" name="group_id" value="{{ request('group_id') }}">
+                        <input type="hidden" name="group_id" value="{{ $groupId ?? 'all' }}">
                         <input type="hidden" name="loan_officer_id" value="{{ request('loan_officer_id') }}">
                         <input type="hidden" name="status" value="{{ request('status') }}">
                         <button type="submit" class="btn btn-danger btn-sm">
