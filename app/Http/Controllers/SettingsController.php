@@ -7,6 +7,7 @@ use App\Models\Company;
 use App\Models\Branch;
 use App\Models\JobLog;
 use App\Models\Backup;
+use App\Models\DatabaseImport;
 use App\Services\BackupService;
 use App\Services\AiAssistantService;
 use App\Jobs\BackupJob;
@@ -15,6 +16,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Str;
 use Vinkla\Hashids\Facades\Hashids;
 use Yajra\DataTables\Facades\DataTables;
 use App\Jobs\AccruePenaltyJob;
@@ -802,86 +804,182 @@ class SettingsController extends Controller
 
     public function importSqlDatabase(Request $request)
     {
-        if (!auth()->user()->can('restore backup') &&
-            !auth()->user()->can('manage system settings') &&
-            !auth()->user()->hasRole('admin')) {
-            abort(403, 'You do not have permission to import a database.');
+        // Prefer the dedicated Import Database page (background job, zip/gz, status polling).
+        return redirect()->route('settings.import-database');
+    }
+
+    public function importDatabaseSettings()
+    {
+        if (! $this->canManageDatabaseImport()) {
+            abort(403, 'You do not have permission to import databases.');
         }
 
-        FileUploadLimits::prepareLongRunningSqlImport();
+        $imports = DatabaseImport::forCompany()->orderByDesc('created_at')->limit(20)->get();
+        $activeImport = DatabaseImport::forCompany()
+            ->whereIn('status', [DatabaseImport::STATUS_QUEUED, DatabaseImport::STATUS_PROCESSING])
+            ->orderByDesc('id')
+            ->first();
 
-        $maxKb = FileUploadLimits::maxKilobytes();
+        return view('settings.import-database', compact('imports', 'activeImport'));
+    }
 
-        $validated = $request->validate([
-            'sql_file' => 'required|file|max:'.$maxKb,
-            'current_password' => 'required|string',
-            'confirm_import' => 'accepted',
+    public function importDatabase(Request $request)
+    {
+        if (! $this->canManageDatabaseImport()) {
+            abort(403, 'You do not have permission to import databases.');
+        }
+
+        $maxKilobytes = 1024 * 1024; // 1024 MB
+
+        $request->validate([
+            'database_file' => 'required|file|max:'.$maxKilobytes,
+            'mode' => 'required|in:backup,replace',
+            'confirm' => 'accepted',
         ], [
-            'sql_file.max' => 'The SQL file may not be larger than '.FileUploadLimits::maxMegabytesLabel().' MB.',
-            'confirm_import.accepted' => 'You must confirm that the import will overwrite current database data.',
+            'database_file.max' => 'The database file may not be greater than 1024 MB.',
+            'confirm.accepted' => 'You must confirm that you understand this will overwrite the current database.',
         ]);
 
-        if (!Hash::check($validated['current_password'], auth()->user()->password)) {
-            return back()->withErrors([
-                'current_password' => 'The current password is incorrect.',
-            ]);
+        $file = $request->file('database_file');
+        $extension = strtolower($file->getClientOriginalExtension());
+        if (! in_array($extension, ['sql', 'zip', 'gz'], true)) {
+            return redirect()
+                ->route('settings.import-database')
+                ->with('error', 'Only .sql, .sql.gz, or .zip files are allowed.');
         }
 
-        $file = $request->file('sql_file');
-        if (strtolower((string) $file->getClientOriginalExtension()) !== 'sql') {
-            return back()->withErrors([
-                'sql_file' => 'Only .sql database dump files are allowed.',
-            ]);
-        }
+        $busy = DatabaseImport::forCompany()
+            ->whereIn('status', [DatabaseImport::STATUS_QUEUED, DatabaseImport::STATUS_PROCESSING])
+            ->exists();
 
-        $filePath = $file->getRealPath();
-        $sample = file_get_contents($filePath, false, null, 0, 65536);
-        if ($sample === false || trim($sample) === '' ||
-            !preg_match('/\b(CREATE|INSERT|DROP|ALTER|SET|LOCK|REPLACE|USE)\b/i', $sample)) {
-            return back()->withErrors([
-                'sql_file' => 'The uploaded file does not appear to be a valid SQL database dump.',
-            ]);
+        if ($busy) {
+            return redirect()
+                ->route('settings.import-database')
+                ->with('error', 'Another database import is already in progress. Please wait for it to finish.');
         }
-
-        $originalName = $file->getClientOriginalName();
 
         try {
-            $backupService = new BackupService();
+            $directory = 'imports/'.date('Y/m');
+            $storedName = 'import_'.now()->format('Ymd_His').'_'.Str::random(8).'.'.$extension;
+            $storedPath = $file->storeAs($directory, $storedName);
 
-            // Always preserve the current database before performing a destructive import.
-            $safetyBackup = $backupService->createDatabaseBackup(
-                'Automatic safety backup before importing ' . $originalName
-            );
-
-            if ($safetyBackup->status !== 'completed' || (int) $safetyBackup->size <= 0) {
-                throw new \Exception('Safety backup could not be created. Import was aborted.');
-            }
-
-            $backupService->importSqlFile($filePath);
-
-            Log::info('SQL database imported', [
-                'file' => $originalName,
-                'user_id' => auth()->id(),
-                'safety_backup_id' => $safetyBackup->id,
-                'size' => $file->getSize(),
+            $import = DatabaseImport::create([
+                'original_filename' => $file->getClientOriginalName(),
+                'stored_path' => $storedPath,
+                'file_size' => $file->getSize() ?: 0,
+                'mode' => $request->mode,
+                'status' => DatabaseImport::STATUS_QUEUED,
+                'message' => 'Queued for import.',
+                'created_by' => auth()->id(),
+                'company_id' => current_company_id(),
             ]);
+            $import->syncCacheStatus();
 
-            return redirect()->route('settings.backup')->with(
-                'success',
-                'SQL database imported successfully. A safety backup was created first: ' . $safetyBackup->filename
-            );
-        } catch (\Throwable $e) {
-            Log::error('SQL database import failed', [
-                'file' => $originalName,
-                'user_id' => auth()->id(),
-                'error' => $e->getMessage(),
-            ]);
+            // Run via background artisan (does not require queue:work).
+            $this->startDatabaseImportProcess((int) $import->id);
 
-            return redirect()->route('settings.backup')->with(
-                'error',
-                'Database import failed: ' . $e->getMessage()
-            );
+            return redirect()
+                ->route('settings.import-database')
+                ->with('success', 'Database import started in the background. Keep this page open to watch status.');
+        } catch (\Exception $e) {
+            return redirect()
+                ->route('settings.import-database')
+                ->with('error', 'Failed to queue import: '.$e->getMessage());
         }
+    }
+
+    public function processQueuedDatabaseImport($id)
+    {
+        if (! $this->canManageDatabaseImport()) {
+            abort(403, 'You do not have permission to import databases.');
+        }
+
+        $import = DatabaseImport::forCompany()->findOrFail($id);
+
+        if (! in_array($import->status, [DatabaseImport::STATUS_QUEUED, DatabaseImport::STATUS_FAILED], true)) {
+            return redirect()
+                ->route('settings.import-database')
+                ->with('error', 'Only queued or failed imports can be started.');
+        }
+
+        $import->update([
+            'status' => DatabaseImport::STATUS_QUEUED,
+            'message' => 'Restarting import process…',
+            'finished_at' => null,
+        ]);
+        $import->syncCacheStatus();
+
+        $this->startDatabaseImportProcess((int) $import->id);
+
+        return redirect()
+            ->route('settings.import-database')
+            ->with('success', 'Import process started. Status will update shortly.');
+    }
+
+    /**
+     * Spawn `php artisan database-import:process {id}` in the background (no queue worker needed).
+     */
+    protected function startDatabaseImportProcess(int $importId): void
+    {
+        $php = PHP_BINARY ?: 'php';
+        $artisan = base_path('artisan');
+        $logFile = storage_path('logs/database-import-'.$importId.'.log');
+
+        $cmd = sprintf(
+            'nohup %s %s database-import:process %d >> %s 2>&1 & echo $!',
+            escapeshellarg($php),
+            escapeshellarg($artisan),
+            $importId,
+            escapeshellarg($logFile)
+        );
+
+        $pid = trim((string) shell_exec($cmd));
+
+        Log::info('Database import background process started', [
+            'import_id' => $importId,
+            'pid' => $pid !== '' ? $pid : null,
+            'log' => $logFile,
+        ]);
+    }
+
+    public function importDatabaseStatus($id)
+    {
+        if (! $this->canManageDatabaseImport()) {
+            abort(403);
+        }
+
+        $cached = DatabaseImport::cachedStatus((int) $id);
+        $import = DatabaseImport::forCompany()->find($id);
+
+        if ($import) {
+            return response()->json([
+                'id' => $import->id,
+                'status' => $import->status,
+                'message' => $import->message,
+                'mode' => $import->mode,
+                'original_filename' => $import->original_filename,
+                'started_at' => optional($import->started_at)?->toDateTimeString(),
+                'finished_at' => optional($import->finished_at)?->toDateTimeString(),
+            ]);
+        }
+
+        if ($cached) {
+            return response()->json($cached);
+        }
+
+        return response()->json(['message' => 'Import not found.'], 404);
+    }
+
+    protected function canManageDatabaseImport(): bool
+    {
+        $user = auth()->user();
+
+        return $user
+            && (
+                $user->can('restore backup')
+                || $user->can('manage system settings')
+                || $user->hasRole(['admin', 'super-admin'])
+            );
     }
 
     public function downloadBackup($hash_id)

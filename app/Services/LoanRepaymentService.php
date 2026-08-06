@@ -6,6 +6,7 @@ use App\Models\AccruedPenalty;
 use App\Models\Journal;
 use App\Models\JournalItem;
 use App\Models\Loan;
+use App\Models\LoanBill;
 use App\Models\LoanSchedule;
 use App\Models\Repayment;
 use App\Models\Receipt;
@@ -30,18 +31,23 @@ class LoanRepaymentService
         $paymentDateForSms = $paymentData['payment_date'] ?? now();
         
         DB::beginTransaction();
-        $loan = Loan::with(['product', 'customer', 'schedule'])->findOrFail($loanId);
-        $remainingAmount = $amount;
+        $loan = Loan::with(['product', 'customer', 'schedule', 'bills'])->findOrFail($loanId);
+        $remainingAmount = round((float) $amount, 2);
         $processedRepayments = [];
         $totalPaidAmount = 0;
         $allSchedulePayments = [];
+        $billPaidAmount = 0.0;
 
         // Get unpaid schedules ordered by due date
         $unpaidSchedules = $this->getUnpaidSchedules($loan);
-        Log::info('Unpaid schedules loaded', ['count' => $unpaidSchedules->count()]);
+        $openBills = $loan->bills()->open()->orderBy('id')->get();
+        Log::info('Unpaid schedules loaded', [
+            'count' => $unpaidSchedules->count(),
+            'open_bills' => $openBills->count(),
+        ]);
 
-        if ($unpaidSchedules->count() === 0) {
-            throw new \Exception('No unpaid schedules found for this loan.');
+        if ($unpaidSchedules->count() === 0 && $openBills->count() === 0) {
+            throw new \Exception('No unpaid schedules or loan bills found for this loan.');
         }
 
         if ($targetScheduleId !== null && $targetScheduleId !== '') {
@@ -50,6 +56,14 @@ class LoanRepaymentService
                 throw new \Exception('The selected schedule does not belong to this loan.');
             }
             $this->assertSchedulePayableInOrder($loan, $targetScheduleId);
+        }
+
+        // Apply open follow-up bills first (same loan number payment).
+        $reservedForBills = 0.0;
+        if ($openBills->count() > 0) {
+            $openBillsTotal = round((float) $openBills->sum(fn ($bill) => $bill->remaining_amount), 2);
+            $reservedForBills = min($remainingAmount, $openBillsTotal);
+            $remainingAmount = round($remainingAmount - $reservedForBills, 2);
         }
 
         // Step 1: Calculate all schedule payments first to determine total amount
@@ -75,28 +89,45 @@ class LoanRepaymentService
             $processedRepayments[] = $schedulePayment;
         }
 
-        // If no amount was actually allocated to any schedule, abort the transaction
-        if ($totalPaidAmount <= 0) {
+        // If nothing could be allocated to bills or schedules, abort
+        if ($totalPaidAmount <= 0 && $reservedForBills <= 0) {
             Log::warning('Repayment processing resulted in zero allocated amount. Aborting.', [
                 'loan_id' => $loanId,
                 'requested_amount' => $amount,
                 'unpaid_schedules_count' => $unpaidSchedules->count(),
-                'all_schedule_payments' => $allSchedulePayments,
+                'open_bills_count' => $openBills->count(),
             ]);
 
             DB::rollBack();
-            throw new \Exception('Failed to record repayment because no amount could be allocated to any unpaid schedule. Please verify that the loan has outstanding installments.');
+            throw new \Exception('Failed to record repayment because no amount could be allocated to any unpaid schedule or loan bill.');
         }
 
         // Step 2: Create ONE receipt for the total payment amount (only for bank/cash payments)
         $receipt = null;
-        if (isset($paymentData['bank_account_id']) && $paymentData['bank_account_id']) {
-            $receipt = $this->createReceipt($loan, $totalPaidAmount, $paymentData);
+        $receiptTotal = round($totalPaidAmount + $reservedForBills, 2);
+        if (isset($paymentData['bank_account_id']) && $paymentData['bank_account_id'] && $receiptTotal > 0) {
+            $receipt = $this->createReceipt($loan, $receiptTotal, $paymentData);
             Log::info('Receipt created for total payment', [
                 'receipt_id' => $receipt->id,
-                'amount' => $totalPaidAmount,
+                'amount' => $receiptTotal,
                 'loan_id' => $loanId
             ]);
+        }
+
+        if ($reservedForBills > 0 && $openBills->count() > 0) {
+            $billPaidAmount = $this->allocatePaymentToOpenBills(
+                $loan,
+                $openBills,
+                $reservedForBills,
+                $paymentData,
+                $receipt
+            );
+            if ($billPaidAmount > 0) {
+                $processedRepayments[] = [
+                    'type' => 'loan_bill',
+                    'amount' => $billPaidAmount,
+                ];
+            }
         }
 
         // Step 3: Create repayment records for each schedule (detail per installment in repayments table)
@@ -150,19 +181,152 @@ class LoanRepaymentService
 
         // Refresh loan to get updated outstanding balance
         $loan->refresh();
-        $loan->load(['schedule', 'customer', 'company', 'branch.company']);
+        $loan->load(['schedule', 'customer', 'company', 'branch.company', 'bills']);
+
+        $grandPaid = round($totalPaidAmount + $billPaidAmount, 2);
 
         // Send SMS notification to customer after successful repayment
-        $this->sendRepaymentSms($loan, $totalPaidAmount, $paymentDateForSms);
+        $this->sendRepaymentSms($loan, $grandPaid, $paymentDateForSms);
 
         return [
             'success' => true,
-            'paid_amount' => $totalPaidAmount,
+            'paid_amount' => $grandPaid,
             'balance' => $remainingAmount,
             'processed_repayments' => $processedRepayments,
             'loan_status' => $loan->status,
             'receipt_id' => $receipt ? $receipt->id : null
         ];
+    }
+
+    /**
+     * Record a staff payment against a single loan bill (bank receipt).
+     */
+    public function processBillPayment(LoanBill $bill, float $amount, array $paymentData): array
+    {
+        DB::beginTransaction();
+
+        try {
+            $loan = Loan::with(['product', 'customer', 'bills'])->findOrFail($bill->loan_id);
+            $bill->refresh();
+
+            if (! $bill->isOpen()) {
+                throw new \Exception('Bill is not open for payment.');
+            }
+
+            $amount = min(round($amount, 2), $bill->remaining_amount);
+            if ($amount <= 0) {
+                throw new \Exception('Invalid bill payment amount.');
+            }
+
+            $receipt = $this->createReceipt($loan, $amount, array_merge($paymentData, [
+                'description' => $paymentData['comments']
+                    ?? $paymentData['description']
+                    ?? "Loan bill payment: {$bill->description} - Loan #{$loan->id}",
+            ]));
+
+            // Override receipt description when createReceipt ignored custom description.
+            if (! empty($paymentData['comments']) || ! empty($paymentData['description'])) {
+                $receipt->update([
+                    'description' => $paymentData['comments']
+                        ?? $paymentData['description']
+                        ?? $receipt->description,
+                ]);
+            }
+
+            $applied = $this->allocatePaymentToOpenBills(
+                $loan,
+                collect([$bill]),
+                $amount,
+                $paymentData,
+                $receipt
+            );
+
+            if ($applied <= 0) {
+                throw new \Exception('Bill payment was not applied.');
+            }
+
+            DB::commit();
+
+            return [
+                'success' => true,
+                'paid_amount' => $applied,
+                'receipt_id' => $receipt->id,
+                'bill_status' => $bill->fresh()->status,
+            ];
+        } catch (\Throwable $e) {
+            DB::rollBack();
+            throw $e;
+        }
+    }
+
+    /**
+     * Apply available amount to open loan bills (FIFO). Returns amount applied.
+     */
+    private function allocatePaymentToOpenBills(Loan $loan, $openBills, float $availableAmount, array $paymentData, ?Receipt $receipt = null): float
+    {
+        $remaining = round($availableAmount, 2);
+        $totalApplied = 0.0;
+        $userId = $paymentData['user_id'] ?? auth()->id();
+
+        foreach ($openBills as $bill) {
+            if ($remaining <= 0) {
+                break;
+            }
+
+            $bill->refresh();
+            if (! $bill->isOpen()) {
+                continue;
+            }
+
+            $receivableAccountId = $bill->receivable_account_id
+                ?: $loan->product?->principal_receivable_account_id;
+            if ($receipt && ! $receivableAccountId) {
+                throw new \RuntimeException("Loan bill #{$bill->id} has no receivable chart account.");
+            }
+
+            $applied = $bill->applyPayment($remaining);
+            if ($applied <= 0) {
+                continue;
+            }
+
+            $remaining = round($remaining - $applied, 2);
+            $totalApplied = round($totalApplied + $applied, 2);
+
+            if ($receipt && $receivableAccountId) {
+                ReceiptItem::create([
+                    'receipt_id' => $receipt->id,
+                    'chart_account_id' => $receivableAccountId,
+                    'amount' => $applied,
+                    'description' => "Loan bill: {$bill->description}",
+                ]);
+
+                GlTransaction::create([
+                    'chart_account_id' => $receivableAccountId,
+                    'customer_id' => $loan->customer_id,
+                    'amount' => $applied,
+                    'nature' => 'credit',
+                    'transaction_id' => $receipt->id,
+                    'transaction_type' => 'receipt',
+                    'date' => $receipt->date,
+                    'description' => "Loan bill payment: {$bill->description} (Loan #{$loan->id})",
+                    'branch_id' => $receipt->branch_id,
+                    'user_id' => $userId,
+                ]);
+            }
+
+            if ($receipt && $bill->status === LoanBill::STATUS_PAID && ! $bill->receipt_id) {
+                $bill->update(['receipt_id' => $receipt->id]);
+            }
+
+            Log::info('Loan bill payment applied', [
+                'bill_id' => $bill->id,
+                'loan_id' => $loan->id,
+                'applied' => $applied,
+                'status' => $bill->status,
+            ]);
+        }
+
+        return $totalApplied;
     }
 
     /**
@@ -400,17 +564,19 @@ class LoanRepaymentService
             'reference_number' => null,
             'amount' => $totalAmount,
             'date' => $paymentData['payment_date'] ?? now(),
-            'description' => "Loan repayment for {$loan->customer->name} - Loan #{$loan->id}",
-            'user_id' => auth()->id(),
+            'description' => $paymentData['description']
+                ?? $paymentData['comments']
+                ?? "Loan repayment for {$loan->customer->name} - Loan #{$loan->id}",
+            'user_id' => $paymentData['user_id'] ?? auth()->id(),
             'bank_account_id' => $paymentData['bank_account_id'] ?? $loan->bank_account_id,
             // Ensure receipt is linked to the customer model as well as payee fields
             'payee_type' => 'customer',
             'payee_id' => $loan->customer_id,
             'payee_name' => $loan->customer->name,
             'customer_id' => $loan->customer_id,
-            'branch_id' => auth()->user()->branch_id ?? 1,
+            'branch_id' => $paymentData['branch_id'] ?? auth()->user()->branch_id ?? 1,
             'approved' => true,
-            'approved_by' => auth()->id(),
+            'approved_by' => $paymentData['user_id'] ?? auth()->id(),
             'approved_at' => now(),
         ]);
 
@@ -433,7 +599,7 @@ class LoanRepaymentService
                 'date' => $receipt->date,
                 'description' => "Loan repayment received - {$loan->customer->name}",
                 'branch_id' => $receipt->branch_id,
-                'user_id' => auth()->id(),
+                'user_id' => $paymentData['user_id'] ?? auth()->id(),
             ]);
             Log::info('Bank debit GL transaction created', [
                 'receipt_id' => $receipt->id,

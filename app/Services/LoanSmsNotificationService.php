@@ -6,6 +6,7 @@ use App\Helpers\SmsHelper;
 use App\Models\Branch;
 use App\Models\Company;
 use App\Models\Loan;
+use App\Models\LoanBill;
 use App\Services\DcbEpgAuthService;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Log;
@@ -172,6 +173,180 @@ class LoanSmsNotificationService
                 'error' => $e->getMessage(),
             ]);
         }
+    }
+
+    /**
+     * SMS when a follow-up / other loan bill is created.
+     */
+    public function sendLoanBillNotification(Loan $loan, LoanBill $bill): void
+    {
+        try {
+            $loan->loadMissing(['customer', 'branch.company', 'product']);
+            $customer = $loan->customer;
+
+            if (! $customer || empty($customer->phone1)) {
+                Log::info('Skipping loan bill SMS — customer phone missing', [
+                    'loan_id' => $loan->id,
+                    'bill_id' => $bill->id,
+                ]);
+
+                return;
+            }
+
+            $loan->unsetRelation('bills');
+            $totalOutstanding = $loan->getTotalOutstandingAmount();
+            $message = $this->buildLoanBillMessage(
+                $loan,
+                (float) $bill->amount,
+                (string) $bill->description,
+                $totalOutstanding
+            );
+
+            $phone = $this->normalizePhone($customer->phone1);
+            $smsResult = SmsHelper::send($phone, $message);
+
+            if (is_array($smsResult) && ($smsResult['success'] ?? false)) {
+                Log::info('Loan bill SMS sent', [
+                    'loan_id' => $loan->id,
+                    'bill_id' => $bill->id,
+                    'phone' => $phone,
+                ]);
+            } else {
+                Log::warning('Loan bill SMS failed', [
+                    'loan_id' => $loan->id,
+                    'bill_id' => $bill->id,
+                    'phone' => $phone,
+                    'error' => is_array($smsResult) ? ($smsResult['error'] ?? 'Unknown') : $smsResult,
+                ]);
+            }
+        } catch (\Throwable $e) {
+            Log::error('Failed to send loan bill SMS', [
+                'loan_id' => $loan->id ?? null,
+                'bill_id' => $bill->id ?? null,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * Loan bill SMS body. Also used to preview the message before the bill is created.
+     */
+    public function buildLoanBillMessage(
+        Loan $loan,
+        float $amount,
+        string $description,
+        ?float $totalOutstanding = null
+    ): string {
+        $loan->loadMissing(['customer', 'branch.company']);
+        $customer = $loan->customer;
+
+        $company = $this->resolveCompany($loan, $customer);
+        $companyName = $company?->name ?? 'SAFCO FINTECH';
+        $companyPhone = $this->normalizePhone($company?->phone ?? '');
+        $controlNo = trim((string) ($loan->loanNo ?? ''));
+
+        $billAmount = number_format($amount, 0);
+        $description = trim($description);
+        $customerName = strtoupper(trim((string) ($customer->name ?? '')));
+
+        $message = "{$customerName}, una bili ya Tsh {$billAmount}";
+        if ($description !== '') {
+            $message .= " ({$description})";
+        }
+
+        $loanAmount = number_format((float) $loan->amount, 0);
+        $loanDateValue = $loan->disbursed_on ?? $loan->date_applied ?? $loan->created_at;
+        $loanDate = $loanDateValue ? Carbon::parse($loanDateValue)->format('d/m/Y') : '—';
+        $message .= " kwa mkopo wa kiasi cha Tsh {$loanAmount} wa tarehe {$loanDate}.";
+
+        $totalOutstanding ??= $loan->getTotalOutstandingAmount() + $amount;
+        $message .= ' Jumla ya salio la mkopo pamoja na bili hii ni Tsh '
+            .number_format($totalOutstanding, 0).'.';
+
+        if ($controlNo !== '' && ! str_starts_with($controlNo, 'TMP-')) {
+            $message .= " Lipa kwa kutumia namba {$controlNo} kupitia benki zote au mitandao ya simu.";
+        }
+
+        $message .= " Asante. Ujumbe umetoka {$companyName}";
+        if ($companyPhone !== '') {
+            $message .= " kwa mawasiliano piga {$companyPhone}";
+        }
+
+        return $message;
+    }
+
+    /**
+     * SMS after a partial or full loan bill payment.
+     */
+    public function sendLoanBillPaymentNotification(LoanBill $bill, float $paidAmount): void
+    {
+        try {
+            $bill->loadMissing(['loan.customer', 'loan.branch.company']);
+            $loan = $bill->loan;
+            $customer = $loan?->customer;
+
+            if (! $loan || ! $customer || empty($customer->phone1)) {
+                Log::info('Skipping loan bill payment SMS — customer phone missing', [
+                    'loan_bill_id' => $bill->id,
+                    'loan_id' => $loan?->id,
+                ]);
+
+                return;
+            }
+
+            $message = $this->buildLoanBillPaymentMessage($bill, $paidAmount);
+            $phone = $this->normalizePhone($customer->phone1);
+            $smsResult = SmsHelper::send($phone, $message);
+
+            if (is_array($smsResult) && ($smsResult['success'] ?? false)) {
+                Log::info('Loan bill payment SMS sent', [
+                    'loan_bill_id' => $bill->id,
+                    'loan_id' => $loan->id,
+                    'phone' => $phone,
+                    'paid_amount' => $paidAmount,
+                    'remaining_amount' => $bill->remaining_amount,
+                ]);
+            } else {
+                Log::warning('Loan bill payment SMS failed', [
+                    'loan_bill_id' => $bill->id,
+                    'loan_id' => $loan->id,
+                    'phone' => $phone,
+                    'error' => is_array($smsResult) ? ($smsResult['error'] ?? 'Unknown') : $smsResult,
+                ]);
+            }
+        } catch (\Throwable $e) {
+            Log::error('Failed to send loan bill payment SMS', [
+                'loan_bill_id' => $bill->id ?? null,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    public function buildLoanBillPaymentMessage(LoanBill $bill, float $paidAmount): string
+    {
+        $bill->loadMissing(['loan.customer', 'loan.branch.company']);
+        $loan = $bill->loan;
+        $customer = $loan?->customer;
+        $company = $loan ? $this->resolveCompany($loan, $customer) : null;
+        $companyName = $company?->name ?? 'SAFCO FINTECH';
+        $companyPhone = $this->normalizePhone($company?->phone ?? '');
+
+        $billAmount = number_format((float) $bill->amount, 0);
+        $paid = number_format($paidAmount, 0);
+        $remaining = number_format((float) $bill->remaining_amount, 0);
+        $description = trim((string) $bill->description);
+
+        $message = "Bill ya Tsh {$billAmount}";
+        if ($description !== '') {
+            $message .= " ({$description})";
+        }
+        $message .= " imelipiwa kiasi cha Tsh {$paid} na imebaki Tsh {$remaining}.";
+        $message .= " Asante. Ujumbe umetoka {$companyName}";
+        if ($companyPhone !== '') {
+            $message .= " kwa mawasiliano piga {$companyPhone}";
+        }
+
+        return $message;
     }
 
     private function sendToCustomerAndCompany(

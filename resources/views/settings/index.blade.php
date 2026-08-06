@@ -134,6 +134,24 @@
                             </div>
                             @endcan
 
+                            <!-- Import Database -->
+                            @can('restore backup')
+                            <div class="col-md-6 col-lg-4 mb-4">
+                                <div class="card border-primary">
+                                    <div class="card-body text-center">
+                                        <div class="mb-3">
+                                            <i class="bx bx-import fs-1 text-primary"></i>
+                                        </div>
+                                        <h5 class="card-title">Import Database</h5>
+                                        <p class="card-text">Upload a SQL dump (up to 1024 MB) with optional safety backup.</p>
+                                        <a href="{{ route('settings.import-database') }}" class="btn btn-primary">
+                                            <i class="bx bx-import me-1"></i> Import
+                                        </a>
+                                    </div>
+                                </div>
+                            </div>
+                            @endcan
+
                             <!-- AI Assistant
                                                                 @can('use AI assistant')
                                                                 <div class="col-md-6 col-lg-4 mb-4">

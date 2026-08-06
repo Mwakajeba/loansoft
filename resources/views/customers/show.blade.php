@@ -480,6 +480,108 @@
                         </div>
                     </div>
 
+            {{-- Customer GPS Locations --}}
+            <div class="row mt-4 g-4">
+                @foreach ([
+                    'home' => ['title' => 'Home Google Map Location', 'icon' => 'bx-home-heart', 'color' => 'primary'],
+                    'business' => ['title' => 'Business Google Map Location', 'icon' => 'bx-briefcase-alt-2', 'color' => 'success'],
+                ] as $locationType => $locationConfig)
+                    @php
+                        $latitude = $customer->getAttribute("{$locationType}_latitude");
+                        $longitude = $customer->getAttribute("{$locationType}_longitude");
+                        $accuracy = $customer->getAttribute("{$locationType}_location_accuracy");
+                        $capturedAt = $customer->getAttribute("{$locationType}_location_captured_at");
+                        $capturedBy = $locationType === 'home'
+                            ? $customer->homeLocationCapturedBy
+                            : $customer->businessLocationCapturedBy;
+                        $hasLocation = $latitude !== null && $longitude !== null;
+                    @endphp
+
+                    <div class="col-lg-6">
+                        <div class="card radius-10 h-100">
+                            <div class="card-header bg-{{ $locationConfig['color'] }} text-white">
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <h6 class="mb-0 text-white">
+                                        <i class="bx {{ $locationConfig['icon'] }} me-2"></i>
+                                        {{ $locationConfig['title'] }}
+                                    </h6>
+                                    @if ($hasLocation)
+                                        <span class="badge bg-white text-{{ $locationConfig['color'] }}">GPS Saved</span>
+                                    @endif
+                                </div>
+                            </div>
+
+                            <div class="card-body">
+                                @if ($hasLocation)
+                                    <div class="ratio ratio-16x9 rounded overflow-hidden border mb-3">
+                                        <iframe
+                                            src="https://www.google.com/maps?q={{ $latitude }},{{ $longitude }}&z=17&output=embed"
+                                            title="{{ $locationConfig['title'] }}"
+                                            loading="lazy"
+                                            allowfullscreen
+                                            referrerpolicy="no-referrer-when-downgrade">
+                                        </iframe>
+                                    </div>
+
+                                    <div class="row g-2 small mb-3">
+                                        <div class="col-sm-6">
+                                            <span class="text-muted">Coordinates:</span><br>
+                                            <span class="font-monospace fw-semibold">{{ $latitude }}, {{ $longitude }}</span>
+                                        </div>
+                                        <div class="col-sm-6">
+                                            <span class="text-muted">GPS accuracy:</span><br>
+                                            <span class="fw-semibold">
+                                                {{ $accuracy !== null ? number_format((float) $accuracy, 0).' metres' : 'Not available' }}
+                                            </span>
+                                        </div>
+                                        <div class="col-sm-6">
+                                            <span class="text-muted">Captured:</span><br>
+                                            <span class="fw-semibold">{{ $capturedAt?->format('d/m/Y H:i') ?? '—' }}</span>
+                                        </div>
+                                        <div class="col-sm-6">
+                                            <span class="text-muted">Captured by:</span><br>
+                                            <span class="fw-semibold">{{ $capturedBy?->name ?? '—' }}</span>
+                                        </div>
+                                    </div>
+                                @else
+                                    <div class="text-center py-5">
+                                        <i class="bx bx-map-pin display-3 text-muted"></i>
+                                        <h6 class="mt-3">Location has not been captured</h6>
+                                        <p class="text-muted mb-0">
+                                            Visit the customer's {{ $locationType }} location with a GPS-enabled phone,
+                                            then tap the capture button.
+                                        </p>
+                                    </div>
+                                @endif
+                            </div>
+
+                            <div class="card-footer bg-white d-flex flex-wrap gap-2">
+                                <button type="button"
+                                    class="btn btn-{{ $locationConfig['color'] }}"
+                                    onclick="captureCustomerGps('{{ $locationType }}', '{{ $locationConfig['title'] }}')">
+                                    <i class="bx bx-current-location me-1"></i>
+                                    {{ $hasLocation ? 'Update GPS Location' : 'Capture GPS Location' }}
+                                </button>
+
+                                @if ($hasLocation)
+                                    <a class="btn btn-outline-secondary"
+                                        href="https://www.google.com/maps/dir/?api=1&destination={{ $latitude }},{{ $longitude }}"
+                                        target="_blank" rel="noopener">
+                                        <i class="bx bx-navigation me-1"></i>Get Directions
+                                    </a>
+                                    <a class="btn btn-outline-{{ $locationConfig['color'] }}"
+                                        href="https://www.google.com/maps?q={{ $latitude }},{{ $longitude }}"
+                                        target="_blank" rel="noopener">
+                                        <i class="bx bx-map me-1"></i>Open Map
+                                    </a>
+                                @endif
+                            </div>
+                        </div>
+                    </div>
+                @endforeach
+            </div>
+
+
                     <!-- Modern Document Management Card -->
                     <div class="col-xl-12">
                         <div class="card">
@@ -895,6 +997,95 @@
 
         @push('scripts')
             <script>
+
+            function captureCustomerGps(locationType, locationLabel) {
+                if (!navigator.geolocation) {
+                    Swal.fire({
+                        icon: 'error',
+                        title: 'GPS Not Supported',
+                        text: 'This phone or browser does not support GPS location capture.'
+                    });
+                    return;
+                }
+
+                Swal.fire({
+                    title: `Capture ${locationLabel}?`,
+                    html: 'Stand at the exact customer location, switch on phone GPS, then press <strong>Capture Now</strong>.',
+                    icon: 'question',
+                    showCancelButton: true,
+                    confirmButtonText: '<i class="bx bx-current-location me-1"></i> Capture Now',
+                    cancelButtonText: 'Cancel'
+                }).then((result) => {
+                    if (!result.isConfirmed) return;
+
+                    Swal.fire({
+                        title: 'Getting GPS location...',
+                        text: 'Please remain at the location and keep GPS enabled.',
+                        allowOutsideClick: false,
+                        didOpen: () => Swal.showLoading()
+                    });
+
+                    navigator.geolocation.getCurrentPosition(
+                        async (position) => {
+                            const locationUrl = @json(
+                                route('customers.gps-location.update', [
+                                    Vinkla\Hashids\Facades\Hashids::encode($customer->id),
+                                    'LOCATION_TYPE'
+                                ])
+                            ).replace('LOCATION_TYPE', locationType);
+
+                            try {
+                                const response = await fetch(locationUrl, {
+                                    method: 'POST',
+                                    headers: {
+                                        'Content-Type': 'application/json',
+                                        'Accept': 'application/json',
+                                        'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content
+                                    },
+                                    body: JSON.stringify({
+                                        latitude: position.coords.latitude,
+                                        longitude: position.coords.longitude,
+                                        accuracy: position.coords.accuracy
+                                    })
+                                });
+                                const data = await response.json();
+                                if (!response.ok || !data.success) {
+                                    throw new Error(data.message || 'Unable to save GPS location.');
+                                }
+
+                                await Swal.fire({
+                                    icon: 'success',
+                                    title: 'Location saved',
+                                    html: `${locationLabel} saved successfully.<br><small>GPS accuracy: ${Math.round(position.coords.accuracy)} metres</small>`,
+                                    timer: 1800,
+                                    showConfirmButton: false
+                                });
+                                window.location.reload();
+                            } catch (error) {
+                                Swal.fire({
+                                    icon: 'error',
+                                    title: 'Save failed',
+                                    text: error.message || 'Unable to save GPS location.'
+                                });
+                            }
+                        },
+                        (error) => {
+                            const messages = {
+                                1: 'Location permission was denied. Allow location access in the browser settings and try again.',
+                                2: 'GPS location is unavailable. Switch on phone GPS, move to an open area, and try again.',
+                                3: 'GPS request timed out. Check the GPS signal and try again.'
+                            };
+                            Swal.fire({
+                                icon: 'error',
+                                title: 'GPS error',
+                                text: messages[error.code] || error.message || 'Unable to read the phone GPS location.'
+                            });
+                        },
+                        { enableHighAccuracy: true, timeout: 30000, maximumAge: 0 }
+                    );
+                });
+            }
+
                 // Modern Document Upload System
                 class DocumentUploader {
                     constructor() {
