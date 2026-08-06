@@ -16,6 +16,16 @@ class Customer extends Model
         'description', // Added description
         'work',
         'workAddress',
+        'home_latitude',
+        'home_longitude',
+        'home_location_accuracy',
+        'home_location_captured_at',
+        'home_location_captured_by',
+        'business_latitude',
+        'business_longitude',
+        'business_location_accuracy',
+        'business_location_captured_at',
+        'business_location_captured_by',
         'phone1',
         'phone2',
         'registrar',
@@ -44,9 +54,27 @@ class Customer extends Model
         'dob' => 'date',
         'dateRegistered' => 'date',
         'has_cash_collateral' => 'boolean',
+        'home_latitude' => 'decimal:7',
+        'home_longitude' => 'decimal:7',
+        'home_location_accuracy' => 'decimal:2',
+        'home_location_captured_at' => 'datetime',
+        'business_latitude' => 'decimal:7',
+        'business_longitude' => 'decimal:7',
+        'business_location_accuracy' => 'decimal:2',
+        'business_location_captured_at' => 'datetime',
     ];
 
     // Relationships
+    public function homeLocationCapturedBy()
+    {
+        return $this->belongsTo(User::class, 'home_location_captured_by');
+    }
+
+    public function businessLocationCapturedBy()
+    {
+        return $this->belongsTo(User::class, 'business_location_captured_by');
+    }
+
     public function region()
     {
         return $this->belongsTo(Region::class);

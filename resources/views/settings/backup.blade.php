@@ -159,78 +159,22 @@
             @if(auth()->user()->can('restore backup') ||
                 auth()->user()->can('manage system settings') ||
                 auth()->user()->hasRole('admin'))
-            <!-- Import SQL Database -->
+            <!-- Import Database -->
             <div class="col-12">
-                <div class="card border-danger">
-                    <div class="card-header bg-danger text-white">
-                        <h5 class="mb-0">
-                            <i class="bx bx-import me-2"></i>Import SQL Database
-                        </h5>
-                    </div>
-                    <div class="card-body">
-                        <div class="alert alert-warning">
-                            <i class="bx bx-error-circle me-1"></i>
-                            <strong>Warning:</strong> importing a SQL dump can overwrite all current database data.
-                            The system creates a safety database backup before starting the import.
+                <div class="card border-primary">
+                    <div class="card-body d-flex flex-wrap justify-content-between align-items-center gap-3">
+                        <div>
+                            <h5 class="mb-1">
+                                <i class="bx bx-import me-2 text-primary"></i>Import Database
+                            </h5>
+                            <p class="text-muted mb-0">
+                                Upload a <code>.sql</code> / <code>.sql.gz</code> / <code>.zip</code> dump (up to 1024&nbsp;MB)
+                                with background processing and optional safety backup.
+                            </p>
                         </div>
-
-                        <form id="sqlImportForm" action="{{ route('settings.backup.import-sql') }}"
-                            method="POST" enctype="multipart/form-data">
-                            @csrf
-                            <div class="row align-items-end">
-                                <div class="col-md-5">
-                                    <div class="mb-3">
-                                        <label for="sql_file" class="form-label">
-                                            SQL dump file <span class="text-danger">*</span>
-                                        </label>
-                                        <input type="file"
-                                            class="form-control @error('sql_file') is-invalid @enderror"
-                                            id="sql_file" name="sql_file" accept=".sql" required>
-                                        @error('sql_file')
-                                            <div class="invalid-feedback">{{ $message }}</div>
-                                        @enderror
-                                        <div class="form-text">
-                                            MySQL/MariaDB .sql files only, maximum
-                                            {{ \App\Support\Upload\FileUploadLimits::maxMegabytesLabel() }} MB
-                                            (set <code>UPLOAD_MAX_FILE_SIZE</code> in .env to increase).
-                                        </div>
-                                    </div>
-                                </div>
-                                <div class="col-md-4">
-                                    <div class="mb-3">
-                                        <label for="current_password" class="form-label">
-                                            Your current password <span class="text-danger">*</span>
-                                        </label>
-                                        <input type="password"
-                                            class="form-control @error('current_password') is-invalid @enderror"
-                                            id="current_password" name="current_password"
-                                            autocomplete="current-password" required>
-                                        @error('current_password')
-                                            <div class="invalid-feedback">{{ $message }}</div>
-                                        @enderror
-                                    </div>
-                                </div>
-                                <div class="col-md-3">
-                                    <div class="mb-3">
-                                        <button type="submit" class="btn btn-danger w-100">
-                                            <i class="bx bx-import me-1"></i> Import Database
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div class="form-check">
-                                <input class="form-check-input @error('confirm_import') is-invalid @enderror"
-                                    type="checkbox" value="1" id="confirm_import" name="confirm_import" required>
-                                <label class="form-check-label" for="confirm_import">
-                                    I understand that this import can replace current users, loans,
-                                    accounting transactions, settings, and all other database records.
-                                </label>
-                                @error('confirm_import')
-                                    <div class="invalid-feedback">{{ $message }}</div>
-                                @enderror
-                            </div>
-                        </form>
+                        <a href="{{ route('settings.import-database') }}" class="btn btn-primary">
+                            <i class="bx bx-import me-1"></i> Open Import Database
+                        </a>
                     </div>
                 </div>
             </div>
@@ -362,37 +306,6 @@ $(document).ready(function() {
 });
 
 document.addEventListener('DOMContentLoaded', function() {
-    const sqlImportForm = document.getElementById('sqlImportForm');
-    if (sqlImportForm) {
-        sqlImportForm.addEventListener('submit', function(event) {
-            if (sqlImportForm.dataset.confirmed === '1') {
-                const button = sqlImportForm.querySelector('button[type="submit"]');
-                if (button) {
-                    button.disabled = true;
-                    button.innerHTML = '<i class="bx bx-loader-alt bx-spin me-1"></i> Importing...';
-                }
-                return;
-            }
-
-            event.preventDefault();
-            Swal.fire({
-                title: 'Import this SQL database?',
-                html: 'Current database records may be permanently overwritten.<br><strong>Do not close the page until the import finishes.</strong>',
-                icon: 'warning',
-                showCancelButton: true,
-                confirmButtonColor: '#dc3545',
-                cancelButtonColor: '#6c757d',
-                confirmButtonText: 'Yes, create backup and import',
-                cancelButtonText: 'Cancel'
-            }).then((result) => {
-                if (result.isConfirmed) {
-                    sqlImportForm.dataset.confirmed = '1';
-                    sqlImportForm.requestSubmit();
-                }
-            });
-        });
-    }
-
     // Make functions globally available
     window.confirmRestore = function(backupId, backupName) {
         Swal.fire({

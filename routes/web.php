@@ -318,6 +318,12 @@ Route::prefix('settings')->name('settings.')->middleware(['auth', 'company.scope
     Route::delete('/backup/{hash_id}', [SettingsController::class, 'deleteBackup'])->name('backup.delete');
     Route::post('/backup/clean', [SettingsController::class, 'cleanOldBackups'])->name('backup.clean');
 
+    // Database Import (background job with status polling)
+    Route::get('/import-database', [SettingsController::class, 'importDatabaseSettings'])->name('import-database');
+    Route::post('/import-database', [SettingsController::class, 'importDatabase'])->name('import-database.store');
+    Route::post('/import-database/{id}/process', [SettingsController::class, 'processQueuedDatabaseImport'])->name('import-database.process');
+    Route::get('/import-database/{id}/status', [SettingsController::class, 'importDatabaseStatus'])->name('import-database.status');
+
     // AI Assistant Settings
     Route::get('/ai', [SettingsController::class, 'aiAssistantSettings'])->name('ai');
     Route::post('/ai/chat', [SettingsController::class, 'aiChat'])->name('ai.chat')->withoutMiddleware(\Illuminate\Foundation\Http\Middleware\ValidateCsrfToken::class);
@@ -919,6 +925,9 @@ Route::middleware(['auth'])->group(function () {
     Route::get('customers/download-sample', [CustomerController::class, 'downloadSample'])->name('customers.download-sample');
 
     // Documents upload/delete
+    Route::post('customers/{encodedCustomerId}/gps-location/{locationType}', [CustomerController::class, 'updateGpsLocation'])
+        ->whereIn('locationType', ['home', 'business'])
+        ->name('customers.gps-location.update');
     Route::post('customers/{encodedCustomerId}/documents', [CustomerController::class, 'uploadDocuments'])->name('customers.documents.upload');
     Route::delete('customers/{encodedCustomerId}/documents/{pivotId}', [CustomerController::class, 'deleteDocument'])->name('customers.documents.delete');
     Route::get('customers/{encodedCustomerId}/documents/{pivotId}/view', [CustomerController::class, 'viewDocument'])->name('customers.documents.view');
@@ -1081,6 +1090,10 @@ Route::middleware(['auth'])->group(function () {
     Route::post('loans/calculate-summary', [LoanController::class, 'calculateLoanSummary'])->name('loans.calculate-summary');
     Route::post('loans', [LoanController::class, 'store'])->name('loans.store')->middleware('can:create loan');
     Route::get('loans/{encodedId}/schedule/pdf', [LoanController::class, 'exportSchedulePdf'])->name('loans.schedule.pdf');
+    Route::get('loans/{encodedId}/bills/create', [\App\Http\Controllers\LoanBillController::class, 'create'])->name('loans.bills.create');
+    Route::post('loans/{encodedId}/bills', [\App\Http\Controllers\LoanBillController::class, 'store'])->name('loans.bills.store');
+    Route::post('loan-bills/{encodedBillId}/pay', [\App\Http\Controllers\LoanBillController::class, 'pay'])->name('loans.bills.pay');
+    Route::delete('loan-bills/{encodedBillId}', [\App\Http\Controllers\LoanBillController::class, 'destroy'])->name('loans.bills.destroy');
     Route::get('loans/{loan}', [LoanController::class, 'show'])->name('loans.show');
     Route::get('loans/{encodedId}/edit', [LoanController::class, 'edit'])->name('loans.edit');
     Route::put('loans/{encodedId}', [LoanController::class, 'update'])->name('loans.update');

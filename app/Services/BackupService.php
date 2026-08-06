@@ -169,16 +169,19 @@ class BackupService
     /**
      * Create a database backup (synchronous; for backwards compatibility).
      */
-    public function createDatabaseBackup($description = null)
+    public function createDatabaseBackup($description = null, ?int $userId = null, ?int $companyId = null)
     {
+        $userId = $userId ?? auth()->id();
+        $companyId = $companyId ?? current_company_id();
+
         try {
             $result = $this->executeDatabaseBackup();
             return Backup::create(array_merge($result, [
                 'type' => 'database',
                 'description' => $description,
                 'status' => 'completed',
-                'created_by' => auth()->id(),
-                'company_id' => current_company_id(),
+                'created_by' => $userId,
+                'company_id' => $companyId,
             ]));
         } catch (\Exception $e) {
             Backup::create([
@@ -189,8 +192,8 @@ class BackupService
                 'size' => 0,
                 'description' => $description,
                 'status' => 'failed',
-                'created_by' => auth()->id(),
-                'company_id' => current_company_id(),
+                'created_by' => $userId,
+                'company_id' => $companyId,
             ]);
             throw $e;
         }
@@ -367,11 +370,108 @@ class BackupService
     }
 
     /**
-     * Restore database from SQL file
+     * Restore database from SQL file (.sql, .sql.gz, or .zip containing .sql).
      */
     protected function restoreDatabaseBackup($filePath)
     {
-        return $this->importSqlFile($filePath);
+        return $this->importSqlFile($this->resolveSqlFilePath($filePath));
+    }
+
+    /**
+     * Import an uploaded SQL dump, optionally backing up first.
+     *
+     * Modes:
+     * - backup: create a safety mysqldump, then import
+     * - replace: import without a safety backup
+     *
+     * @return array{backup: ?\App\Models\Backup}
+     */
+    public function importUploadedDatabase(
+        string $absoluteSqlPath,
+        string $mode,
+        ?int $userId = null,
+        ?int $companyId = null
+    ): array {
+        if (! file_exists($absoluteSqlPath)) {
+            throw new \Exception('Import file not found.');
+        }
+
+        $backup = null;
+
+        if ($mode === 'backup') {
+            $backup = $this->createDatabaseBackup(
+                'Auto backup before database import',
+                $userId,
+                $companyId
+            );
+
+            if ($backup->status !== 'completed' || (int) $backup->size <= 0) {
+                throw new \Exception('Safety backup could not be created. Import was aborted.');
+            }
+        } elseif ($mode !== 'replace') {
+            throw new \Exception('Invalid import mode.');
+        }
+
+        $this->restoreDatabaseBackup($absoluteSqlPath);
+
+        $cfg = $this->databaseConnectionConfig();
+        DB::purge($cfg['connection']);
+        DB::reconnect($cfg['connection']);
+
+        return ['backup' => $backup];
+    }
+
+    /**
+     * Resolve .sql path; extract first .sql from a zip/gz if needed.
+     */
+    protected function resolveSqlFilePath(string $filePath): string
+    {
+        $extension = strtolower(pathinfo($filePath, PATHINFO_EXTENSION));
+
+        if ($extension === 'sql') {
+            return $filePath;
+        }
+
+        if ($extension === 'zip') {
+            $zip = new ZipArchive();
+            if ($zip->open($filePath) !== true) {
+                throw new \Exception('Could not open ZIP import file.');
+            }
+
+            $extractDir = storage_path('app/'.$this->tempPath.'/import_'.uniqid());
+            File::makeDirectory($extractDir, 0755, true);
+            $zip->extractTo($extractDir);
+            $zip->close();
+
+            $sqlFiles = collect(File::allFiles($extractDir))
+                ->filter(fn ($file) => strtolower($file->getExtension()) === 'sql')
+                ->values();
+
+            if ($sqlFiles->isEmpty()) {
+                File::deleteDirectory($extractDir);
+                throw new \Exception('ZIP archive does not contain a .sql file.');
+            }
+
+            return $sqlFiles->first()->getPathname();
+        }
+
+        if ($extension === 'gz') {
+            $target = storage_path('app/'.$this->tempPath.'/import_'.uniqid().'.sql');
+            $gz = gzopen($filePath, 'rb');
+            if ($gz === false) {
+                throw new \Exception('Could not open gzipped SQL file.');
+            }
+            $out = fopen($target, 'wb');
+            while (! gzeof($gz)) {
+                fwrite($out, gzread($gz, 1024 * 512));
+            }
+            gzclose($gz);
+            fclose($out);
+
+            return $target;
+        }
+
+        throw new \Exception('Unsupported import file type. Use .sql, .sql.gz, or .zip.');
     }
 
     /**
@@ -379,7 +479,9 @@ class BackupService
      */
     public function importSqlFile(string $filePath): bool
     {
-        if (!is_file($filePath) || !is_readable($filePath)) {
+        $sqlPath = $this->resolveSqlFilePath($filePath);
+
+        if (!is_file($sqlPath) || !is_readable($sqlPath)) {
             throw new \Exception('SQL file is missing or unreadable.');
         }
 
@@ -395,7 +497,7 @@ class BackupService
         ];
 
         $descriptors = [
-            0 => ['file', $filePath, 'r'],
+            0 => ['file', $sqlPath, 'r'],
             1 => ['pipe', 'w'],
             2 => ['pipe', 'w'],
         ];

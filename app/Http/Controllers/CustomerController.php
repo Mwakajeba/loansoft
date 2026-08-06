@@ -422,9 +422,70 @@ class CustomerController extends Controller
             abort(404);
         }
 
-        $customer = Customer::with('collaterals.type', 'loans', 'loanOfficers', 'filetypes', 'groups')->findOrFail($id);
+        $customer = Customer::with(
+            'collaterals.type',
+            'loans',
+            'loanOfficers',
+            'filetypes',
+            'groups',
+            'homeLocationCapturedBy',
+            'businessLocationCapturedBy'
+        )->findOrFail($id);
 
         return view('customers.show', compact('customer'));
+    }
+
+    /**
+     * Capture a customer's home or business position from a phone GPS.
+     */
+    public function updateGpsLocation(Request $request, $encodedId, string $locationType)
+    {
+        $id = Hashids::decode($encodedId)[0] ?? null;
+        if (! $id) {
+            return response()->json(['success' => false, 'message' => 'Customer not found.'], 404);
+        }
+
+        if (! in_array($locationType, ['home', 'business'], true)) {
+            return response()->json(['success' => false, 'message' => 'Invalid location type.'], 422);
+        }
+
+        $validated = $request->validate([
+            'latitude' => 'required|numeric|between:-90,90',
+            'longitude' => 'required|numeric|between:-180,180',
+            'accuracy' => 'nullable|numeric|min:0|max:100000',
+        ]);
+
+        $customer = Customer::findOrFail($id);
+        $prefix = $locationType === 'home' ? 'home' : 'business';
+
+        $customer->update([
+            "{$prefix}_latitude" => round((float) $validated['latitude'], 7),
+            "{$prefix}_longitude" => round((float) $validated['longitude'], 7),
+            "{$prefix}_location_accuracy" => isset($validated['accuracy'])
+                ? round((float) $validated['accuracy'], 2)
+                : null,
+            "{$prefix}_location_captured_at" => now(),
+            "{$prefix}_location_captured_by" => auth()->id(),
+        ]);
+
+        Log::info('Customer GPS location captured', [
+            'customer_id' => $customer->id,
+            'location_type' => $locationType,
+            'latitude' => $validated['latitude'],
+            'longitude' => $validated['longitude'],
+            'accuracy' => $validated['accuracy'] ?? null,
+            'captured_by' => auth()->id(),
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => ucfirst($locationType).' location saved successfully.',
+            'latitude' => $customer->getAttribute("{$prefix}_latitude"),
+            'longitude' => $customer->getAttribute("{$prefix}_longitude"),
+            'accuracy' => $customer->getAttribute("{$prefix}_location_accuracy"),
+            'captured_at' => $customer->getAttribute("{$prefix}_location_captured_at")?->toIso8601String(),
+            'captured_by' => auth()->user()?->name,
+        ]);
     }
 
     // Show form to edit a customer

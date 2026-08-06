@@ -47,6 +47,13 @@
                                 </button>
                             @endif
 
+
+                            @if(in_array($loan->status, ['active', 'disbursed', 'defaulted'], true))
+                                <a href="{{ route('loans.bills.create', Vinkla\Hashids\Facades\Hashids::encode($loan->id)) }}"
+                                    class="btn btn-outline-warning">
+                                    <i class="bx bx-receipt me-2"></i>Create Loan Bill
+                                </a>
+                            @endif
                             @if(in_array($loan->status, ['active', 'completed'], true))
                                 <a href="{{ route('loans.export-details', Vinkla\Hashids\Facades\Hashids::encode($loan->id)) }}"
                                     class="btn btn-info">
@@ -263,6 +270,20 @@
                     </a>
                 </li>
                 <li class="nav-item" role="presentation">
+                    <a class="nav-link d-flex align-items-center" data-bs-toggle="tab" href="#loan_bills" role="tab">
+                        <i class="bx bx-receipt me-2 font-18"></i>Loan Bills
+                        @php
+                            $loanBillsCount = $loan->bills ? $loan->bills->where('status', '!=', 'cancelled')->count() : 0;
+                            $pendingBillsCount = $loan->bills ? $loan->bills->filter(fn ($b) => $b->isOpen())->count() : 0;
+                        @endphp
+                        <span class="badge bg-warning text-dark ms-1">{{ $loanBillsCount }}</span>
+                        @if($pendingBillsCount > 0)
+                            <span class="badge bg-danger ms-1">{{ $pendingBillsCount }} pending</span>
+                        @endif
+                    </a>
+                </li>
+
+                <li class="nav-item" role="presentation">
                     <a class="nav-link d-flex align-items-center" data-bs-toggle="tab" href="#guarantors" role="tab">
                         <i class="bx bx-group me-2 font-18"></i>Guarantors
                     </a>
@@ -460,11 +481,20 @@
                                             </td>
                                         </tr>
                                         @endif
+                                        @php $pendingBillsOutstanding = $loan->getPendingBillsOutstanding(); @endphp
+                                        @if($pendingBillsOutstanding > 0)
+                                        <tr>
+                                            <td class="fw-bold text-muted ps-5 small">Pending Loan Bills</td>
+                                            <td class="text-danger">TZS
+                                                {{ number_format($pendingBillsOutstanding, 2) }}
+                                            </td>
+                                        </tr>
+                                        @endif
                                         <tr>
                                             <td class="fw-bold text-muted ps-4">Settle Amount</td>
                                             <td class="text-warning fw-bold">TZS
                                                 {{ number_format($loan->total_amount_to_settle, 2) }}
-                                                <br><small class="text-muted">Pays current interest + all remaining principal</small>
+                                                <br><small class="text-muted">Pays current interest + all remaining principal{{ $pendingBillsOutstanding > 0 ? ' + open loan bills' : '' }}</small>
                                             </td>
                                         </tr>
 
@@ -802,6 +832,134 @@
                         <div class="card card-body text-center p-5">
                             <h4 class="text-muted">No repayment schedule available.</h4>
                             <p class="text-secondary">A schedule will be generated once the loan is approved.</p>
+                        </div>
+                    @endif
+                </div>
+
+
+                <div class="tab-pane fade" id="loan_bills" role="tabpanel">
+                    <div class="d-flex justify-content-between align-items-center mb-4">
+                        <div>
+                            <h5 class="mb-1 text-dark">Loan Bills / Follow-up Costs</h5>
+                            <p class="text-muted mb-0 small">
+                                Paid with the same control no:
+                                <span class="fw-bold text-primary font-monospace">{{ $loan->control_number ?: $loan->loanNo }}</span>
+                            </p>
+                        </div>
+                        @if(in_array($loan->status, ['active', 'disbursed', 'defaulted'], true))
+                            <a href="{{ route('loans.bills.create', Vinkla\Hashids\Facades\Hashids::encode($loan->id)) }}"
+                                class="btn btn-warning">
+                                <i class="bx bx-plus me-1"></i>Create Bill
+                            </a>
+                        @endif
+                    </div>
+
+                    @php
+                        $loanBills = ($loan->bills ?? collect())->where('status', '!=', 'cancelled')->sortByDesc('id');
+                    @endphp
+
+                    @if($loanBills->count())
+                        <div class="card radius-10">
+                            <div class="card-header bg-warning text-dark">
+                                <h6 class="mb-0"><i class="bx bx-receipt me-2"></i>LOAN BILLS</h6>
+                            </div>
+                            <div class="card-body">
+                                <div class="table-responsive">
+                                    <table class="table table-bordered table-striped mb-0 align-middle">
+                                        <thead class="bg-light">
+                                            <tr>
+                                                <th>#</th>
+                                                <th>Description</th>
+                                                <th>Double Entry Accounts</th>
+                                                <th>Due Date</th>
+                                                <th class="text-end">Amount</th>
+                                                <th class="text-end">Paid</th>
+                                                <th class="text-end">Balance</th>
+                                                <th>Status</th>
+                                                <th>Created</th>
+                                                <th class="text-end">Actions</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            @foreach($loanBills as $index => $bill)
+                                                @php
+                                                    $statusClass = match ($bill->status) {
+                                                        'paid' => 'bg-success',
+                                                        'partial' => 'bg-info',
+                                                        'pending' => 'bg-warning text-dark',
+                                                        default => 'bg-secondary',
+                                                    };
+                                                @endphp
+                                                <tr>
+                                                    <td>{{ $index + 1 }}</td>
+                                                    <td>
+                                                        <div class="fw-semibold">{{ $bill->description }}</div>
+                                                        @if($bill->notes)
+                                                            <small class="text-muted">{{ $bill->notes }}</small>
+                                                        @endif
+                                                    </td>
+                                                    <td>
+                                                        <small>
+                                                            <span class="text-success fw-semibold">Dr:</span>
+                                                            {{ $bill->receivableAccount?->account_code }}
+                                                            {{ $bill->receivableAccount?->account_name ?? 'Not set' }}
+                                                            <br>
+                                                            <span class="text-primary fw-semibold">Cr:</span>
+                                                            {{ $bill->incomeAccount?->account_code }}
+                                                            {{ $bill->incomeAccount?->account_name ?? 'Not set' }}
+                                                        </small>
+                                                    </td>
+                                                    <td>{{ $bill->due_date ? $bill->due_date->format('d M Y') : '—' }}</td>
+                                                    <td class="text-end">{{ number_format($bill->amount, 2) }}</td>
+                                                    <td class="text-end text-success">{{ number_format($bill->paid_amount, 2) }}</td>
+                                                    <td class="text-end text-danger fw-bold">{{ number_format($bill->remaining_amount, 2) }}</td>
+                                                    <td><span class="badge {{ $statusClass }}">{{ ucfirst($bill->status) }}</span></td>
+                                                    <td>
+                                                        <small>{{ $bill->created_at?->format('d M Y') }}</small>
+                                                        @if($bill->creator)
+                                                            <br><small class="text-muted">{{ $bill->creator->name }}</small>
+                                                        @endif
+                                                    </td>
+                                                    <td class="text-end">
+                                                        @if($bill->isOpen())
+                                                            <button type="button" class="btn btn-sm btn-success"
+                                                                onclick="openPayLoanBillModal({{ json_encode([
+                                                                    'id' => Vinkla\Hashids\Facades\Hashids::encode($bill->id),
+                                                                    'description' => $bill->description,
+                                                                    'remaining' => (float) $bill->remaining_amount,
+                                                                ]) }})">
+                                                                Pay
+                                                            </button>
+                                                            @if((float) $bill->paid_amount <= 0)
+                                                                <form action="{{ route('loans.bills.destroy', Vinkla\Hashids\Facades\Hashids::encode($bill->id)) }}"
+                                                                    method="POST" class="d-inline"
+                                                                    onsubmit="return confirm('Cancel this unpaid bill?');">
+                                                                    @csrf
+                                                                    @method('DELETE')
+                                                                    <button type="submit" class="btn btn-sm btn-outline-danger">Cancel</button>
+                                                                </form>
+                                                            @endif
+                                                        @else
+                                                            <span class="text-muted">—</span>
+                                                        @endif
+                                                    </td>
+                                                </tr>
+                                            @endforeach
+                                        </tbody>
+                                        <tfoot class="bg-light">
+                                            <tr>
+                                                <th colspan="4" class="text-end">Open bills balance</th>
+                                                <th colspan="6" class="text-danger">TZS {{ number_format($loan->getPendingBillsOutstanding(), 2) }}</th>
+                                            </tr>
+                                        </tfoot>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    @else
+                        <div class="card card-body text-center p-5">
+                            <h4 class="text-muted">No loan bills yet.</h4>
+                            <p class="text-secondary">Create a bill for follow-up or other loan costs.</p>
                         </div>
                     @endif
                 </div>
@@ -2346,6 +2504,53 @@
             </form>
         </div>
     </div>
+
+    {{-- Pay loan bill modal --}}
+    <div class="modal fade" id="payLoanBillModal" tabindex="-1" aria-labelledby="payLoanBillModalLabel" aria-hidden="true">
+        <div class="modal-dialog">
+            <form id="payLoanBillForm" method="POST" class="modal-content">
+                @csrf
+                <div class="modal-header">
+                    <h5 class="modal-title" id="payLoanBillModalLabel">Record Bill Payment</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="mb-3">
+                        <strong id="pay_bill_description"></strong><br>
+                        <span class="text-muted">Remaining: TZS <span id="pay_bill_remaining"></span></span>
+                    </p>
+                    <div class="mb-3">
+                        <label for="pay_bill_payment_date" class="form-label">Payment Date</label>
+                        <input type="date" class="form-control" name="payment_date" id="pay_bill_payment_date"
+                            value="{{ date('Y-m-d') }}" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="pay_bill_amount" class="form-label">Amount</label>
+                        <input type="number" step="0.01" min="0.01" class="form-control" name="amount"
+                            id="pay_bill_amount" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="pay_bill_bank_account_id" class="form-label">Bank Account</label>
+                        <select class="form-select" name="bank_account_id" id="pay_bill_bank_account_id" required>
+                            <option value="">Select bank account</option>
+                            @foreach($bankAccounts as $bank)
+                                <option value="{{ $bank->id }}">{{ $bank->name ?? $bank->account_name ?? ('Account #'.$bank->id) }}</option>
+                            @endforeach
+                        </select>
+                    </div>
+                    <div class="mb-0">
+                        <label for="pay_bill_comments" class="form-label">Comments</label>
+                        <textarea class="form-control" name="comments" id="pay_bill_comments" rows="2"></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button>
+                    <button type="submit" class="btn btn-success">Record Payment</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
 
     <!-- Settle Loan Modal -->
     <div class="modal fade" id="settleLoanModal" tabindex="-1" aria-labelledby="settleLoanModalLabel" aria-hidden="true">
@@ -5259,6 +5464,24 @@
         })();
 
         // Settle Loan Modal Functions
+        
+        function openPayLoanBillModal(bill) {
+            const form = document.getElementById('payLoanBillForm');
+            if (!form) return;
+            form.action = `/loan-bills/${bill.id}/pay`;
+            const amountInput = document.getElementById('pay_bill_amount');
+            if (amountInput) {
+                amountInput.max = bill.remaining;
+                amountInput.value = bill.remaining;
+            }
+            const desc = document.getElementById('pay_bill_description');
+            if (desc) desc.textContent = bill.description || '';
+            const rem = document.getElementById('pay_bill_remaining');
+            if (rem) rem.textContent = Number(bill.remaining).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+            const modal = new bootstrap.Modal(document.getElementById('payLoanBillModal'));
+            modal.show();
+        }
+
         function showSettleLoanModal() {
             const modal = new bootstrap.Modal(document.getElementById('settleLoanModal'));
             modal.show();

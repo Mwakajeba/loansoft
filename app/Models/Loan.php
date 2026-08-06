@@ -317,6 +317,11 @@ class Loan extends Model
         return $this->hasMany(LoanSchedule::class, 'loan_id');
     }
 
+    public function bills()
+    {
+        return $this->hasMany(LoanBill::class, 'loan_id');
+    }
+
     public function repayments()
     {
         return $this->hasMany(Repayment::class, 'loan_id');
@@ -1630,6 +1635,10 @@ class Loan extends Model
             return false;
         }
 
+        if ($this->getPendingBillsOutstanding() > 0) {
+            return false;
+        }
+
         return $this->isLoanFullyPaidForSettlement() || $this->isOutstandingBelowClosureThreshold();
     }
 
@@ -1693,9 +1702,24 @@ class Loan extends Model
             $schedules = $this->schedule()->get();
         }
         if (!$schedules || !($schedules instanceof \Illuminate\Database\Eloquent\Collection)) {
-            return 0;
+            return $this->getPendingBillsOutstanding();
         }
-        return $schedules->sum('remaining_amount');
+
+        return round((float) $schedules->sum('remaining_amount') + $this->getPendingBillsOutstanding(), 2);
+    }
+
+    /**
+     * Remaining balance on open follow-up / other loan bills.
+     */
+    public function getPendingBillsOutstanding(): float
+    {
+        $bills = $this->relationLoaded('bills')
+            ? $this->bills
+            : $this->bills()->open()->get();
+
+        return round((float) $bills
+            ->filter(fn ($bill) => $bill->isOpen())
+            ->sum(fn ($bill) => $bill->remaining_amount), 2);
     }
 
     /**
@@ -1723,12 +1747,15 @@ class Loan extends Model
         }
 
         if (!$schedules || !($schedules instanceof \Illuminate\Database\Eloquent\Collection) || $schedules->isEmpty()) {
+            $pendingBills = $this->getPendingBillsOutstanding();
+
             return [
                 'due_schedule_payments' => [],
                 'future_principal_payments' => [],
                 'total_due_components' => 0.0,
                 'total_future_principal' => 0.0,
-                'settle_amount' => 0.0,
+                'pending_bills' => $pendingBills,
+                'settle_amount' => $pendingBills,
             ];
         }
 
@@ -1790,12 +1817,15 @@ class Loan extends Model
             }
         }
 
+        $pendingBills = $this->getPendingBillsOutstanding();
+
         return [
             'due_schedule_payments' => $dueSchedulePayments,
             'future_principal_payments' => $futurePrincipalPayments,
             'total_due_components' => round($totalDueComponents, 2),
             'total_future_principal' => round($totalFuturePrincipal, 2),
-            'settle_amount' => round($totalDueComponents + $totalFuturePrincipal, 2),
+            'pending_bills' => $pendingBills,
+            'settle_amount' => round($totalDueComponents + $totalFuturePrincipal + $pendingBills, 2),
         ];
     }
 

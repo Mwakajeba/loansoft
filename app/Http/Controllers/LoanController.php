@@ -2428,6 +2428,9 @@ class LoanController extends Controller
             'loanFiles',
             'schedule.repayments',
             'repayments',
+            'bills.receivableAccount',
+            'bills.incomeAccount',
+            'bills.creator',
             'approvals.user',
             'approvals' => function ($query) {
                 $query->orderBy('approval_level', 'asc');
