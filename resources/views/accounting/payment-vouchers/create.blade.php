@@ -13,6 +13,51 @@
             ]" />
             <h6 class="mb-0 text-uppercase">CREATE PAYMENT VOUCHER</h6>
             <hr />
+
+            @if(session('import_errors'))
+                <div class="alert alert-danger">
+                    <h6 class="alert-heading mb-2"><i class="bx bx-error-circle me-1"></i>Import errors</h6>
+                    <ul class="mb-0">
+                        @foreach(session('import_errors') as $importError)
+                            <li>{{ $importError }}</li>
+                        @endforeach
+                    </ul>
+                </div>
+            @endif
+
+            @can('create payment voucher')
+            <div class="card radius-10 mb-3 border-success">
+                <div class="card-body">
+                    <div class="row align-items-center">
+                        <div class="col-lg-6 mb-3 mb-lg-0">
+                            <h6 class="mb-1">
+                                <i class="bx bx-import me-1"></i>Import from Excel
+                            </h6>
+                            <p class="mb-0 text-muted small">
+                                Download the template, pick chart accounts from the dropdown, then upload the file.
+                                Rows with the same <strong>voucher_group</strong> become one voucher with multiple lines.
+                            </p>
+                        </div>
+                        <div class="col-lg-6">
+                            <form action="{{ route('accounting.payment-vouchers.import') }}" method="POST" enctype="multipart/form-data" class="d-flex flex-wrap gap-2 justify-content-lg-end align-items-center">
+                                @csrf
+                                <a href="{{ route('accounting.payment-vouchers.import-template') }}" class="btn btn-outline-success">
+                                    <i class="bx bx-download me-1"></i>Download Template
+                                </a>
+                                <input type="file" name="import_file" class="form-control" accept=".xlsx,.xls" required style="max-width: 260px;">
+                                <button type="submit" class="btn btn-success">
+                                    <i class="bx bx-upload me-1"></i>Import Excel
+                                </button>
+                            </form>
+                            @error('import_file')
+                                <div class="text-danger small mt-1">{{ $message }}</div>
+                            @enderror
+                        </div>
+                    </div>
+                </div>
+            </div>
+            @endcan
+
             <div class="row">
                 <div class="col-12">
                     <div class="card radius-10">

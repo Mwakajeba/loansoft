@@ -529,6 +529,8 @@ Route::prefix('accounting')->name('accounting.')->middleware('auth')->group(func
 
     // Payment Voucher Approval Routes
     Route::prefix('payment-vouchers')->name('payment-vouchers.')->group(function () {
+        Route::get('/import-template', [PaymentVoucherController::class, 'downloadImportTemplate'])->name('import-template');
+        Route::post('/import', [PaymentVoucherController::class, 'import'])->name('import');
         Route::get('/pending-approvals', [PaymentVoucherController::class, 'pendingApprovals'])->name('pending-approvals');
         Route::get('/{paymentVoucher}/approval', [PaymentVoucherController::class, 'showApproval'])->name('approval');
         Route::post('/{paymentVoucher}/approve', [PaymentVoucherController::class, 'approve'])->name('approve');
