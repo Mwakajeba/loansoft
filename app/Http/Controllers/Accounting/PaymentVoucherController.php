@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Accounting;
 
+use App\Exports\PaymentVoucherTemplateExport;
 use App\Http\Controllers\Controller;
 use App\Models\BankAccount;
 use App\Models\ChartAccount;
@@ -17,6 +18,9 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
+use Maatwebsite\Excel\Facades\Excel;
+use PhpOffice\PhpSpreadsheet\IOFactory;
+use PhpOffice\PhpSpreadsheet\Shared\Date as ExcelDate;
 use Yajra\DataTables\Facades\DataTables;
 
 class PaymentVoucherController extends Controller
@@ -255,6 +259,273 @@ class PaymentVoucherController extends Controller
             ->get();
 
         return view('accounting.payment-vouchers.create', compact('bankAccounts', 'customers', 'suppliers', 'chartAccounts'));
+    }
+
+    /**
+     * Download Excel import template with chart-account and bank-account dropdowns.
+     */
+    public function downloadImportTemplate()
+    {
+        if (!Auth::user()->can('create payment voucher')) {
+            abort(403, 'You do not have permission to create payment vouchers.');
+        }
+
+        $user = Auth::user();
+        $chartAccounts = $this->expenseChartAccountsForUser($user);
+        $bankAccounts = $this->bankAccountsForUser($user);
+
+        $chartLabels = $chartAccounts->map(fn ($account) => PaymentVoucherTemplateExport::chartAccountLabel($account));
+        $bankLabels = $bankAccounts->map(fn ($account) => PaymentVoucherTemplateExport::bankAccountLabel($account));
+
+        return Excel::download(
+            new PaymentVoucherTemplateExport($chartLabels, $bankLabels),
+            'payment_voucher_import_template.xlsx'
+        );
+    }
+
+    /**
+     * Import payment vouchers from Excel.
+     */
+    public function import(Request $request)
+    {
+        if (!Auth::user()->can('create payment voucher')) {
+            abort(403, 'You do not have permission to create payment vouchers.');
+        }
+
+        $request->validate([
+            'import_file' => 'required|file|mimes:xlsx,xls|max:5120',
+        ]);
+
+        $user = Auth::user();
+        $paymentBranchId = $this->paymentVouchersBranchId($user) ?: ($user->branch_id ? (int) $user->branch_id : null);
+        if (!$paymentBranchId) {
+            return redirect()
+                ->back()
+                ->with('error', 'No branch context for this voucher. Select a branch or set your default branch.');
+        }
+
+        $chartAccounts = $this->expenseChartAccountsForUser($user);
+        $bankAccounts = $this->bankAccountsForUser($user);
+        $customers = Customer::where('company_id', $user->company_id)
+            ->when($paymentBranchId, fn ($query) => $query->where('branch_id', $paymentBranchId))
+            ->get();
+        $suppliers = Supplier::where('company_id', $user->company_id)->get();
+
+        try {
+            $spreadsheet = IOFactory::load($request->file('import_file')->getPathname());
+            $worksheet = $spreadsheet->getSheetByName('Payment Vouchers') ?: $spreadsheet->getActiveSheet();
+            $rows = $worksheet->toArray(null, true, true, false);
+        } catch (\Exception $e) {
+            return redirect()->back()->with('error', 'Could not read the Excel file: ' . $e->getMessage());
+        }
+
+        if (empty($rows)) {
+            return redirect()->back()->with('error', 'The Excel file is empty.');
+        }
+
+        $headerRow = array_map(fn ($value) => strtolower(trim((string) $value)), array_shift($rows));
+        $columnIndex = [];
+        foreach (PaymentVoucherTemplateExport::HEADINGS as $heading) {
+            $found = array_search($heading, $headerRow, true);
+            if ($found === false) {
+                return redirect()->back()->with('error', "Missing column '{$heading}' in the Excel file. Download the template and try again.");
+            }
+            $columnIndex[$heading] = $found;
+        }
+
+        $parsedRows = [];
+        $errors = [];
+        $excelRowNumber = 2;
+
+        foreach ($rows as $row) {
+            if (!is_array($row) || empty(array_filter($row, fn ($value) => $value !== null && trim((string) $value) !== ''))) {
+                $excelRowNumber++;
+                continue;
+            }
+
+            $get = function (string $key) use ($row, $columnIndex) {
+                $index = $columnIndex[$key];
+                return isset($row[$index]) ? trim((string) $row[$index]) : '';
+            };
+
+            $description = $get('description');
+            if (stripos($description, 'sample payment voucher') !== false) {
+                $excelRowNumber++;
+                continue;
+            }
+
+            $dateValue = $row[$columnIndex['date']] ?? '';
+            $date = $this->parseExcelDate($dateValue);
+            $bankLabel = $get('bank_account');
+            $payeeType = strtolower($get('payee_type'));
+            $payee = $get('payee');
+            $chartLabel = $get('chart_account');
+            $amountRaw = $get('amount');
+            $groupKey = $get('voucher_group');
+            if ($groupKey === '') {
+                $groupKey = '__row_' . $excelRowNumber;
+            }
+
+            if (!$date) {
+                $errors[] = "Row {$excelRowNumber}: Date is required (use YYYY-MM-DD).";
+            }
+            if ($bankLabel === '') {
+                $errors[] = "Row {$excelRowNumber}: Bank account is required.";
+            }
+            if (!in_array($payeeType, PaymentVoucherTemplateExport::PAYEE_TYPES, true)) {
+                $errors[] = "Row {$excelRowNumber}: Payee type must be customer, supplier, or other.";
+            }
+            if ($payee === '') {
+                $errors[] = "Row {$excelRowNumber}: Payee is required.";
+            }
+            if ($chartLabel === '') {
+                $errors[] = "Row {$excelRowNumber}: Chart account is required.";
+            }
+            if ($amountRaw === '' || !is_numeric($amountRaw) || (float) $amountRaw < 0.01) {
+                $errors[] = "Row {$excelRowNumber}: Amount must be a number greater than 0.";
+            }
+
+            $bankAccount = $this->matchBankAccount($bankAccounts, $bankLabel);
+            if ($bankLabel !== '' && !$bankAccount) {
+                $errors[] = "Row {$excelRowNumber}: Bank account '{$bankLabel}' was not found.";
+            }
+
+            $chartAccount = $this->matchChartAccount($chartAccounts, $chartLabel);
+            if ($chartLabel !== '' && !$chartAccount) {
+                $errors[] = "Row {$excelRowNumber}: Chart account '{$chartLabel}' was not found. Use the dropdown from the template.";
+            }
+
+            $payeeId = null;
+            $payeeName = null;
+            $customerId = null;
+            $supplierId = null;
+
+            if ($payeeType === 'customer') {
+                $customer = $this->matchCustomer($customers, $payee);
+                if (!$customer) {
+                    $errors[] = "Row {$excelRowNumber}: Customer '{$payee}' was not found.";
+                } else {
+                    $payeeId = $customer->id;
+                    $customerId = $customer->id;
+                }
+            } elseif ($payeeType === 'supplier') {
+                $supplier = $this->matchSupplier($suppliers, $payee);
+                if (!$supplier) {
+                    $errors[] = "Row {$excelRowNumber}: Supplier '{$payee}' was not found.";
+                } else {
+                    $payeeId = $supplier->id;
+                    $supplierId = $supplier->id;
+                }
+            } elseif ($payeeType === 'other') {
+                $payeeName = $payee;
+            }
+
+            $parsedRows[] = [
+                'excel_row' => $excelRowNumber,
+                'voucher_group' => $groupKey,
+                'date' => $date,
+                'reference' => $get('reference'),
+                'bank_account_id' => $bankAccount?->id,
+                'payee_type' => $payeeType,
+                'payee_id' => $payeeId,
+                'payee_name' => $payeeName,
+                'customer_id' => $customerId,
+                'supplier_id' => $supplierId,
+                'description' => $description !== '' ? $description : null,
+                'chart_account_id' => $chartAccount?->id,
+                'line_description' => $get('line_description') !== '' ? $get('line_description') : null,
+                'amount' => is_numeric($amountRaw) ? (float) $amountRaw : 0,
+            ];
+
+            $excelRowNumber++;
+        }
+
+        if (!empty($errors)) {
+            return redirect()->back()->with('error', 'Import failed. Please fix the errors below.')->with('import_errors', $errors);
+        }
+
+        if (empty($parsedRows)) {
+            return redirect()->back()->with('error', 'No valid payment voucher rows found in the file.');
+        }
+
+        $groups = collect($parsedRows)->groupBy('voucher_group');
+
+        try {
+            $createdCount = $this->runTransaction(function () use ($groups, $user, $paymentBranchId) {
+                $count = 0;
+
+                foreach ($groups as $groupKey => $groupRows) {
+                    $header = $groupRows->first();
+                    foreach ($groupRows as $line) {
+                        if ($line['date'] !== $header['date']
+                            || $line['bank_account_id'] !== $header['bank_account_id']
+                            || $line['payee_type'] !== $header['payee_type']
+                            || $line['payee_id'] !== $header['payee_id']
+                            || $line['payee_name'] !== $header['payee_name']) {
+                            $groupLabel = str_starts_with((string) $groupKey, '__row_')
+                                ? 'row ' . $header['excel_row']
+                                : "voucher group '{$groupKey}'";
+                            throw new \RuntimeException(
+                                "Rows in {$groupLabel} must share the same date, bank account, and payee."
+                            );
+                        }
+                    }
+
+                    $totalAmount = $groupRows->sum('amount');
+                    $reference = $header['reference'] !== '' ? $header['reference'] : ('PV-' . strtoupper(uniqid()));
+
+                    $payment = Payment::create([
+                        'reference' => $reference,
+                        'reference_type' => 'manual',
+                        'reference_number' => $header['reference'] !== '' ? $header['reference'] : null,
+                        'amount' => $totalAmount,
+                        'date' => $header['date'],
+                        'description' => $header['description'],
+                        'attachment' => null,
+                        'user_id' => $user->id,
+                        'bank_account_id' => $header['bank_account_id'],
+                        'payee_type' => $header['payee_type'],
+                        'payee_id' => $header['payee_id'],
+                        'payee_name' => $header['payee_name'],
+                        'customer_id' => $header['customer_id'],
+                        'supplier_id' => $header['supplier_id'],
+                        'branch_id' => $paymentBranchId,
+                        'approved' => false,
+                        'approved_by' => null,
+                        'approved_at' => null,
+                    ]);
+
+                    $paymentItems = [];
+                    foreach ($groupRows as $line) {
+                        $paymentItems[] = [
+                            'payment_id' => $payment->id,
+                            'chart_account_id' => $line['chart_account_id'],
+                            'amount' => $line['amount'],
+                            'description' => $line['line_description'],
+                            'created_at' => now(),
+                            'updated_at' => now(),
+                        ];
+                    }
+                    PaymentItem::insert($paymentItems);
+
+                    $payment->initializeApprovalWorkflow();
+                    $payment->refresh();
+                    if ($payment->approved) {
+                        $payment->createGlTransactions();
+                    }
+
+                    $count++;
+                }
+
+                return $count;
+            });
+        } catch (\Exception $e) {
+            return redirect()->back()->with('error', 'Failed to import payment vouchers: ' . $e->getMessage());
+        }
+
+        return redirect()
+            ->route('accounting.payment-vouchers.index')
+            ->with('success', $createdCount . ' payment voucher(s) imported successfully.');
     }
 
     /**
@@ -1003,5 +1274,130 @@ class PaymentVoucherController extends Controller
             ->paginate(15);
 
         return view('accounting.payment-vouchers.pending-approvals', compact('pendingApprovals'));
+    }
+
+    protected function bankAccountsForUser($user)
+    {
+        return BankAccount::with('chartAccount')
+            ->whereHas('chartAccount.accountClassGroup', function ($query) use ($user) {
+                $query->where('company_id', $user->company_id);
+            })
+            ->forUserBranches($user)
+            ->orderBy('name')
+            ->get();
+    }
+
+    protected function expenseChartAccountsForUser($user)
+    {
+        return ChartAccount::whereHas('accountClassGroup', function ($query) use ($user) {
+            $query->where('company_id', $user->company_id);
+        })
+            ->whereHas('accountClassGroup.accountClass', function ($query) {
+                $query->where('name', 'like', '%expense%')
+                    ->orWhere('name', 'like', '%cost%')
+                    ->orWhere('name', 'like', '%expenditure%');
+            })
+            ->orderBy('account_code')
+            ->get();
+    }
+
+    protected function parseExcelDate($value): ?string
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        if (is_numeric($value)) {
+            try {
+                return ExcelDate::excelToDateTimeObject($value)->format('Y-m-d');
+            } catch (\Exception $e) {
+                return null;
+            }
+        }
+
+        $value = trim((string) $value);
+        foreach (['Y-m-d', 'd/m/Y', 'd-m-Y', 'm/d/Y'] as $format) {
+            $parsed = \DateTime::createFromFormat($format, $value);
+            if ($parsed instanceof \DateTime) {
+                return $parsed->format('Y-m-d');
+            }
+        }
+
+        $timestamp = strtotime($value);
+        if ($timestamp !== false) {
+            return date('Y-m-d', $timestamp);
+        }
+
+        return null;
+    }
+
+    protected function matchChartAccount($chartAccounts, string $label)
+    {
+        $label = trim($label);
+        if ($label === '') {
+            return null;
+        }
+
+        $byLabel = $chartAccounts->first(function ($account) use ($label) {
+            return strcasecmp(PaymentVoucherTemplateExport::chartAccountLabel($account), $label) === 0;
+        });
+        if ($byLabel) {
+            return $byLabel;
+        }
+
+        $code = $label;
+        if (str_contains($label, ' - ')) {
+            $code = trim(explode(' - ', $label, 2)[0]);
+        }
+
+        return $chartAccounts->first(function ($account) use ($code, $label) {
+            return strcasecmp((string) $account->account_code, $code) === 0
+                || strcasecmp((string) $account->account_name, $label) === 0;
+        });
+    }
+
+    protected function matchBankAccount($bankAccounts, string $label)
+    {
+        $label = trim($label);
+        if ($label === '') {
+            return null;
+        }
+
+        $byLabel = $bankAccounts->first(function ($account) use ($label) {
+            return strcasecmp(PaymentVoucherTemplateExport::bankAccountLabel($account), $label) === 0;
+        });
+        if ($byLabel) {
+            return $byLabel;
+        }
+
+        return $bankAccounts->first(function ($account) use ($label) {
+            return strcasecmp((string) $account->account_number, $label) === 0
+                || strcasecmp((string) $account->name, $label) === 0;
+        });
+    }
+
+    protected function matchCustomer($customers, string $payee)
+    {
+        $payee = trim($payee);
+        if ($payee === '') {
+            return null;
+        }
+
+        return $customers->first(function ($customer) use ($payee) {
+            return strcasecmp((string) $customer->customerNo, $payee) === 0
+                || strcasecmp((string) $customer->name, $payee) === 0;
+        });
+    }
+
+    protected function matchSupplier($suppliers, string $payee)
+    {
+        $payee = trim($payee);
+        if ($payee === '') {
+            return null;
+        }
+
+        return $suppliers->first(function ($supplier) use ($payee) {
+            return strcasecmp((string) $supplier->name, $payee) === 0;
+        });
     }
 }
