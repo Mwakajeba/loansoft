@@ -292,6 +292,22 @@
                                 </div>
                             </div>
 
+                            <!-- Loan Report -->
+                            <div class="col-md-6 col-lg-4 mb-4">
+                                <div class="card border-warning">
+                                    <div class="card-body text-center">
+                                        <div class="mb-3">
+                                            <i class="bx bx-table fs-1 text-warning"></i>
+                                        </div>
+                                        <h5 class="card-title">Loan Report</h5>
+                                        <p class="card-text">Customer, group, phone, loan amount, total received, remaining balance, overdue amount and loan end date.</p>
+                                        <a href="{{ route('reports.loans.loan_report') }}" class="btn btn-warning">
+                                            <i class="bx bx-file me-1"></i> Generate Report
+                                        </a>
+                                    </div>
+                                </div>
+                            </div>
+
                             <!-- Customer Loan Statement Report -->
                             <div class="col-md-6 col-lg-4 mb-4">
                                 <div class="card border-primary">
