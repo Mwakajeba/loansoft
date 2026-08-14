@@ -13,9 +13,11 @@ use App\Models\User;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use App\Exports\CustomerLoanStatementExport;
 use App\Exports\DisbursementsExport;
 use App\Exports\RepaymentExport;
 use App\Models\Repayment;
+use App\Support\Loans\CustomerLoanStatementBuilder;
 use App\Support\Loans\GroupRepaymentScheduleCardBuilder;
 use App\Support\Loans\LoanReportMetrics;
 use App\Support\Loans\LoanReportRowBuilder;
@@ -4741,6 +4743,98 @@ class LoanReportController extends Controller
         return $pdf->download('group_repayment_schedule_' . $safeName . '_' . $startDate . '_to_' . $endDate . '.pdf');
     }
 
+    public function loanSummaryReport(Request $request)
+    {
+        $user = auth()->user();
+        $company = $user->company;
+
+        $asOfDate = $request->input('as_of_date') ?? date('Y-m-d');
+        $branchId = $request->input('branch_id');
+        $groupId = $request->input('group_id');
+        if ($groupId === null || $groupId === '' || $groupId === 'all') {
+            $groupId = 'all';
+        }
+        $loanOfficerId = $request->input('loan_officer_id');
+        $exportType = $request->input('export_type');
+
+        $branches = $user->branches()
+            ->where('branches.company_id', $company->id)
+            ->select('branches.id', 'branches.name')
+            ->get();
+
+        if (($branches->count() ?? 0) === 1) {
+            $branchId = $branches->first()->id;
+        }
+
+        $groups = Group::all();
+        $loanOfficers = User::excludeSuperAdmin()
+            ->when($branchId && $branchId !== 'all', function ($query) use ($branchId) {
+                $query->whereHas('branches', function ($q) use ($branchId) {
+                    $q->where('branches.id', $branchId);
+                });
+            })
+            ->get();
+
+        $assignedBranchIds = $branches->pluck('id')->toArray();
+
+        $loansQuery = Loan::with(LoanReportMetrics::eagerLoads())
+            ->whereIn('status', ['active', 'written_off', 'defaulted'])
+            ->when(! empty($assignedBranchIds), fn ($q) => $q->whereIn('branch_id', $assignedBranchIds));
+
+        if ($branchId && $branchId !== 'all') {
+            $loansQuery->where('branch_id', $branchId);
+        }
+        if ($groupId && $groupId !== 'all') {
+            $loansQuery->where('group_id', $groupId);
+        }
+        if ($loanOfficerId) {
+            $loansQuery->where('loan_officer_id', $loanOfficerId);
+        }
+
+        $rows = [];
+        $summary = [
+            'loan_amount' => 0.0,
+            'total_received' => 0.0,
+            'remain_balance' => 0.0,
+            'overdue_amount' => 0.0,
+        ];
+
+        foreach ($loansQuery->get() as $loan) {
+            $row = LoanReportRowBuilder::summaryListRow($loan, $asOfDate);
+            if (! $row) {
+                continue;
+            }
+            $rows[] = $row;
+            $summary['loan_amount'] += $row['loan_amount'];
+            $summary['total_received'] += $row['total_received'];
+            $summary['remain_balance'] += $row['remain_balance'];
+            $summary['overdue_amount'] += $row['overdue_amount'];
+        }
+
+        if ($exportType && ! empty($rows)) {
+            if ($exportType === 'excel') {
+                return $this->exportLoanSummaryToExcel($rows, $summary, $asOfDate, $branchId, $loanOfficerId, $groupId);
+            }
+            if ($exportType === 'pdf') {
+                return $this->exportLoanSummaryToPdf($rows, $summary, $asOfDate, $branchId, $loanOfficerId, $groupId);
+            }
+        }
+
+        $showData = $request->has('as_of_date') || $request->has('branch_id') || $request->has('group_id') || $request->has('loan_officer_id');
+
+        return view('loans.reports.loan_summary', [
+            'branches' => $branches,
+            'groups' => $groups,
+            'loanOfficers' => $loanOfficers,
+            'rows' => $showData ? $rows : null,
+            'summary' => $summary,
+            'asOfDate' => $asOfDate,
+            'branchId' => $branchId,
+            'groupId' => $groupId,
+            'loanOfficerId' => $loanOfficerId,
+        ]);
+    }
+
     public function customerLoanStatementReport(Request $request)
     {
         $user = auth()->user();
@@ -4852,6 +4946,120 @@ class LoanReportController extends Controller
         abort_unless($loan, 404, 'Loan not found or not accessible.');
 
         return $loan;
+    }
+
+    private function exportLoanSummaryToExcel(array $rows, array $summary, string $asOfDate, $branchId = null, $loanOfficerId = null, $groupId = null)
+    {
+        $branch = ($branchId && $branchId !== 'all') ? Branch::find($branchId) : null;
+        $loanOfficer = $loanOfficerId ? User::find($loanOfficerId) : null;
+        $group = ($groupId && $groupId !== 'all') ? Group::find($groupId) : null;
+
+        return Excel::download(new class($rows, $summary, $asOfDate, $branch, $loanOfficer, $group) implements \Maatwebsite\Excel\Concerns\FromArray, \Maatwebsite\Excel\Concerns\WithHeadings, \Maatwebsite\Excel\Concerns\WithTitle, \Maatwebsite\Excel\Concerns\ShouldAutoSize, \Maatwebsite\Excel\Concerns\WithEvents {
+            public function __construct(
+                private array $rows,
+                private array $summary,
+                private string $asOfDate,
+                private $branch,
+                private $loanOfficer,
+                private $group
+            ) {}
+
+            public function headings(): array
+            {
+                return [
+                    'Customer Name',
+                    'Group Name',
+                    'Phone Number',
+                    'Loan Amount',
+                    'Total Received',
+                    'Remain Balance',
+                    'Overdue Amount',
+                    'Loan End Date',
+                ];
+            }
+
+            public function array(): array
+            {
+                $data = [];
+                foreach ($this->rows as $row) {
+                    $data[] = [
+                        $row['customer_name'],
+                        $row['group_name'],
+                        $row['phone_number'],
+                        $row['loan_amount'],
+                        $row['total_received'],
+                        $row['remain_balance'],
+                        $row['overdue_amount'],
+                        $row['loan_end_date'],
+                    ];
+                }
+                $data[] = [
+                    'TOTALS',
+                    '',
+                    '',
+                    $this->summary['loan_amount'],
+                    $this->summary['total_received'],
+                    $this->summary['remain_balance'],
+                    $this->summary['overdue_amount'],
+                    '',
+                ];
+
+                return $data;
+            }
+
+            public function title(): string
+            {
+                return 'Loan Report';
+            }
+
+            public function registerEvents(): array
+            {
+                return [
+                    \Maatwebsite\Excel\Events\AfterSheet::class => function (\Maatwebsite\Excel\Events\AfterSheet $event) {
+                        $sheet = $event->sheet->getDelegate();
+                        $sheet->insertNewRowBefore(1, 3);
+                        $sheet->mergeCells('A1:H1');
+                        $sheet->setCellValue('A1', 'LOAN REPORT');
+                        $sheet->getStyle('A1')->getFont()->setBold(true)->setSize(14);
+                        $sheet->getStyle('A1')->getAlignment()->setHorizontal(\PhpOffice\PhpSpreadsheet\Style\Alignment::HORIZONTAL_CENTER);
+                        $sheet->getStyle('A1')->getFill()->setFillType(\PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID)
+                            ->getStartColor()->setARGB('FFFFFF00');
+
+                        $info = 'As of: '.$this->asOfDate
+                            .' | Branch: '.($this->branch->name ?? 'All Branches')
+                            .' | Group: '.($this->group->name ?? 'All Groups')
+                            .' | Officer: '.($this->loanOfficer->name ?? 'All Officers');
+                        $sheet->mergeCells('A2:H2');
+                        $sheet->setCellValue('A2', $info);
+
+                        $headerRow = 4;
+                        $sheet->getStyle('A'.$headerRow.':H'.$headerRow)->getFont()->setBold(true);
+                        $sheet->getStyle('A'.$headerRow.':H'.$headerRow)->getFill()
+                            ->setFillType(\PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID)
+                            ->getStartColor()->setARGB('FF4472C4');
+                        $sheet->getStyle('A'.$headerRow.':H'.$headerRow)->getFont()->getColor()->setARGB('FFFFFFFF');
+
+                        $lastRow = $sheet->getHighestRow();
+                        $sheet->getStyle('A'.$lastRow.':H'.$lastRow)->getFont()->setBold(true);
+                    },
+                ];
+            }
+        }, 'loan_report_'.$asOfDate.'.xlsx');
+    }
+
+    private function exportLoanSummaryToPdf(array $rows, array $summary, string $asOfDate, $branchId = null, $loanOfficerId = null, $groupId = null)
+    {
+        $company = Company::first();
+        $branch = ($branchId && $branchId !== 'all') ? Branch::find($branchId) : null;
+        $loanOfficer = $loanOfficerId ? User::find($loanOfficerId) : null;
+        $group = ($groupId && $groupId !== 'all') ? Group::find($groupId) : null;
+
+        $pdf = PDF::loadView('loans.reports.loan_summary_pdf', compact(
+            'rows', 'summary', 'asOfDate', 'company', 'branch', 'loanOfficer', 'group'
+        ));
+        $this->configureLoanReportPdf($pdf, 'A4', 'landscape');
+
+        return $pdf->download('loan_report_'.$asOfDate.'.pdf');
     }
 
     private function configureLoanReportPdf($pdf, $paper = 'A3', $orientation = 'landscape')

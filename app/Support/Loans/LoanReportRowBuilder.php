@@ -386,6 +386,37 @@ class LoanReportRowBuilder
         ]);
     }
 
+    /**
+     * Compact loan list: customer, group, phone, amount, received, remaining, overdue, end date.
+     */
+    public static function summaryListRow(Loan $loan, string $asOfDate): ?array
+    {
+        $metricsDate = LoanReportMetrics::metricsAsOfDate($asOfDate);
+        $totals = LoanReportMetrics::contractTotalsAsOf($loan, $metricsDate);
+        $outstanding = (float) ($totals['outstanding']['total_balance'] ?? 0);
+
+        if ($outstanding <= Loan::OUTSTANDING_CLOSURE_THRESHOLD) {
+            return null;
+        }
+
+        $identity = self::identity($loan);
+        $endDate = $loan->last_repayment_date;
+        if (! $endDate && $loan->schedule && $loan->schedule->isNotEmpty()) {
+            $endDate = $loan->schedule->max('due_date');
+        }
+
+        return [
+            'customer_name' => $identity['customer'],
+            'group_name' => $identity['group'],
+            'phone_number' => $identity['phone'],
+            'loan_amount' => round((float) ($loan->amount ?? 0), 2),
+            'total_received' => round((float) ($totals['total_paid'] ?? 0), 2),
+            'remain_balance' => round($outstanding, 2),
+            'overdue_amount' => LoanReportMetrics::arrearsAmountAsOf($loan, $metricsDate),
+            'loan_end_date' => $endDate ? Carbon::parse($endDate)->format('d-m-Y') : 'N/A',
+        ];
+    }
+
     public static function arrearsSeverity(int $daysInArrears): string
     {
         if ($daysInArrears <= 30) {
