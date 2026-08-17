@@ -120,7 +120,7 @@
                                             <th>Status</th>
                                             <th>Branch</th>
                                             <th>Date Applied</th>
-                                            <th>Comment</th>
+                                            <th>Group</th>
                                             <th class="text-center">Actions</th>
                                         </tr>
                                     </thead>
@@ -619,7 +619,7 @@
                     { data: 'status_badge', name: 'status', orderable: false, searchable: true },
                     { data: 'branch_name', name: 'branch_name', orderable: true, searchable: true },
                     { data: 'formatted_date', name: 'date_applied', orderable: true, searchable: true },
-                    { data: 'comment', name: 'comment', orderable: false, searchable: true },
+                    { data: 'group_name', name: 'group_name', orderable: true, searchable: true },
                     { data: 'actions', name: 'actions', orderable: false, searchable: false, className: 'text-center' }
                 ],
                 order: [[8, 'desc']], // Order by date applied descending (column index 8)

@@ -552,12 +552,6 @@ class LoanController extends Controller
                 'branch:id,name',
                 'group:id,name',
                 'loanOfficer:id,name',
-                // Only load latest approval for comment column
-                'approvals' => function ($query) {
-                    $query->select('id', 'loan_id', 'comments', 'approved_at')
-                        ->orderBy('approved_at', 'desc')
-                        ->limit(1);
-                }
             ])
                 ->where('branch_id', $branchId)
                 ->where('status', $status)
@@ -662,20 +656,8 @@ class LoanController extends Controller
                 ->addColumn('formatted_date', function ($loan) {
                     return $loan->date_applied ? \Carbon\Carbon::parse($loan->date_applied)->format('M d, Y') : 'N/A';
                 })
-                ->addColumn('comment', function ($loan) {
-                    // Don't show comment for active loans
-                    if ($loan->status === 'active') {
-                        return '<span class="text-muted">-</span>';
-                    }
-
-                    // Use the already loaded latest approval (optimized query)
-                    $latestApproval = $loan->approvals->first();
-                    if ($latestApproval && $latestApproval->comments) {
-                        return '<div class="text-truncate" style="max-width: 200px;" title="' . e($latestApproval->comments) . '">
-                                    <small class="text-muted">' . e($latestApproval->comments) . '</small>
-                                </div>';
-                    }
-                    return '<span class="text-muted">-</span>';
+                ->addColumn('group_name', function ($loan) {
+                    return optional($loan->group)->name ?? '-';
                 })
                 ->addColumn('actions', function ($loan) {
                     $actions = '';
@@ -768,6 +750,11 @@ class LoanController extends Controller
                         $q->whereRaw("LOWER(name) LIKE LOWER(?)", ["%{$keyword}%"]);
                     });
                 })
+                ->filterColumn('group_name', function ($query, $keyword) {
+                    $query->whereHas('group', function ($q) use ($keyword) {
+                        $q->whereRaw("LOWER(name) LIKE LOWER(?)", ["%{$keyword}%"]);
+                    });
+                })
                 ->filterColumn('formatted_amount', function ($query, $keyword) {
                     $query->whereRaw("LOWER(amount) LIKE LOWER(?)", ["%{$keyword}%"]);
                 })
@@ -786,7 +773,7 @@ class LoanController extends Controller
                 ->filterColumn('formatted_date', function ($query, $keyword) {
                     $query->whereRaw("LOWER(date_applied) LIKE LOWER(?)", ["%{$keyword}%"]);
                 })
-                ->rawColumns(['customer_name', 'status_badge', 'comment', 'actions'])
+                ->rawColumns(['customer_name', 'status_badge', 'actions'])
                 ->make(true);
         }
 
